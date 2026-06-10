@@ -194,6 +194,19 @@ jobs:
         # Fail fast on a malformed compose file before spending time on a build.
         run: docker compose -f deploy/docker-compose.yml config >/dev/null
 
+      - name: Resolve host docker socket GID (toolruntimed runs non-root)
+        # toolruntimed bind-mounts the host docker socket and runs as the non-root
+        # `boltrope` user; its /readyz probes `docker version`, so that user must be
+        # in the socket's group. The compose `group_add` defaults to gid 0, which is
+        # NOT the runner's docker group — so without this the tool-runtime never goes
+        # healthy and `up` aborts on its `service_healthy` dependency. Docker Desktop
+        # masks this locally; native Linux runners do not. Read the socket's real gid
+        # (robust to the group's name) and pass it to every later step via $GITHUB_ENV.
+        run: |
+          gid="$(stat -c '%g' /var/run/docker.sock)"
+          echo "host docker socket gid = $gid"
+          echo "BOLTROPE_DOCKER_GID=$gid" >> "$GITHUB_ENV"
+
       - name: Build images and start the stack (detached)
         # Build is untimed; the 120 s readiness budget (DOD-05) is asserted in the
         # next step against the already-built images. Postgres healthy -> migrate
