@@ -33,8 +33,8 @@ const devCASeedEnv = "BOLTROPE_DEV_CA_SEED"
 
 // defaultDevCASeed is the fixed fallback seed used when BOLTROPE_DEV_CA_SEED is
 // unset. It is intentionally a fixed, well-known constant: the dev fallback is
-// already gated behind BOLTROPE_DEV_INSECURE=1 and compiled out of release
-// images, and a *stable* default is what lets a default `docker compose up`
+// present in every build but inert unless BOLTROPE_DEV_INSECURE=1 is explicitly
+// set, and a *stable* default is what lets a default `docker compose up`
 // work cross-service with no extra configuration. It is NOT a secret and must
 // never be used in production.
 const defaultDevCASeed = "boltrope-dev-ca-seed/v1/DO-NOT-USE-IN-PRODUCTION"
@@ -44,8 +44,9 @@ const defaultDevCASeed = "boltrope-dev-ca-seed/v1/DO-NOT-USE-IN-PRODUCTION"
 // time.Now) so the certificate fields are reproducible across independent
 // processes, and the window is deliberately wide — years — so it always covers
 // "now" in any dev/CI environment regardless of container clock skew. The dev
-// fallback is gated behind BOLTROPE_DEV_INSECURE and compiled out of release
-// images, so a long-lived dev cert is not a production concern.
+// fallback is present in every build but never engages unless
+// BOLTROPE_DEV_INSECURE=1 is explicitly set (and it must never be set in
+// production), so a long-lived dev cert is not a production concern.
 func devCANotBefore() time.Time { return time.Date(2020, time.January, 1, 0, 0, 0, 0, time.UTC) }
 func devCANotAfter() time.Time  { return time.Date(2100, time.January, 1, 0, 0, 0, 0, time.UTC) }
 

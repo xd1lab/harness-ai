@@ -379,6 +379,8 @@ Requirement IDs use the prefix groups below. Each requirement states a MUST or S
 
 **NFR-SEC-01** — All service-to-service communication MUST use mutual TLS with SPIFFE/SPIRE workload identity. A development-only static-cert fallback MUST require `BOLTROPE_DEV_INSECURE=1` at startup, log a prominent warning, and MUST be compiled out of release images.
 
+> **Amendment (as-built, 2026-06 — honesty reconciliation).** The "compiled out of release images" clause is retained verbatim as frozen requirement text but is NOT how the build realizes the guarantee. As built: the dev static-cert path is **env-gated, not compile-gated** — it is present in every binary and engages only when `BOLTROPE_DEV_INSECURE=1` is explicitly set (prominent WARN logged); what IS build-tag-controlled is the **SPIRE Workload API wiring** (release images build with `-tags spire`; an untagged build carries a nil source stub). The load-bearing invariants hold: a non-dev process without a SPIFFE source **fails closed at startup**, and the fallback can never engage silently. See ADR-0013 §Amendment.
+
 **NFR-SEC-02** — Tenant isolation MUST be enforced at the database layer via PostgreSQL Row-Level Security (non-owner role, `SET LOCAL` GUC from the verified tenant token, `FORCE ROW LEVEL SECURITY` on all tenant-scoped tables). RLS enforcement MUST be validated by an integration test that removes the `WHERE tenant_id=` predicate and confirms cross-tenant rows are still blocked.
 
 **NFR-SEC-03** — Blob identity MUST be tenant-scoped (`PRIMARY KEY (tenant_id, ref)`). Cross-tenant content-addressed dedup is forbidden. Every blob fetch MUST be authorized by `(tenant_id, session_id)` ownership, never by `ref` alone.

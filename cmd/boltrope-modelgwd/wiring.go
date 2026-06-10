@@ -57,6 +57,11 @@ type gatewaySettings struct {
 	// OpenAIBaseURL is the base URL for the openai/openaicompat providers (e.g.
 	// "http://localhost:11434/v1" for Ollama). Required for "openaicompat".
 	OpenAIBaseURL string
+	// PricingFile is the path to an optional JSON pricing-overrides document
+	// (see [pricing.ParseOverrides]) layered over the built-in placeholder
+	// rates. Empty means defaults only; an unreadable or invalid file fails
+	// startup — silently mispriced budgets are worse than a crash.
+	PricingFile string
 	// TrustDomain is the SPIFFE trust domain for inter-service mTLS.
 	TrustDomain string
 }
@@ -77,8 +82,31 @@ func loadGatewaySettings() gatewaySettings {
 		Provider:      os.Getenv("BOLTROPE_MODELGW_PROVIDER"),
 		APIKeyEnv:     os.Getenv("BOLTROPE_MODELGW_API_KEY_ENV"),
 		OpenAIBaseURL: envOr("BOLTROPE_MODELGW_OPENAI_BASE_URL", "http://localhost:11434/v1"),
-		TrustDomain:   envOr("BOLTROPE_TRUST_DOMAIN", "boltrope.local"),
+		// Not BOLTROPE_MODELGW_*: the pricing file is shared with the
+		// orchestrator so both daemons price a turn identically.
+		PricingFile: os.Getenv("BOLTROPE_PRICING_FILE"),
+		TrustDomain: envOr("BOLTROPE_TRUST_DOMAIN", "boltrope.local"),
 	}
+}
+
+// loadCostFunc returns the per-turn cost function: [pricing.Cost] when path is
+// empty (built-in placeholder defaults, unchanged behavior), or the defaults
+// overlaid with the JSON overrides document at path. A read or parse error is
+// fatal — the operator explicitly asked for corrected rates, so running with
+// silently wrong budget accounting is worse than refusing to start.
+func loadCostFunc(path string) (mgwapp.CostFunc, error) {
+	if path == "" {
+		return pricing.Cost, nil
+	}
+	data, err := os.ReadFile(path) //nolint:gosec // G304: path is operator-configured via BOLTROPE_PRICING_FILE, not model/client-driven
+	if err != nil {
+		return nil, fmt.Errorf("modelgwd: read pricing overrides (BOLTROPE_PRICING_FILE=%q): %w", path, err)
+	}
+	overrides, err := pricing.ParseOverrides(data)
+	if err != nil {
+		return nil, fmt.Errorf("modelgwd: invalid pricing overrides (BOLTROPE_PRICING_FILE=%q): %w", path, err)
+	}
+	return overrides.Cost, nil
 }
 
 // buildProvider constructs the configured raw [llm.Provider] and returns it
@@ -160,6 +188,14 @@ func Run(ctx context.Context, cfg *config.Config, logw io.Writer) error {
 	gw := loadGatewaySettings()
 	secrets := secret.NewEnvSecrets()
 
+	// Resolve the cost function early so a bad pricing file fails startup
+	// before any provider is dialed (NFR-OPS-04).
+	costFn, err := loadCostFunc(gw.PricingFile)
+	if err != nil {
+		_ = tel.Shutdown(ctx)
+		return err
+	}
+
 	provider, endpoint, err := buildProvider(ctx, gw, secrets)
 	if err != nil {
 		_ = tel.Shutdown(ctx)
@@ -178,7 +214,7 @@ func Run(ctx context.Context, cfg *config.Config, logw io.Writer) error {
 		Provider:     retrying,
 		Endpoint:     endpoint,
 		Capabilities: capabilities.NewRegistry(nil),
-		Cost:         pricing.Cost,
+		Cost:         costFn,
 	})
 	if err != nil {
 		_ = tel.Shutdown(ctx)

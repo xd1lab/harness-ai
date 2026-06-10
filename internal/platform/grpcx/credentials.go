@@ -129,7 +129,8 @@ func StaticDevCredentials(cfg StaticDevConfig) (credentials.TransportCredentials
 	}
 	logger.Warn(
 		"INSECURE DEV MODE: "+devInsecureEnv+"=1 — using a SHARED-SEED static mTLS CA instead of SPIFFE/SPIRE; "+
-			"this MUST NOT be used in production and is compiled out of release images",
+			"this path is present in every build, engages only because "+devInsecureEnv+"=1 is explicitly set, "+
+			"and MUST NOT be used in production",
 		slog.String("trust_domain", cfg.TrustDomain.String()),
 		slog.String("server_id", cfg.ServerID.String()),
 	)

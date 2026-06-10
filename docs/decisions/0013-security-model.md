@@ -133,3 +133,15 @@ on shared hosts.
   security hole in untrusted or multi-tenant deployments.
 - The multi-tenant honesty statement means the README/threat-model cannot mislead
   operators into thinking v1 containers are safe for mutually-untrusted code.
+
+---
+
+> **Amendment (as-built, 2026-06):** The Decision above says the dev static-cert
+> fallback "is compiled out of release images." As built, it is **not** compiled
+> out: the fallback is present in every build and is env-gated — it never
+> activates unless `BOLTROPE_DEV_INSECURE=1` is explicitly set, and it MUST NOT
+> be used in production. What *is* controlled by a build tag is the SPIRE
+> Workload API wiring: release images build with `-tags spire` (see the
+> Dockerfile) to enable the live Workload API source, while the default untagged
+> build carries a nil stub. The fail-closed property the Decision relies on is
+> unchanged: outside dev mode, a process with no SPIFFE source exits at startup.

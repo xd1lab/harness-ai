@@ -50,6 +50,7 @@ import (
 
 	"github.com/boltrope/boltrope/internal/orchestrator/app"
 	"github.com/boltrope/boltrope/internal/orchestrator/app/agent"
+	"github.com/boltrope/boltrope/internal/orchestrator/app/agentctx"
 	"github.com/boltrope/boltrope/internal/orchestrator/app/apptest"
 	"github.com/boltrope/boltrope/internal/orchestrator/domain"
 	"github.com/boltrope/boltrope/internal/orchestrator/policy"
@@ -115,6 +116,19 @@ type Scenario struct {
 	// function returns (so budget caps and cost accounting are exact). Zero means
 	// a zero-cost run.
 	CostPerTurnUSD float64
+
+	// MaxContextTokens, when > 0, wires the REAL [agentctx.Manager] into the loop
+	// with this context budget (threshold = budget x the default 0.8 fraction),
+	// enabling the threshold-triggered compaction path (FR-CTX-01; DOD-03's
+	// compaction golden). The window is measured by a deterministic scripted
+	// counter fed from WindowTokenCounts.
+	MaxContextTokens int
+	// WindowTokenCounts are the scripted token measurements the fake
+	// [agentctx.TokenCounter] returns, consumed one per Manager Count call (the
+	// Manager measures twice per triggered compaction: current window, then the
+	// projected post-boundary window). Exhausting the script fails the scenario
+	// loudly rather than mis-measuring silently.
+	WindowTokenCounts []int
 
 	// --- Expectations -------------------------------------------------------
 
@@ -265,6 +279,16 @@ func (s Scenario) Run(t *testing.T) Result {
 		costFn = func(string, llm.Usage) (float64, error) { return cost, nil }
 	}
 
+	// Wire the REAL context manager when the scenario opts into compaction
+	// (FR-CTX-01): the only fake is the deterministic token counter.
+	var ctxMgr *agentctx.Manager
+	if s.MaxContextTokens > 0 {
+		ctxMgr = agentctx.NewManager(
+			&scriptedTokenCounter{t: t, counts: s.WindowTokenCounts},
+			agentctx.Config{Model: s.config().Model, MaxContextTokens: s.MaxContextTokens},
+		)
+	}
+
 	loop := agent.NewLoop(agent.Deps{
 		EventLog:  eventlog,
 		Model:     model,
@@ -272,6 +296,7 @@ func (s Scenario) Run(t *testing.T) Result {
 		Approvals: gate,
 		Hooks:     hooks,
 		Policy:    eng,
+		Context:   ctxMgr,
 		Clock:     clk,
 		IDs:       idgen,
 		Metrics:   metrics,
@@ -429,6 +454,35 @@ func (m *recordingMetrics) doomLoopCount(tool string) int {
 	}
 	return n
 }
+
+// ----------------------------------------------------------------------------
+// Scripted token counter (compaction scenarios)
+// ----------------------------------------------------------------------------
+
+// scriptedTokenCounter is a deterministic [agentctx.TokenCounter]: each Count
+// call consumes the next scripted measurement. Exhausting the script fails the
+// scenario immediately — a silent default would let the compaction decision
+// drift from what the scenario declared.
+type scriptedTokenCounter struct {
+	mu     sync.Mutex
+	t      *testing.T
+	counts []int
+	calls  int
+}
+
+func (c *scriptedTokenCounter) Count(_ context.Context, _ string, _ []llm.Message, _ []llm.ToolDef) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.calls >= len(c.counts) {
+		c.t.Fatalf("eval: WindowTokenCounts exhausted (call %d); script one count per Manager measurement", c.calls+1)
+	}
+	n := c.counts[c.calls]
+	c.calls++
+	return n, nil
+}
+
+// Compile-time assertion that the scripted counter satisfies the agentctx port.
+var _ agentctx.TokenCounter = (*scriptedTokenCounter)(nil)
 
 // ----------------------------------------------------------------------------
 // Auto approval gate

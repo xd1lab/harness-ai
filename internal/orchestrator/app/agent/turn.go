@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/boltrope/boltrope/internal/orchestrator/app"
 	"github.com/boltrope/boltrope/internal/orchestrator/app/agentctx"
 	"github.com/boltrope/boltrope/internal/orchestrator/domain"
 	"github.com/boltrope/boltrope/internal/platform/llm"
@@ -231,15 +232,28 @@ func structuredRetryMessage() llm.Message {
 	}
 }
 
-// buildRequest folds the session log into the model-visible window (via the
-// context manager when present, else directly) and assembles the llm.Request for
-// the next Generate, including the configured tool defs (or those advertised by
-// the runtime) and the optional output schema.
+// buildRequest folds the session log into the model-visible window (applying
+// the context manager's threshold-triggered compaction when one is configured)
+// and assembles the llm.Request for the next Generate, including the configured
+// tool defs (or those advertised by the runtime) and the optional output schema.
 func (l *Loop) buildRequest(ctx context.Context, st *runState) (llm.Request, error) {
 	events, err := l.deps.EventLog.Load(ctx, st.sessionID, 0)
 	if err != nil {
 		return llm.Request{}, fmt.Errorf("agent: load window: %w", err)
 	}
+
+	// Threshold-triggered compaction (FR-CTX-01 AC-1): when a context manager is
+	// configured, measure the window NOW — before this turn's request is built —
+	// and, if the budget threshold was crossed, append the CompactionPerformed
+	// boundary so the very turn that detected the pressure already generates
+	// from the reduced window.
+	if l.deps.Context != nil {
+		events, err = l.maybeCompact(ctx, st, events)
+		if err != nil {
+			return llm.Request{}, err
+		}
+	}
+
 	win, err := agentctx.BuildWindow(events, agentctx.WindowOptions{})
 	if err != nil {
 		return llm.Request{}, fmt.Errorf("agent: build window: %w", err)
@@ -258,6 +272,52 @@ func (l *Loop) buildRequest(ctx context.Context, st *runState) (llm.Request, err
 		Stream:       true,
 		OutputSchema: append([]byte(nil), l.cfg.OutputSchema...),
 	}, nil
+}
+
+// maybeCompact runs the context manager's compaction decision over the loaded
+// events (FR-CTX-01). When the window crossed the configured threshold it runs
+// the PreCompact hook (AC-2), appends the single [domain.CompactionPerformed]
+// boundary, and reloads the stream so the caller builds the post-boundary
+// (reduced) window. It returns the events the caller should build from.
+//
+// Failure policy, deliberately asymmetric:
+//   - A manager/counter error means "cannot decide" — the turn proceeds
+//     un-compacted (the [agentctx.Manager] contract; compaction is an
+//     optimization and is never worth failing a run for).
+//   - A PreCompact hook BLOCK (or a hook mechanism failure) vetoes THIS
+//     compaction: the hook is an operator control over an optimization, so
+//     failing open (no compaction) is the conservative choice — the window
+//     simply stays large until the next decision point.
+//   - A failed boundary APPEND or post-append reload IS infrastructural and
+//     fails the turn like any other append: the log is the single source of
+//     truth, and generating from a window the durable history does not record
+//     would desynchronize replay.
+func (l *Loop) maybeCompact(ctx context.Context, st *runState, events []domain.EventEnvelope) ([]domain.EventEnvelope, error) {
+	plan, perr := l.deps.Context.PlanCompaction(ctx, events)
+	if perr != nil || !plan.ShouldCompact {
+		return events, nil
+	}
+
+	// PreCompact hook (FR-CTX-01 AC-2). TurnID is the PRECEDING turn's id (empty
+	// on the first turn): the boundary sits between turns, before the next
+	// TurnStarted is minted.
+	dec, herr := l.deps.Hooks.Run(ctx, app.HookInput{
+		Event:     app.HookPreCompact,
+		SessionID: st.sessionID,
+		TurnID:    st.currentTurnID,
+	})
+	if herr != nil || !dec.Allow {
+		return events, nil
+	}
+
+	if err := l.append(ctx, st, domain.ActorSystem, *plan.Event); err != nil {
+		return nil, err
+	}
+	refreshed, err := l.deps.EventLog.Load(ctx, st.sessionID, 0)
+	if err != nil {
+		return nil, fmt.Errorf("agent: reload window after compaction: %w", err)
+	}
+	return refreshed, nil
 }
 
 // toolDefsFromRuntime derives llm.ToolDef tool definitions from the runtime's

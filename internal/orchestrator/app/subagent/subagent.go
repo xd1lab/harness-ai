@@ -15,9 +15,11 @@ package subagent
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/boltrope/boltrope/internal/orchestrator/app"
 	"github.com/boltrope/boltrope/internal/orchestrator/app/agent"
+	"github.com/boltrope/boltrope/internal/orchestrator/domain"
 	"github.com/boltrope/boltrope/internal/platform/llm"
 )
 
@@ -109,7 +111,7 @@ func (s *Spawner) Spawn(ctx context.Context, in app.SubAgentSpawn) (app.ToolResu
 	}
 
 	// Condense the child run result into a ToolResult for the parent.
-	return condense(runRes), nil
+	return s.condense(ctx, childSessionID, runRes), nil
 }
 
 // taskMessage builds a minimal [llm.Message] carrying the sub-agent task text
@@ -121,21 +123,74 @@ func taskMessage(task string) llm.Message {
 	}
 }
 
+// maxFinalTextRunes caps the child final-answer text included in the parent's
+// observation. The observation feeds straight back into the parent's model
+// window, so an unboundedly verbose child could blow the parent's context
+// budget; 4096 runes keeps a substantial answer intact while bounding growth.
+// Runes, not bytes, so the cut never splits a multi-byte UTF-8 character.
+const maxFinalTextRunes = 4096
+
+// truncationMarker is appended whenever the final text was cut at
+// maxFinalTextRunes, so the parent model knows the answer is incomplete rather
+// than silently mistaking the prefix for the whole answer.
+const truncationMarker = "... [truncated]"
+
 // condense converts a child [agent.RunResult] into the [app.ToolResult] the
 // parent receives as the observation for this sub-agent tool call. The content
-// is a brief summary of the termination reason; richer output (e.g. the last
-// assistant message text) would require loading the child session log, which is
-// deferred to a richer implementation once the transport layer is wired
-// (architecture §5.1). For correctness and determinism in unit tests this
-// minimal form is sufficient.
-func condense(r agent.RunResult) app.ToolResult {
+// is a one-line termination summary followed, for non-error completions, by the
+// child's final assistant text folded from its session log (capped at
+// maxFinalTextRunes). Loading the log is best-effort: on any load error the
+// reason-only summary is returned, because the child's work is already durably
+// recorded and the summary must never fail the parent turn.
+func (s *Spawner) condense(ctx context.Context, childSessionID string, r agent.RunResult) app.ToolResult {
 	if r.Reason.IsError() {
 		return app.ToolResult{
 			IsError: true,
 			Content: fmt.Sprintf("sub-agent terminated with error: %s", r.Reason),
 		}
 	}
-	return app.ToolResult{
-		Content: fmt.Sprintf("sub-agent completed: %s (turns=%d)", r.Reason, r.NumTurns),
+	summary := fmt.Sprintf("sub-agent completed: %s (turns=%d)", r.Reason, r.NumTurns)
+	if text := s.lastAssistantText(ctx, childSessionID); text != "" {
+		summary += "\n" + truncateRunes(text, maxFinalTextRunes)
 	}
+	return app.ToolResult{Content: summary}
+}
+
+// lastAssistantText folds the child session log down to the concatenated text
+// parts of the LAST [domain.AssistantMessage] — the child's final answer. This
+// mirrors the transport's fold (grpc.LoopRunner) but is reimplemented locally:
+// the app layer must not import inbound adapters (depguard; architecture §5.1).
+// On any load error it returns "" so the caller falls back to the reason-only
+// summary.
+func (s *Spawner) lastAssistantText(ctx context.Context, sessionID string) string {
+	events, err := s.deps.EventLog.Load(ctx, sessionID, 0)
+	if err != nil {
+		return ""
+	}
+	var text string
+	for _, env := range events {
+		am, ok := env.Event.(domain.AssistantMessage)
+		if !ok {
+			continue
+		}
+		var b strings.Builder
+		for _, cp := range am.Message.Content {
+			if cp.Text != nil {
+				b.WriteString(cp.Text.Text)
+			}
+		}
+		if t := b.String(); t != "" {
+			text = t
+		}
+	}
+	return text
+}
+
+// truncateRunes caps s at max runes, appending truncationMarker when cut.
+func truncateRunes(s string, max int) string {
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return string(runes[:max]) + truncationMarker
 }

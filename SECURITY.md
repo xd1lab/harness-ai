@@ -4,12 +4,16 @@
 
 **Please do not report security vulnerabilities through public GitHub issues.**
 
-Use GitHub's private reporting: the repository's **Security** tab →
-**Report a vulnerability** (GitHub Security Advisories). If that is unavailable, email
-**security@CHANGE-ME.example** _(maintainer: replace with a monitored address)_.
+Use GitHub's **Private Vulnerability Reporting**: the repository's **Security** tab →
+**Report a vulnerability** (GitHub Security Advisories).
 
 Please include: affected version/commit, a description, reproduction steps or a PoC,
 and an impact assessment.
+
+> **Maintainer note:** private vulnerability reporting is an opt-in repository
+> feature. Enable it in the repository settings (Code security → Private
+> vulnerability reporting) when this repository is first published, or the
+> **Report a vulnerability** button will not appear.
 
 ## Disclosure timeline
 

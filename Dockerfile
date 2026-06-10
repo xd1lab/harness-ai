@@ -65,11 +65,16 @@ ARG VERSION=dev
 # The version var lives in each cmd's package main (vars.go: `var version`).
 ENV CGO_ENABLED=0 GOFLAGS=-trimpath
 # -s -w strips the symbol table/DWARF (smaller binaries); -X stamps the version.
+# -tags spire wires the SPIRE Workload API source into the four daemons (the
+# untagged build carries a nil stub; see cmd/*/spiffe_spire.go and the ADR-0013
+# amendment). The dev static-cert fallback remains present but env-gated behind
+# BOLTROPE_DEV_INSECURE=1. migrate/harnessctl have no SPIFFE wiring and stay
+# untagged.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     set -eux; \
     for svc in orchestratord modelgwd toolruntimed projectord; do \
-        go build -ldflags="-s -w -X main.version=${VERSION}" \
+        go build -tags spire -ldflags="-s -w -X main.version=${VERSION}" \
             -o "/out/boltrope-${svc}" "./cmd/boltrope-${svc}"; \
     done; \
     go build -ldflags="-s -w" -o /out/boltrope-migrate ./cmd/boltrope-migrate; \

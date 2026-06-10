@@ -9,7 +9,8 @@
 //
 // Mode selection (per the task spec):
 //   - if BOLTROPE_TEST_DATABASE_URL is set, it is used as the OWNER DSN;
-//   - otherwise a postgres:16 container is started via testcontainers-go.
+//   - otherwise a Postgres container is started via testcontainers-go (image
+//     from BOLTROPE_TEST_PG_IMAGE, default postgres:16).
 //
 // If neither a DSN is set nor Docker is reachable, the harness calls t.Skip.
 package projection
@@ -32,7 +33,13 @@ import (
 const (
 	envTestDatabaseURL = "BOLTROPE_TEST_DATABASE_URL"
 
-	containerImage    = "postgres:16"
+	// envTestPGImage overrides the Postgres image for the testcontainer mode.
+	// NFR-PORT-03 pins the supported floor at PostgreSQL 13 (xid8 /
+	// pg_current_xact_id), so set BOLTROPE_TEST_PG_IMAGE=postgres:13 to run
+	// the floor proof without editing the harness.
+	envTestPGImage        = "BOLTROPE_TEST_PG_IMAGE"
+	defaultContainerImage = "postgres:16"
+
 	containerDB       = "boltrope"
 	containerUser     = "boltrope_owner"
 	containerPassword = "owner_pw"
@@ -75,7 +82,7 @@ func provisionOwnerDSN(ctx context.Context, t *testing.T) (string, string) {
 		t.Logf("projection integration: using external DSN from %s", envTestDatabaseURL)
 		return dsn, "external-dsn"
 	}
-	container, err := tcpostgres.Run(ctx, containerImage,
+	container, err := tcpostgres.Run(ctx, containerImage(),
 		tcpostgres.WithDatabase(containerDB),
 		tcpostgres.WithUsername(containerUser),
 		tcpostgres.WithPassword(containerPassword),
@@ -91,6 +98,16 @@ func provisionOwnerDSN(ctx context.Context, t *testing.T) (string, string) {
 		t.Fatalf("container ConnectionString: %v", err)
 	}
 	return dsn, "testcontainer"
+}
+
+// containerImage returns the Postgres image for the testcontainer mode,
+// honoring BOLTROPE_TEST_PG_IMAGE so the NFR-PORT-03 floor (postgres:13) can
+// be proven against the same suite that runs on the default image.
+func containerImage() string {
+	if img := os.Getenv(envTestPGImage); img != "" {
+		return img
+	}
+	return defaultContainerImage
 }
 
 // newConn opens a fresh owner connection (for a second/long-running transaction

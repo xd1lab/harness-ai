@@ -55,6 +55,49 @@ func TestNormalizeError_ContextCanceled_IsTimeout(t *testing.T) {
 	assertProviderErrorKind(t, normalizeError(context.DeadlineExceeded), llm.ErrTimeout)
 }
 
+func TestNormalizeError_NoStatus_IsServer(t *testing.T) {
+	// An API error decoded without an HTTP status (status 0) falls through to the
+	// retryable server default.
+	assertProviderErrorKind(t, normalizeError(&openai.Error{}), llm.ErrServer)
+}
+
+// TestRetryAfter_HeaderForms covers the full Retry-After parsing surface:
+// delta-seconds, the HTTP-date form, and the defensive zero paths (missing error,
+// missing response, absent/negative/garbage header values).
+func TestRetryAfter_HeaderForms(t *testing.T) {
+	if got := retryAfter(nil); got != 0 {
+		t.Fatalf("retryAfter(nil) = %v, want 0", got)
+	}
+	if got := retryAfter(&openai.Error{StatusCode: http.StatusTooManyRequests}); got != 0 {
+		t.Fatalf("retryAfter without Response = %v, want 0", got)
+	}
+	cases := []struct {
+		name     string
+		header   string
+		want     time.Duration
+		positive bool // assert > 0 instead of an exact value (HTTP-date depends on the wall clock)
+	}{
+		{"delta seconds", "5", 5 * time.Second, false},
+		{"zero seconds", "0", 0, false},
+		{"negative seconds rejected", "-3", 0, false},
+		{"garbage", "soon-ish", 0, false},
+		{"future http-date", "Mon, 01 Jan 2999 00:00:00 GMT", 0, true},
+		{"past http-date", "Mon, 02 Jan 2006 15:04:05 GMT", 0, false},
+	}
+	for _, c := range cases {
+		got := retryAfter(apiErrWithStatus(http.StatusTooManyRequests, c.header))
+		if c.positive {
+			if got <= 0 {
+				t.Errorf("%s: retryAfter = %v, want > 0", c.name, got)
+			}
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s: retryAfter = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestNormalizeError_NilIsNil(t *testing.T) {
 	if normalizeError(nil) != nil {
 		t.Fatalf("normalizeError(nil) must be nil")

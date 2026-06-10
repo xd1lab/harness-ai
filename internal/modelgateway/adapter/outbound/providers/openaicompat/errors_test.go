@@ -67,6 +67,55 @@ func TestNormalizeError_UnknownTransport_IsServer(t *testing.T) {
 	assertProviderErrorKind(t, normalizeError(errors.New("connection refused")), llm.ErrServer)
 }
 
+// TestRetryAfter_HeaderForms covers the full Retry-After parsing surface:
+// delta-seconds, the HTTP-date form, and the defensive zero paths (missing error,
+// missing response, absent/negative/garbage header values).
+func TestRetryAfter_HeaderForms(t *testing.T) {
+	if got := retryAfter(nil); got != 0 {
+		t.Fatalf("retryAfter(nil) = %v, want 0", got)
+	}
+	if got := retryAfter(&openai.Error{StatusCode: http.StatusTooManyRequests}); got != 0 {
+		t.Fatalf("retryAfter without Response = %v, want 0", got)
+	}
+	cases := []struct {
+		name     string
+		header   string
+		want     time.Duration
+		positive bool // assert > 0 instead of an exact value (HTTP-date depends on the wall clock)
+	}{
+		{"delta seconds", "5", 5 * time.Second, false},
+		{"zero seconds", "0", 0, false},
+		{"negative seconds rejected", "-3", 0, false},
+		{"garbage", "soon-ish", 0, false},
+		{"future http-date", "Mon, 01 Jan 2999 00:00:00 GMT", 0, true},
+		{"past http-date", "Mon, 02 Jan 2006 15:04:05 GMT", 0, false},
+	}
+	for _, c := range cases {
+		got := retryAfter(apiErrWithStatus(http.StatusTooManyRequests, c.header))
+		if c.positive {
+			if got <= 0 {
+				t.Errorf("%s: retryAfter = %v, want > 0", c.name, got)
+			}
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s: retryAfter = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// TestKindForStatus_NoHTTPStatus covers the status==0 default branch: a decoded
+// API error type hints at a client bug (non-retryable), no type at all is treated
+// as a retryable server fault.
+func TestKindForStatus_NoHTTPStatus(t *testing.T) {
+	if got := kindForStatus(0, ""); got != llm.ErrServer {
+		t.Fatalf("kindForStatus(0, \"\") = %q, want %q", got, llm.ErrServer)
+	}
+	if got := kindForStatus(0, "invalid_request_error"); got != llm.ErrInvalidRequest {
+		t.Fatalf("kindForStatus(0, type) = %q, want %q", got, llm.ErrInvalidRequest)
+	}
+}
+
 func TestNormalizeError_NilIsNil(t *testing.T) {
 	if normalizeError(nil) != nil {
 		t.Fatalf("normalizeError(nil) must be nil")

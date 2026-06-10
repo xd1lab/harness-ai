@@ -53,7 +53,7 @@ func TestFakeToolRegistry_RegisterAndGet(t *testing.T) {
 func TestFakeToolRegistry_DuplicateReturnsError(t *testing.T) {
 	reg := truntimetest.NewFakeToolRegistry()
 	spec := domain.ToolSpec{Name: "bash", JSONSchema: json.RawMessage(`{}`)}
-	reg.Register(ctx, truntimetest.NewFakeTool(spec)) //nolint:errcheck
+	reg.Register(ctx, truntimetest.NewFakeTool(spec)) //nolint:errcheck // seeds the first registration; the duplicate's error below is the assertion
 	err := reg.Register(ctx, truntimetest.NewFakeTool(spec))
 	require.Error(t, err)
 }
@@ -66,8 +66,8 @@ func TestFakeToolRegistry_NotFound(t *testing.T) {
 
 func TestFakeToolRegistry_List(t *testing.T) {
 	reg := truntimetest.NewFakeToolRegistry()
-	reg.Register(ctx, truntimetest.NewFakeTool(domain.ToolSpec{Name: "t1", JSONSchema: json.RawMessage(`{}`)})) //nolint:errcheck
-	reg.Register(ctx, truntimetest.NewFakeTool(domain.ToolSpec{Name: "t2", JSONSchema: json.RawMessage(`{}`)})) //nolint:errcheck
+	reg.Register(ctx, truntimetest.NewFakeTool(domain.ToolSpec{Name: "t1", JSONSchema: json.RawMessage(`{}`)})) //nolint:errcheck // test seeding; the List length assertion catches a failed Register
+	reg.Register(ctx, truntimetest.NewFakeTool(domain.ToolSpec{Name: "t2", JSONSchema: json.RawMessage(`{}`)})) //nolint:errcheck // test seeding; the List length assertion catches a failed Register
 	specs, err := reg.List(ctx)
 	require.NoError(t, err)
 	assert.Len(t, specs, 2)

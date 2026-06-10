@@ -1,0 +1,58 @@
+# Boltrope OpenSSF Scorecard — supply-chain posture analysis (ADR-0006).
+#
+# Runs the OSSF Scorecard checks (pinned dependencies, token permissions,
+# branch protection, …) weekly and on every push to main, publishes the score
+# to the OpenSSF REST API/badge, and uploads the SARIF results so findings
+# appear in the repository's code-scanning dashboard.
+#
+# Conventions (ADR-0006):
+#   - All third-party actions are pinned to a commit SHA, with the human-
+#     readable version in a trailing comment.
+#   - Permissions are least-privilege: read-all by default, widened on the
+#     analysis job only for SARIF upload and OIDC publishing.
+name: scorecard
+
+on:
+  # Weekly sweep (Mondays 06:24 UTC; odd minute to avoid the top-of-hour herd)
+  # plus every push to main so posture regressions surface with the change.
+  schedule:
+    - cron: "24 6 * * 1"
+  push:
+    branches:
+      - main
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write # upload SARIF to code scanning
+      id-token: write # OIDC token to publish results to the OpenSSF API
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Run Scorecard analysis
+        uses: ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a # v2.4.3
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # Publish to the OpenSSF REST API so the badge/score is public.
+          publish_results: true
+
+      # Keep the raw SARIF around for debugging score changes.
+      - name: Upload Scorecard SARIF artifact
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: scorecard-sarif
+          path: results.sarif
+          retention-days: 5
+
+      - name: Upload SARIF to code scanning
+        uses: github/codeql-action/upload-sarif@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3.36.2
+        with:
+          sarif_file: results.sarif

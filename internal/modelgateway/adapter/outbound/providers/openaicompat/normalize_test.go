@@ -224,6 +224,56 @@ func TestNormalizer_UsageCacheAndReasoningSplit(t *testing.T) {
 	}
 }
 
+// TestNormalizer_RefusalDelta_SurfacesAsText asserts streamed refusal deltas
+// become visible text so the assembled message is never silently empty.
+func TestNormalizer_RefusalDelta_SurfacesAsText(t *testing.T) {
+	refusal := openai.ChatCompletionChunk{
+		Model: "test-model",
+		Choices: []openai.ChatCompletionChunkChoice{{
+			Delta: openai.ChatCompletionChunkChoiceDelta{Refusal: "I cannot help"},
+		}},
+	}
+	got := runNormalizer([]openai.ChatCompletionChunk{refusal, finishChunk("stop")})
+	if len(got) != 2 || got[0].TextDelta == nil || got[0].TextDelta.Text != "I cannot help" {
+		t.Fatalf("refusal delta must surface as text, got %s", dump(got))
+	}
+}
+
+// TestNormalizer_ToolCallWithoutArgs_DefaultsToEmptyObject asserts a buffered tool
+// call that produced no argument bytes still emits a valid empty JSON object, so
+// downstream parsing never sees an empty fragment.
+func TestNormalizer_ToolCallWithoutArgs_DefaultsToEmptyObject(t *testing.T) {
+	got := runNormalizer([]openai.ChatCompletionChunk{
+		toolFragChunk(0, "call_n", "noargs", ""),
+		finishChunk("tool_calls"),
+	})
+	var tc *llm.ToolCallDelta
+	for _, ev := range got {
+		if ev.ToolCallDelta != nil {
+			tc = ev.ToolCallDelta
+		}
+	}
+	if tc == nil || string(tc.ArgsFragment) != "{}" {
+		t.Fatalf("argument-less call must emit {}, got %s", dump(got))
+	}
+}
+
+// TestNormalizer_UsageClampsNegativeInput pins the defensive clamp: a provider
+// reporting more cached tokens than total prompt tokens must not yield negative
+// input.
+func TestNormalizer_UsageClampsNegativeInput(t *testing.T) {
+	got := runNormalizer([]openai.ChatCompletionChunk{
+		textChunk("x"),
+		finishChunk("stop"),
+		usageChunk(10, 5, 50, 0),
+	})
+	done := lastDone(t, got)
+	want := llm.Usage{InputTokens: 0, OutputTokens: 5, CacheReadTokens: 50}
+	if done.Usage != want {
+		t.Fatalf("usage clamp wrong:\n got %#v\nwant %#v", done.Usage, want)
+	}
+}
+
 func TestMapFinishReason_Table(t *testing.T) {
 	cases := []struct {
 		reason string

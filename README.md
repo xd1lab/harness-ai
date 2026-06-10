@@ -52,7 +52,8 @@ curl -fsS http://localhost:8080/readyz && echo   # orchestrator: ready
 #    real model below to drive actual tool calls: under the default permission mode a
 #    model's tool call pauses at an [approval required] prompt printing a call_id —
 #    approve it from a second terminal with `harnessctl ... --session <id> approve
-#    <call-id>`.)
+#    <call-id>`. The standing mode is chosen when the CLI CREATES the session:
+#    --permission-mode default|acceptEdits|plan, env BOLTROPE_CTL_PERMISSION_MODE.)
 #    Reconnect to a dropped session with --session <id> --after-seq <n>;
 #    fork a trajectory with `harnessctl ... fork --at-seq <n>`.
 BOLTROPE_DEV_INSECURE=1 go run ./cmd/harnessctl --endpoint localhost:9000 \
@@ -95,12 +96,12 @@ Everything below is implemented in v1 unless explicitly marked _roadmap_.
 - **Multi-LLM, provider-portable** — one normalized `Provider` interface (Generate / Stream / CountTokens / Capabilities) behind the model-gateway, with adapters for **Anthropic Claude**, **Google Gemini**, **OpenAI** (Responses API primary, Chat Completions sub-flag), and an **OpenAI-compatible** adapter covering **self-hosted** endpoints (vLLM, Ollama, LM Studio, llama.cpp, TGI, LiteLLM). Capability flags resolve per `(endpoint, model)`, not per provider family. The loop holds **zero** vendor-SDK imports — adding a provider touches only an adapter package plus a capabilities-table entry.
 - **Event-sourced sessions with resume & fork** — an append-only PostgreSQL log is the single source of truth. Appends are **optimistic** (compare `expected_seq`), **fenced** (lease epoch), and **idempotent** (a re-sent `request_id` is a no-op, not a conflict). Resume folds the log and adjudicates open turns/tool-executions explicitly — a crashed run is never silently re-billed. Fork branches a session at any sequence without touching the parent.
 - **Sandboxed tools** — core native tools (`read`, `edit`, `write`, `glob`, `grep`, `bash`, `webfetch`, `websearch`) run inside per-session containers behind a `Workspace`/`Runtime` port. Tool inputs are JSON-Schema-validated before execution; errors surface as an `Observation`, never a panic. On cancellation the process group is killed at the cgroup/PID-namespace boundary. A durable dedup ledger makes mutating tools at-most-once across restarts.
-- **Permissions & human-in-the-loop** — a layered `deny → mode → allow → tool` policy pipeline with `default` / `acceptEdits` / `plan` / `bypass` modes, a taint-tracking egress gate for the lethal-trifecta risk, and approval decisions persisted as events (re-checkable on replay).
+- **Permissions & human-in-the-loop** — a layered `deny → mode → allow → tool` policy pipeline with `default` / `acceptEdits` / `plan` / `bypass` modes, a taint-tracking egress gate for the lethal-trifecta risk, and approval decisions persisted as events (re-checkable on replay). A session's standing mode is set at creation: `harnessctl --permission-mode default|acceptEdits|plan` (env `BOLTROPE_CTL_PERMISSION_MODE`) applies when the CLI creates the session; `bypass` is operator-only and a client-supplied bypass is rejected server-side (ADR-0019).
 - **MCP (client)** — connect Model Context Protocol servers over **stdio or HTTP** with lazy schema loading; each server runs in its own confined sandbox; first-use registration requires explicit human approval and MCP tool descriptions are treated as untrusted input.
 - **Hooks / middleware** — `PreToolUse`, `PostToolUse`, `Stop`, and `PreCompact` hooks run as host subprocesses behind a `CommandRunner` port; a `PreToolUse` block prevents dispatch.
 - **Context management** — running token accounting, automatic compaction before the budget threshold, append-only tool-result clearing (stubs in the window, full content retained in the log/blob store), and tenant-scoped prompt-cache prefixes.
 - **Observability** — OpenTelemetry GenAI spans (`invoke_agent` / `chat` / `execute_tool`) with `gen_ai.*` attributes and trace-context propagation over gRPC; RED metrics per RPC (errors broken down by termination subtype) and USE/saturation gauges (worker-pool, live sandboxes, PG pool, blob bytes, projection lag); `slog` JSON logs with `LogValuer` secret redaction; gRPC health + HTTP `/livez` / `/readyz` with dependency-gated readiness.
-- **Client API** — a resumable `Run` server-stream (Last-Event-ID semantics) plus a unary `Control` RPC (approve / deny / interrupt / reattach), with an optional REST/JSON facade (grpc-gateway, `Run` over SSE + `Control` POST) enforcing identical auth.
+- **Client API** — a resumable `Run` server-stream (Last-Event-ID semantics) plus a unary `Control` RPC (approve / deny / interrupt / reattach). The client API is **gRPC-only in v1**; a REST/JSON facade (grpc-gateway, `Run` over SSE + `Control` POST, enforcing identical auth) is _roadmap_, planned as `google.api.http` annotations over the same protos.
 - **Deterministic eval harness** — golden scenarios drive the real loop against a scripted fake provider and fake clock, with **no network**; wired into CI as a required gate.
 
 ---
@@ -168,7 +169,7 @@ Boltrope is **three long-lived services plus one projection worker**, all over a
 | **tool-runtime** (`boltrope-toolruntimed`) | The trust boundary for model-influenced code: tool registry (native + MCP), JSON-Schema validation, per-session sandboxes, MCP client, and the deny-by-default egress broker. |
 | **projectord** (`boltrope-projectord`) | Read-side worker (off the request path): tails the event log and runs cost-rollup and OTel-export projections with an xmin-bounded safe-advance cursor. Lag never blocks a turn. |
 
-Plus `boltrope-migrate` (runs DDL and exits — a release gate) and `harnessctl` (the client CLI/SDK). Services talk gRPC + protobuf with mTLS; the client edge is gRPC with an optional REST facade.
+Plus `boltrope-migrate` (runs DDL and exits — a release gate) and `harnessctl` (the client CLI/SDK). Services talk gRPC + protobuf with mTLS; the client edge is gRPC (a REST facade is planned — see [Roadmap](#roadmap--deferred)).
 
 ```
 Client ──gRPC (resumable Run / Control)──> Orchestrator ──┬─ gRPC ─> Model Gateway ──> LLM APIs / self-hosted
@@ -190,7 +191,7 @@ Read the details:
 
 ## Security
 
-- **Service-to-service mTLS** via SPIFFE/SPIRE workload identity, with deny-by-default per-RPC verb gates. A dev-only static-cert fallback requires `BOLTROPE_DEV_INSECURE=1`, logs a loud warning, and is compiled out of release images.
+- **Service-to-service mTLS** via SPIFFE/SPIRE workload identity, with deny-by-default per-RPC verb gates. A dev-only static-cert fallback is env-gated behind `BOLTROPE_DEV_INSECURE=1` and logs a loud warning — it is present in the binary but inert unless explicitly enabled; release images build with `-tags spire` to enable the SPIRE path.
 - **Client-edge auth** validates OIDC/bearer tokens (`iss`/`aud`/`exp`, `alg=none` rejected, JWKS rotation) and verifies session ownership on every call.
 - **Tenant isolation** at the database layer via PostgreSQL Row-Level Security (non-owner role, `SET LOCAL` GUC from the verified token, `FORCE ROW LEVEL SECURITY`).
 - **Deny-by-default egress** — every per-session sandbox runs with `--network none` by default, so all model-influenced tools (sandbox `bash`, `webfetch`, `websearch`, MCP HTTP) have **no external network** — the network namespace is the v1 containment, and there is no unrestricted egress path. A per-session egress **broker** is the deny-by-default allowlist *policy* layer (configure allowed hosts via `BOLTROPE_TOOLRT_EGRESS_ALLOWLIST`; empty ⇒ deny-all); combined with a forward egress-proxy data path it will gate allowlisted egress per connection — the proxy is a [roadmap](#roadmap--deferred) item, so in v1 `webfetch`/`websearch` are effectively disabled unless an egress path is configured. Provider-native/server-side tools are disabled in v1.
@@ -208,7 +209,7 @@ v1 is a deliberately focused, irreducible harness. The `Provider`, `Workspace`/`
 - **microVM / gVisor / OS-native sandbox backends** — v1 is containers-only behind the `Workspace`/`Runtime` port; multi-tenant execution of mutually-untrusted code is therefore out of scope for v1.
 - **Egress-proxy data path** — v1 contains egress with the sandbox network namespace (`--network none`) and ships the egress broker as the deny-by-default allowlist *policy* layer. The forward proxy that turns an allowlisted host into a live, per-connection-gated network path (re-enabling `webfetch`/`websearch`/MCP-HTTP for allowlisted hosts) is deferred; the `EgressBroker` port and the `--network` seam are shaped to slot it in without re-architecture.
 - **Model routing** and advanced multi-agent topologies.
-- **Full REST mapping** for every RPC — v1's facade covers `Run` (SSE) + `Control`.
+- **REST/JSON facade** — the v1 client API is gRPC-only. The facade is planned as grpc-gateway `google.api.http` annotations over the same protos — `Run` (over SSE) + `Control` POST first, a full REST mapping for every RPC later.
 - **Native-Ollama NDJSON adapter** — the OpenAI-compatible `/v1` path is used instead.
 - **Semantic codebase indexing** / tree-sitter repo map; **LLM-based risk classifier**; non-native function-calling fallback / constrained decoding.
 - **Durable workspace snapshots** (consistent filesystem resume after crash); virtual-filesystem context mounts; interactive workspace access.

@@ -54,8 +54,10 @@ x-common-env: &common-env
   # completes cross-container (a server in one container trusts a client in
   # another). It MUST be identical across all services — it is anchored here once
   # via the shared fragment so it cannot drift. NOT a secret and NEVER for
-  # production (the seed is gated behind dev-insecure and compiled out of release
-  # images; production uses SPIRE-issued SVIDs). Override per-stack via .env.
+  # production (the seed path is env-gated: present in every build but inert
+  # unless BOLTROPE_DEV_INSECURE=1 is explicitly set; production uses
+  # SPIRE-issued SVIDs — release images build with -tags spire; ADR-0013
+  # §Amendment). Override per-stack via .env.
   #
   # This default MUST equal grpcx.defaultDevCASeed (internal/platform/grpcx/
   # devca.go), so a HOST client (harnessctl) run with NO BOLTROPE_DEV_CA_SEED set

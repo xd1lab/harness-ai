@@ -13,8 +13,11 @@ package subagent_test
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -252,6 +255,128 @@ func TestSpawn_AtMaxDepth_Allowed(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Condensed result content — the parent must receive the child's final answer
+// (last assistant message text), bounded, with a load-error fallback.
+// ---------------------------------------------------------------------------
+
+// TestSpawn_ResultIncludesChildFinalAnswer asserts that the condensed
+// ToolResult content is the termination summary followed, on a new line, by the
+// child's final assistant text folded from its session log — the parent loop
+// must see the child's actual answer, not just the termination reason.
+func TestSpawn_ResultIncludesChildFinalAnswer(t *testing.T) {
+	const parentSession = "parent-sess-answer"
+
+	model := apptest.NewFakeModelGateway()
+	model.AddStreamEvents(textStream("the child final answer")...)
+
+	eventlog := apptest.NewFakeEventLog()
+	spawner := newSpawnerWithSeededParent(t, model, eventlog, parentSession)
+
+	result, err := spawner.Spawn(context.Background(), app.SubAgentSpawn{
+		ParentSessionID: parentSession,
+		Depth:           1,
+		Task:            "answer a question",
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	// The summary line is preserved for the parent's bookkeeping...
+	assert.True(t, strings.HasPrefix(result.Content, "sub-agent completed: "),
+		"content must keep the termination summary prefix; got %q", result.Content)
+	// ...and the child's final answer follows on its own line.
+	assert.True(t, strings.HasSuffix(result.Content, "\nthe child final answer"),
+		"content must end with the child's final assistant text; got %q", result.Content)
+}
+
+// TestSpawn_FinalAnswerTruncatedAtCap asserts that an over-long child answer is
+// truncated to the rune cap (4096) with an explicit marker, and that truncation
+// never splits a multi-byte UTF-8 character (hence the all-'é' payload).
+func TestSpawn_FinalAnswerTruncatedAtCap(t *testing.T) {
+	const parentSession = "parent-sess-trunc"
+	// 4200 two-byte runes: over the 4096-rune cap, and any byte-based cut would
+	// land mid-character and produce invalid UTF-8.
+	longAnswer := strings.Repeat("é", 4200)
+
+	model := apptest.NewFakeModelGateway()
+	model.AddStreamEvents(textStream(longAnswer)...)
+
+	eventlog := apptest.NewFakeEventLog()
+	spawner := newSpawnerWithSeededParent(t, model, eventlog, parentSession)
+
+	result, err := spawner.Spawn(context.Background(), app.SubAgentSpawn{
+		ParentSessionID: parentSession,
+		Depth:           1,
+		Task:            "produce a long answer",
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	assert.True(t, strings.HasSuffix(result.Content, strings.Repeat("é", 4096)+"... [truncated]"),
+		"content must carry exactly 4096 runes of the answer plus the truncation marker")
+	assert.NotContains(t, result.Content, strings.Repeat("é", 4097),
+		"no more than the cap's worth of answer text may be included")
+	assert.True(t, utf8.ValidString(result.Content),
+		"truncation must never split a multi-byte rune")
+}
+
+// TestSpawn_SummaryLoadError_FallsBackToReasonOnly asserts that when loading
+// the child session log for the final answer fails, Spawn still succeeds and
+// returns the reason-only summary — the summary must never fail the parent
+// turn after the child's work was already durably recorded.
+func TestSpawn_SummaryLoadError_FallsBackToReasonOnly(t *testing.T) {
+	const parentSession = "parent-sess-loaderr"
+
+	model := apptest.NewFakeModelGateway()
+	model.AddStreamEvents(textStream("unreachable answer")...)
+
+	// Wrap the fake so Load fails only AFTER the child's AssistantMessage
+	// exists, i.e. only on the post-run summary load — the loop's own Loads
+	// (resume adjudication, per-turn window build) all happen before the
+	// assistant message is appended and must keep working.
+	eventlog := apptest.NewFakeEventLog()
+	failing := failLoadAfterAnswerLog{EventLogPort: eventlog}
+
+	ids := idstest.NewFake(
+		"child-sess-loaderr", "turn-le-1",
+		"req-le1", "req-le2", "req-le3", "req-le4", "req-le5",
+	)
+	ids.Cyclic = true
+
+	deps := buildDeps(model)
+	deps.EventLog = failing
+	deps.IDs = ids
+
+	// Seed the parent session so LoadSession finds it (via the wrapper, which
+	// delegates Append untouched).
+	_, err := failing.Append(context.Background(), parentSession, 0, 0, "seed-req",
+		app.AppendInput{Event: domain.MessageAppended{
+			Message: llm.Message{Role: llm.RoleUser, Content: []llm.ContentPart{
+				{Text: &llm.TextPart{Text: "hello"}},
+			}},
+		}, Actor: domain.ActorUser})
+	require.NoError(t, err)
+
+	spawner := subagent.New(subagent.Config{
+		MaxDepth: 3,
+		Deps:     deps,
+		LoopCfg:  agent.Config{Model: "test-model", MaxTurns: 4},
+	})
+
+	result, err := spawner.Spawn(context.Background(), app.SubAgentSpawn{
+		ParentSessionID: parentSession,
+		Depth:           1,
+		Task:            "task whose summary load fails",
+	})
+	require.NoError(t, err, "a summary load failure must not fail the parent turn")
+	assert.False(t, result.IsError)
+	assert.True(t, strings.HasPrefix(result.Content, "sub-agent completed: "),
+		"fallback must keep the reason summary; got %q", result.Content)
+	assert.NotContains(t, result.Content, "\n",
+		"fallback must be the reason-only single-line summary")
+	assert.NotContains(t, result.Content, "unreachable answer")
+}
+
+// ---------------------------------------------------------------------------
 // Compile-time interface assertion.
 // ---------------------------------------------------------------------------
 
@@ -280,6 +405,59 @@ func forkCallsFor(el *apptest.FakeEventLog, _ string) []string {
 	// Return nil here; the combined assertion in the test handles the check.
 	_ = el
 	return nil
+}
+
+// newSpawnerWithSeededParent builds a depth-3 Spawner over the given scripted
+// model and event log, seeding parentSession so LoadSession finds it. Shared by
+// the condensed-content tests, which only vary the scripted child answer.
+func newSpawnerWithSeededParent(t *testing.T, model *apptest.FakeModelGateway, eventlog *apptest.FakeEventLog, parentSession string) *subagent.Spawner {
+	t.Helper()
+
+	_, err := eventlog.Append(context.Background(), parentSession, 0, 0, "seed-req",
+		app.AppendInput{Event: domain.MessageAppended{
+			Message: llm.Message{Role: llm.RoleUser, Content: []llm.ContentPart{
+				{Text: &llm.TextPart{Text: "hello"}},
+			}},
+		}, Actor: domain.ActorUser})
+	require.NoError(t, err)
+
+	ids := idstest.NewFake(
+		"child-sess-h", "turn-h-1",
+		"req-h1", "req-h2", "req-h3", "req-h4", "req-h5",
+	)
+	ids.Cyclic = true
+
+	deps := buildDeps(model)
+	deps.EventLog = eventlog
+	deps.IDs = ids
+
+	return subagent.New(subagent.Config{
+		MaxDepth: 3,
+		Deps:     deps,
+		LoopCfg:  agent.Config{Model: "test-model", MaxTurns: 4},
+	})
+}
+
+// failLoadAfterAnswerLog delegates to the wrapped event log but fails Load as
+// soon as the requested session already contains a [domain.AssistantMessage].
+// In a single-turn child run every loop-internal Load happens before the
+// assistant message is appended, so only the spawner's post-run summary load
+// trips the failure — exactly the fallback path under test.
+type failLoadAfterAnswerLog struct {
+	app.EventLogPort
+}
+
+func (l failLoadAfterAnswerLog) Load(ctx context.Context, sessionID string, fromSeq int64) ([]domain.EventEnvelope, error) {
+	events, err := l.EventLogPort.Load(ctx, sessionID, fromSeq)
+	if err != nil {
+		return nil, err
+	}
+	for _, env := range events {
+		if _, ok := env.Event.(domain.AssistantMessage); ok {
+			return nil, errors.New("injected post-run load failure")
+		}
+	}
+	return events, nil
 }
 
 // appendSessionsOtherThan returns the session IDs (other than excludeID) that

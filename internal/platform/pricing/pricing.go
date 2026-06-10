@@ -1,21 +1,25 @@
-// Package pricing provides a static table of per-token costs for known LLM
-// models and the [Cost] function that computes a turn's USD cost from a
-// [llm.Usage] snapshot.
+// Package pricing provides a table of per-token costs for known LLM models,
+// the [Cost] function that computes a turn's USD cost from a [llm.Usage]
+// snapshot, and a config-driven overlay ([Overrides], [ParseOverrides]) for
+// correcting or extending the built-in rates per deployment.
 //
 // # Rate maintenance
 //
-// Rates in this package are PLACEHOLDER values based on publicly-listed prices
-// at the time of writing (June 2026).  Provider pricing changes frequently; the
-// table MUST be kept up to date via configuration or regular maintenance before
-// this package is used for billing or budget enforcement.  See the doc comment
-// on [ModelRates] for the citation format each entry should carry.
+// Rates in this package are placeholder DEFAULTS based on publicly-listed
+// prices at the time of writing (June 2026).  Provider pricing changes
+// frequently, so deployments that use cost for billing or budget enforcement
+// SHOULD override them: point BOLTROPE_PRICING_FILE at a JSON document in the
+// [ParseOverrides] format and the daemons layer it over [DefaultTable] at
+// startup (override wins per model; unlisted models keep the defaults).  See
+// the doc comment on [ModelRates] for the citation format each built-in entry
+// should carry.
 //
 // # Design
 //
 // The package is intentionally pure and dependency-light: it imports only this
 // module's [llm] package (for the [llm.Usage] type) and the standard library.
-// There is no network I/O, no SDK, and no gen/ import.  Callers that need
-// dynamic pricing should layer a config-driven overlay on top of [DefaultTable].
+// There is no network I/O, no SDK, and no gen/ import.  File reading and env
+// plumbing for the overlay live in the daemons' wiring, not here.
 //
 // # Error handling
 //
@@ -35,17 +39,21 @@ import (
 // All prices are in USD per single token (i.e. divide the published "per 1M
 // tokens" price by 1_000_000).  Each field's doc comment cites the source and
 // effective date of the placeholder value so maintenance is straightforward.
+//
+// The json tags define the rate-object shape of the [ParseOverrides] document;
+// parsing is strict (unknown fields rejected), so renaming a tag is a breaking
+// config change.
 type ModelRates struct {
 	// InputPerToken is the price per standard input/prompt token.
-	InputPerToken float64
+	InputPerToken float64 `json:"input_per_token"`
 	// OutputPerToken is the price per generated output token.
-	OutputPerToken float64
+	OutputPerToken float64 `json:"output_per_token"`
 	// CacheReadPerToken is the price per cache-read input token (served from
 	// prompt cache; typically lower than InputPerToken).
-	CacheReadPerToken float64
+	CacheReadPerToken float64 `json:"cache_read_per_token"`
 	// CacheWritePerToken is the price per cache-write input token (written to
 	// prompt cache; typically higher than InputPerToken).
-	CacheWritePerToken float64
+	CacheWritePerToken float64 `json:"cache_write_per_token"`
 }
 
 // UnknownModelError is returned by [Cost] when the model id is not present in
@@ -66,9 +74,9 @@ func (e *UnknownModelError) Error() string {
 //
 // IMPORTANT — PLACEHOLDER RATES: every entry below uses placeholder rates
 // derived from publicly-available pricing pages as of approximately June 2026.
-// These MUST be reviewed and updated before being used for billing or budget
-// enforcement.  A commented citation (source + effective date) accompanies each
-// entry.
+// These MUST be reviewed — or overridden per deployment via BOLTROPE_PRICING_FILE
+// and [Overrides] — before being used for billing or budget enforcement.  A
+// commented citation (source + effective date) accompanies each entry.
 //
 // To add a model: append an entry whose key is the canonical model id string
 // used in [llm.Request.Model] and whose value is a [ModelRates] with rates
@@ -205,11 +213,14 @@ func Cost(model string, u llm.Usage) (float64, error) {
 	if !ok {
 		return 0, &UnknownModelError{Model: model}
 	}
+	return usageCost(rates, u), nil
+}
 
-	cost := float64(u.InputTokens)*rates.InputPerToken +
+// usageCost applies the [Cost] formula for one resolved set of rates.  It is
+// shared by [Cost] and [Overrides.Cost] so the two paths can never drift.
+func usageCost(rates ModelRates, u llm.Usage) float64 {
+	return float64(u.InputTokens)*rates.InputPerToken +
 		float64(u.OutputTokens)*rates.OutputPerToken +
 		float64(u.CacheReadTokens)*rates.CacheReadPerToken +
 		float64(u.CacheWriteTokens)*rates.CacheWritePerToken
-
-	return cost, nil
 }

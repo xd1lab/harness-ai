@@ -9,7 +9,8 @@
 // Mode selection (per the task spec):
 //   - if BOLTROPE_TEST_DATABASE_URL is set, it is used as the OWNER DSN (the
 //     coordinator runs integration centrally against a managed Postgres);
-//   - otherwise a postgres:16 container is started via testcontainers-go.
+//   - otherwise a Postgres container is started via testcontainers-go (image
+//     from BOLTROPE_TEST_PG_IMAGE, default postgres:16).
 //
 // If neither a DSN is set nor Docker is reachable, the harness calls t.Skip with
 // a clear reason (the tests still compile and are delivered; the coordinator runs
@@ -46,8 +47,13 @@ const (
 	appRole     = "boltrope_app"
 	appPassword = "boltrope_app_test_pw" //nolint:gosec // ephemeral test-only DB credential, not a secret
 
-	// containerImage is the pinned Postgres image for the testcontainer mode.
-	containerImage = "postgres:16"
+	// envTestPGImage overrides the Postgres image for the testcontainer mode.
+	// NFR-PORT-03 pins the supported floor at PostgreSQL 13 (xid8 /
+	// pg_current_xact_id), so the floor must be testable without editing the
+	// harness: set BOLTROPE_TEST_PG_IMAGE=postgres:13 to run the floor proof.
+	envTestPGImage = "BOLTROPE_TEST_PG_IMAGE"
+	// defaultContainerImage is the image used when no override is set.
+	defaultContainerImage = "postgres:16"
 	// containerDB / containerUser / containerPassword are the superuser/owner
 	// credentials for the started container.
 	containerDB       = "boltrope"
@@ -110,7 +116,7 @@ func provisionOwnerDSN(ctx context.Context, t *testing.T) (string, string) {
 		return dsn, "external-dsn"
 	}
 
-	container, err := tcpostgres.Run(ctx, containerImage,
+	container, err := tcpostgres.Run(ctx, containerImage(),
 		tcpostgres.WithDatabase(containerDB),
 		tcpostgres.WithUsername(containerUser),
 		tcpostgres.WithPassword(containerPassword),
@@ -128,6 +134,16 @@ func provisionOwnerDSN(ctx context.Context, t *testing.T) (string, string) {
 		t.Fatalf("container ConnectionString: %v", err)
 	}
 	return dsn, "testcontainer"
+}
+
+// containerImage returns the Postgres image for the testcontainer mode,
+// honoring BOLTROPE_TEST_PG_IMAGE so the NFR-PORT-03 floor (postgres:13) can
+// be proven against the same suite that runs on the default image.
+func containerImage() string {
+	if img := os.Getenv(envTestPGImage); img != "" {
+		return img
+	}
+	return defaultContainerImage
 }
 
 // grantAppLogin gives the boltrope_app role a login credential as the owner so

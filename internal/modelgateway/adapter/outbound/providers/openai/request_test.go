@@ -212,3 +212,167 @@ func TestBuildParams_BadToolSchema_InvalidRequest(t *testing.T) {
 	})
 	assertProviderErrorKind(t, err, llm.ErrInvalidRequest)
 }
+
+func TestBuildParams_MaxTokensAndTemperature(t *testing.T) {
+	temp := 0.4
+	m := marshalParams(t, llm.Request{Model: "gpt-5", MaxTokens: 256, Temperature: &temp})
+	if m["max_output_tokens"] != float64(256) {
+		t.Fatalf("max_output_tokens not set: %v", m["max_output_tokens"])
+	}
+	if m["temperature"] != 0.4 {
+		t.Fatalf("temperature not set: %v", m["temperature"])
+	}
+	// Zero values must leave the provider defaults in place.
+	m = marshalParams(t, llm.Request{Model: "gpt-5"})
+	if _, ok := m["max_output_tokens"]; ok {
+		t.Fatalf("max_output_tokens must be omitted when unset: %v", m["max_output_tokens"])
+	}
+	if _, ok := m["temperature"]; ok {
+		t.Fatalf("temperature must be omitted when unset: %v", m["temperature"])
+	}
+}
+
+func TestBuildParams_MalformedContinuationBlob_InvalidRequest(t *testing.T) {
+	// A truncated blob is a decode failure, unlike a well-formed foreign-surface
+	// blob which is silently ignored.
+	_, err := buildParams(llm.Request{Model: "gpt-5", ProviderRaw: json.RawMessage(`{"surface":`)})
+	assertProviderErrorKind(t, err, llm.ErrInvalidRequest)
+}
+
+// TestBuildParams_ContinuationItemEdgeCases pins the replay rules for degenerate
+// continuation items: empty assistant text and id-less reasoning are dropped,
+// empty function-call arguments are defaulted to "{}", and unknown item types are
+// skipped rather than failing the request.
+func TestBuildParams_ContinuationItemEdgeCases(t *testing.T) {
+	blob, err := json.Marshal(continuationState{
+		Surface: surfaceResponses,
+		Items: []continuationItem{
+			{Type: itemTypeMessage, Text: ""},
+			{Type: itemTypeFunctionCall, CallID: "c1", Name: "tool"},
+			{Type: itemTypeReasoning, ID: "rs_1"},
+			{Type: itemTypeReasoning},
+			{Type: "web_search_call"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal blob: %v", err)
+	}
+	m := marshalParams(t, llm.Request{Model: "gpt-5", ProviderRaw: blob})
+	input, ok := m["input"].([]any)
+	if !ok || len(input) != 2 {
+		t.Fatalf("want 2 replayed items (function_call + reasoning), got %#v", m["input"])
+	}
+	fc := input[0].(map[string]any)
+	if fc["type"] != "function_call" || fc["call_id"] != "c1" {
+		t.Fatalf("first replayed item wrong: %#v", fc)
+	}
+	if fc["arguments"] != "{}" {
+		t.Fatalf("empty function-call arguments must default to {}, got %v", fc["arguments"])
+	}
+	rs := input[1].(map[string]any)
+	if rs["type"] != "reasoning" || rs["id"] != "rs_1" {
+		t.Fatalf("second replayed item must be the reasoning item, got %#v", rs)
+	}
+}
+
+func TestConvertMessage_UnsupportedRole_InvalidRequest(t *testing.T) {
+	_, err := buildParams(llm.Request{
+		Model:    "gpt-5",
+		Messages: []llm.Message{{Role: llm.Role("system")}},
+	})
+	assertProviderErrorKind(t, err, llm.ErrInvalidRequest)
+}
+
+// TestConvertMessage_AssistantTextAndToolCall asserts a mixed assistant turn maps
+// to TWO input items: the text message followed by the typed function_call.
+func TestConvertMessage_AssistantTextAndToolCall(t *testing.T) {
+	m := marshalParams(t, llm.Request{
+		Model: "gpt-5",
+		Messages: []llm.Message{
+			{Role: llm.RoleAssistant, Content: []llm.ContentPart{
+				{Text: &llm.TextPart{Text: "let me check"}},
+				{ToolCall: &llm.ToolCall{ID: "c9", Name: "calc", Args: map[string]any{"n": float64(1)}}},
+			}},
+		},
+	})
+	input := m["input"].([]any)
+	if len(input) != 2 {
+		t.Fatalf("want assistant message + function_call, got %d items: %#v", len(input), input)
+	}
+	first := input[0].(map[string]any)
+	if first["role"] != "assistant" {
+		t.Fatalf("first item must be the assistant text message, got %#v", first)
+	}
+	second := input[1].(map[string]any)
+	if second["type"] != "function_call" || second["call_id"] != "c9" || second["name"] != "calc" {
+		t.Fatalf("second item must be the function_call, got %#v", second)
+	}
+}
+
+// TestConvertMessage_NilToolArgs_EmptyObject asserts a tool call with nil parsed
+// args replays as an empty JSON object, never an empty string or "null".
+func TestConvertMessage_NilToolArgs_EmptyObject(t *testing.T) {
+	m := marshalParams(t, llm.Request{
+		Model: "gpt-5",
+		Messages: []llm.Message{
+			{Role: llm.RoleAssistant, Content: []llm.ContentPart{
+				{ToolCall: &llm.ToolCall{ID: "c1", Name: "noargs"}},
+			}},
+		},
+	})
+	input := m["input"].([]any)
+	fc := input[0].(map[string]any)
+	if fc["arguments"] != "{}" {
+		t.Fatalf("nil args must marshal to {}, got %v", fc["arguments"])
+	}
+}
+
+// TestConvertMessage_ToolMessageSkipsNonResultParts asserts stray non-result parts
+// in a tool turn are dropped rather than failing or producing bogus items.
+func TestConvertMessage_ToolMessageSkipsNonResultParts(t *testing.T) {
+	m := marshalParams(t, llm.Request{
+		Model: "gpt-5",
+		Messages: []llm.Message{
+			{Role: llm.RoleTool, Content: []llm.ContentPart{
+				{Text: &llm.TextPart{Text: "stray text"}},
+				{ToolResult: &llm.ToolResult{CallID: "c1", Content: "ok"}},
+			}},
+		},
+	})
+	input := m["input"].([]any)
+	if len(input) != 1 {
+		t.Fatalf("want only the function_call_output item, got %d: %#v", len(input), input)
+	}
+	if item := input[0].(map[string]any); item["type"] != "function_call_output" {
+		t.Fatalf("tool turn item wrong: %#v", item)
+	}
+}
+
+// TestBuildParams_ToolWithoutSchema_EmptyObject asserts a tool with no declared
+// JSON Schema still sends a valid empty parameters object.
+func TestBuildParams_ToolWithoutSchema_EmptyObject(t *testing.T) {
+	m := marshalParams(t, llm.Request{
+		Model: "gpt-5",
+		Tools: []llm.ToolDef{{Name: "noparams"}},
+	})
+	tools := m["tools"].([]any)
+	tool := tools[0].(map[string]any)
+	params, ok := tool["parameters"].(map[string]any)
+	if !ok || len(params) != 0 {
+		t.Fatalf("schema-less tool must carry an empty parameters object, got %#v", tool["parameters"])
+	}
+}
+
+func TestConvertMessage_UnmarshalableToolArgs_InvalidRequest(t *testing.T) {
+	// A func value cannot be marshaled to JSON; the failure must be reported as a
+	// non-retryable invalid request, not bubble up as a raw marshal error.
+	_, err := buildParams(llm.Request{
+		Model: "gpt-5",
+		Messages: []llm.Message{
+			{Role: llm.RoleAssistant, Content: []llm.ContentPart{
+				{ToolCall: &llm.ToolCall{ID: "c1", Name: "bad", Args: map[string]any{"f": func() {}}}},
+			}},
+		},
+	})
+	assertProviderErrorKind(t, err, llm.ErrInvalidRequest)
+}

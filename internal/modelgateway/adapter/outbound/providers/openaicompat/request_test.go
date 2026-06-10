@@ -158,6 +158,70 @@ func TestConvertToolChoice_Table(t *testing.T) {
 	}
 }
 
+// TestConvertMessage_NilToolArgs_EmptyObject asserts a tool call with nil parsed
+// args replays as an empty JSON object, never an empty string or "null".
+func TestConvertMessage_NilToolArgs_EmptyObject(t *testing.T) {
+	m := marshalParams(t, llm.Request{
+		Model: "llama3",
+		Messages: []llm.Message{
+			{Role: llm.RoleAssistant, Content: []llm.ContentPart{
+				{ToolCall: &llm.ToolCall{ID: "c1", Name: "noargs"}},
+			}},
+		},
+	})
+	msgs := m["messages"].([]any)
+	tcs := msgs[0].(map[string]any)["tool_calls"].([]any)
+	fn := tcs[0].(map[string]any)["function"].(map[string]any)
+	if fn["arguments"] != "{}" {
+		t.Fatalf("nil args must marshal to {}, got %v", fn["arguments"])
+	}
+}
+
+// TestConvertMessage_ToolMessageSkipsNonResultParts asserts stray non-result parts
+// in a tool turn are dropped rather than failing or producing bogus messages.
+func TestConvertMessage_ToolMessageSkipsNonResultParts(t *testing.T) {
+	m := marshalParams(t, llm.Request{
+		Model: "llama3",
+		Messages: []llm.Message{
+			{Role: llm.RoleTool, Content: []llm.ContentPart{
+				{Text: &llm.TextPart{Text: "stray text"}},
+				{ToolResult: &llm.ToolResult{CallID: "c1", Content: "ok"}},
+			}},
+		},
+	})
+	msgs := m["messages"].([]any)
+	if len(msgs) != 1 {
+		t.Fatalf("want only the tool message, got %d: %#v", len(msgs), msgs)
+	}
+	if msg := msgs[0].(map[string]any); msg["role"] != "tool" || msg["tool_call_id"] != "c1" {
+		t.Fatalf("tool message wrong: %#v", msg)
+	}
+}
+
+// TestBuildParams_ToolWithoutSchema_EmptyObject asserts a tool with no declared
+// JSON Schema still sends a valid empty parameters object.
+func TestBuildParams_ToolWithoutSchema_EmptyObject(t *testing.T) {
+	m := marshalParams(t, llm.Request{
+		Model: "llama3",
+		Tools: []llm.ToolDef{{Name: "noparams"}},
+	})
+	tools := m["tools"].([]any)
+	fn := tools[0].(map[string]any)["function"].(map[string]any)
+	params, ok := fn["parameters"].(map[string]any)
+	if !ok || len(params) != 0 {
+		t.Fatalf("schema-less tool must carry an empty parameters object, got %#v", fn["parameters"])
+	}
+}
+
+// TestBuildParams_ToolChoiceWired asserts the converted tool_choice actually lands
+// on the request params (the union conversion itself is covered by the table).
+func TestBuildParams_ToolChoiceWired(t *testing.T) {
+	m := marshalParams(t, llm.Request{Model: "llama3", ToolChoice: llm.ToolChoiceAuto})
+	if m["tool_choice"] != "auto" {
+		t.Fatalf("tool_choice not wired through buildParams, got %v", m["tool_choice"])
+	}
+}
+
 func TestBuildParams_TemperatureAndMaxTokens(t *testing.T) {
 	temp := 0.4
 	params, err := buildParams(llm.Request{Model: "llama3", MaxTokens: 256, Temperature: &temp})
@@ -176,6 +240,55 @@ func TestBuildParams_BadToolSchema_InvalidRequest(t *testing.T) {
 	_, err := buildParams(llm.Request{
 		Model: "llama3",
 		Tools: []llm.ToolDef{{Name: "bad", JSONSchema: json.RawMessage(`{not json`)}},
+	})
+	assertProviderErrorKind(t, err, llm.ErrInvalidRequest)
+}
+
+func TestConvertMessage_UnsupportedRole_InvalidRequest(t *testing.T) {
+	_, err := buildParams(llm.Request{
+		Model:    "llama3",
+		Messages: []llm.Message{{Role: llm.Role("system")}},
+	})
+	assertProviderErrorKind(t, err, llm.ErrInvalidRequest)
+}
+
+// TestConvertMessage_AssistantTextAndToolCall asserts a mixed assistant turn maps
+// to ONE assistant message carrying both the text content and the tool_calls —
+// Chat Completions models the whole turn as a single message, unlike Responses.
+func TestConvertMessage_AssistantTextAndToolCall(t *testing.T) {
+	m := marshalParams(t, llm.Request{
+		Model: "llama3",
+		Messages: []llm.Message{
+			{Role: llm.RoleAssistant, Content: []llm.ContentPart{
+				{Text: &llm.TextPart{Text: "let me check"}},
+				{ToolCall: &llm.ToolCall{ID: "c9", Name: "calc", Args: map[string]any{"n": float64(1)}}},
+			}},
+		},
+	})
+	msgs := m["messages"].([]any)
+	if len(msgs) != 1 {
+		t.Fatalf("mixed assistant turn must be one message, got %d: %#v", len(msgs), msgs)
+	}
+	assistant := msgs[0].(map[string]any)
+	if assistant["role"] != "assistant" || assistant["content"] != "let me check" {
+		t.Fatalf("assistant text wrong: %#v", assistant)
+	}
+	tcs, ok := assistant["tool_calls"].([]any)
+	if !ok || len(tcs) != 1 {
+		t.Fatalf("assistant tool_calls wrong: %#v", assistant["tool_calls"])
+	}
+}
+
+func TestConvertMessage_UnmarshalableToolArgs_InvalidRequest(t *testing.T) {
+	// A func value cannot be marshaled to JSON; the failure must be reported as a
+	// non-retryable invalid request, not bubble up as a raw marshal error.
+	_, err := buildParams(llm.Request{
+		Model: "llama3",
+		Messages: []llm.Message{
+			{Role: llm.RoleAssistant, Content: []llm.ContentPart{
+				{ToolCall: &llm.ToolCall{ID: "c1", Name: "bad", Args: map[string]any{"f": func() {}}}},
+			}},
+		},
 	})
 	assertProviderErrorKind(t, err, llm.ErrInvalidRequest)
 }

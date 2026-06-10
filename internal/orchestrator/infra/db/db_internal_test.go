@@ -2,7 +2,9 @@ package db
 
 import (
 	"errors"
+	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/golang-migrate/migrate/v4/database"
 )
@@ -55,6 +57,22 @@ func TestDriverUnsupportedOps(t *testing.T) {
 	}
 	if err := d.Close(); err != nil {
 		t.Errorf("pgxDriver.Close should be a no-op nil, got %v", err)
+	}
+}
+
+// TestDriverRun_BodyEdgeCases covers Run's pre-statement branches, which never
+// touch the connection: a failed body read is wrapped, and an empty body is a
+// no-op success (so neither needs a live server).
+func TestDriverRun_BodyEdgeCases(t *testing.T) {
+	t.Parallel()
+	d := &pgxDriver{}
+
+	err := d.Run(iotest.ErrReader(errors.New("body read blew up")))
+	if err == nil || !strings.Contains(err.Error(), "reading migration body") {
+		t.Errorf("Run(failing reader) = %v, want wrapped reading-migration-body error", err)
+	}
+	if err := d.Run(strings.NewReader("")); err != nil {
+		t.Errorf("Run(empty body) = %v, want nil (no statement to execute)", err)
 	}
 }
 

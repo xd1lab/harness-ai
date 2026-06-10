@@ -162,7 +162,7 @@ All DDL is greenfield (initial migration set), but ordered/structured for the co
 | **Provider stream-shape drift** (Gemini fragments, Responses item deltas) | Medium | All normalization in the gateway; ≥3 normalizers; `SupportsStreamingToolCalls` gate buffers when unsupported; live-smoke tier catches drift. |
 | **Container leak / disk exhaustion** | Medium | `sandboxmgr` TTL + cap + reaper keyed off session status. |
 | **Message-model drift** (the thing the abstraction exists to prevent) | Medium | One source of truth (`platform/llm`); proto generated to match; depguard purity rule; no mirrored domain copy. |
-| **Static-cert downgrade in production** | Medium | Fail-closed dev provider (`BOLTROPE_DEV_INSECURE=1` required), ephemeral certs, startup assertion, compiled out of release. |
+| **Static-cert downgrade in production** | Medium | Fail-closed dev provider (`BOLTROPE_DEV_INSECURE=1` explicitly required — env-gated, present in all builds), ephemeral certs, startup assertion; SPIRE wiring enabled in release images via `-tags spire` (ADR-0013 §Amendment). |
 | **Reasoning-model long turns (≤10 min) amplify crash window** | Medium | Periodic checkpoints bound lost work to one interval; relay stall deadline; per-tenant in-flight caps. |
 | **Provider SDK churn** (esp. Responses) | Low/Med | SDK churn isolated in model-gateway; pinned versions; re-validate at impl gate. |
 

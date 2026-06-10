@@ -84,4 +84,4 @@ at the `Run` handler.
 - Until the per-run-mode follow-up lands, non-default permission modes
   (`acceptEdits`/`plan`/`bypass`) are not selectable via the API; all runs ask for
   risk-tiered tools (interactive approval via `harnessctl approve`), which is the safe
-  default.
+  default. (Since resolved by [ADR-0019](0019-session-scoped-permission-mode.md).)

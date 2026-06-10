@@ -267,7 +267,8 @@ func (r *streamReader) Close() error {
 // Non-status errors are wrapped with ErrServer. The mapping follows the
 // retryability semantics in architecture §4.4:
 //
-//   - UNAVAILABLE / DEADLINE_EXCEEDED → ErrServer (retryable)
+//   - UNAVAILABLE                     → ErrServer (retryable)
+//   - DEADLINE_EXCEEDED               → ErrTimeout (retryable)
 //   - RESOURCE_EXHAUSTED              → ErrRateLimited (retryable)
 //   - UNIMPLEMENTED                   → ErrUnsupported (not retryable)
 //   - UNAUTHENTICATED / PERMISSION_DENIED → ErrAuth (not retryable)

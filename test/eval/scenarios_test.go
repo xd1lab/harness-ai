@@ -14,12 +14,15 @@ package eval_test
 // correct event sequence + cost; (3) a permission-denied tool → no execution,
 // fed back as an error observation; (4) a max-turns cap → ErrorMaxTurns; (5) a
 // refusal → the distinct Refusal subtype. A sixth covers structured-output retry
-// exhaustion → ErrorMaxStructuredOutputRetries.
+// exhaustion → ErrorMaxStructuredOutputRetries. Scenarios 9 and 10 complete the
+// DOD-03 set: the budget cap (→ ErrorMaxBudgetUSD) and permission-mode
+// enforcement (plan mode holds a mutating tool; human deny → no execution).
 //
 // Run as: go test ./test/eval/...
 
 import (
 	"fmt"
+	"math"
 	"testing"
 
 	"github.com/boltrope/boltrope/internal/orchestrator/app"
@@ -438,6 +441,192 @@ func TestScenario_DoomLoopDetected(t *testing.T) {
 		WantReason:       domain.Success,
 		WantDoomLoopTool: "read",
 	}.Exec(t)
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 9 — max-budget cap -> ErrorMaxBudgetUSD (FR-LOOP-02 AC-1; DOD-03).
+// The budget is checked BEFORE each Generate (strictly cost > cap): after one
+// tool round-trip the cumulative cost exceeds the cap, so the run terminates
+// on a fresh turn boundary with error_max_budget_usd and the model is never
+// called again.
+// ---------------------------------------------------------------------------
+
+func TestScenario_MaxBudgetUSDCap(t *testing.T) {
+	// One $0.06 turn against a $0.05 cap. Only ONE model turn is scripted: a
+	// second Stream would panic the fake gateway, proving no further Generate
+	// occurred after the cap fired.
+	eval.Scenario{
+		Name:        "max-budget-usd-cap",
+		UserMessage: "do an expensive thing",
+		ModelTurns: []eval.ModelTurn{
+			eval.ToolCallTurn("call-read-1", "read", map[string]any{"path": "/big"},
+				llm.Usage{InputTokens: 12, OutputTokens: 3}),
+		},
+		Tools:          []app.ToolDescriptor{{Name: "read", SideEffect: domain.SideEffectReadOnly}},
+		ToolResults:    []app.ToolResult{{Content: "big output"}},
+		Rules:          []policy.Rule{allowRule()},
+		MaxBudgetUSD:   0.05,
+		CostPerTurnUSD: 0.06,
+
+		WantReason: domain.ErrorMaxBudgetUSD,
+		WantEvents: []domain.EventType{
+			domain.EventMessageAppended, // user task
+			// turn 1 (tool round-trip; costs $0.06, exceeding the $0.05 cap)
+			domain.EventTurnStarted,
+			domain.EventAssistantMessage,
+			domain.EventPermissionDecided,
+			domain.EventToolExecutionStarted,
+			domain.EventToolResult,
+			domain.EventMessageAppended,
+			// cap fires before turn 2: a fresh TurnStarted/TurnFinished records it.
+			domain.EventTurnStarted,
+			domain.EventTurnFinished,
+		},
+		WantNumTurns:     1,
+		WantCostUSD:      0.06,
+		WantCostAsserted: true,
+		WantErrorMetric:  "error_max_budget_usd",
+	}.WithCheck(func(t *testing.T, r eval.Result) {
+		// The terminal TurnFinished carries the budget subtype and the run cost.
+		fins := eval.PayloadsOf[domain.TurnFinished](r)
+		if len(fins) != 1 {
+			t.Fatalf("want exactly one TurnFinished, got %d", len(fins))
+		}
+		if fins[0].Reason != domain.ErrorMaxBudgetUSD {
+			t.Errorf("TurnFinished.Reason = %q, want error_max_budget_usd", fins[0].Reason)
+		}
+		if math.Abs(fins[0].CostUSD-0.06) > 1e-9 {
+			t.Errorf("TurnFinished.CostUSD = %.6f, want 0.06", fins[0].CostUSD)
+		}
+		if fins[0].NumTurns != 1 {
+			t.Errorf("TurnFinished.NumTurns = %d, want 1", fins[0].NumTurns)
+		}
+	}).Exec(t)
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 10 — permission-mode enforcement: plan mode holds a mutating tool
+// for approval (FR-PERM-01 AC-2; DOD-03). Mode precedes allow in the
+// deny→mode→allow→ask pipeline, so plan maps the mutating call to ASK (rule id
+// "plan") even though a catch-all allow rule exists; the scripted human DENIES,
+// so the tool is never executed and the denial is fed back as an error
+// observation. Modeled on TestScenario_PermissionDeniedNoExecution.
+// ---------------------------------------------------------------------------
+
+func TestScenario_PlanModeHoldsMutatingTool(t *testing.T) {
+	eval.Scenario{
+		Name:        "plan-mode-holds-mutating-tool",
+		UserMessage: "write main.go",
+		ModelTurns: []eval.ModelTurn{
+			// Turn 1: the assistant requests a mutating edit while in plan mode.
+			eval.ToolCallTurn("call-write-1", "write",
+				map[string]any{"path": "main.go", "content": "package main"}, llm.Usage{}),
+			// Turn 2: after the denial observation, the assistant ends with text.
+			eval.TextTurn("staying read-only; here is the plan instead"),
+		},
+		Tools: []app.ToolDescriptor{
+			{Name: "write", SideEffect: domain.SideEffectMutating, EgressClass: domain.EgressClassNone},
+		},
+		// A catch-all allow rule that plan mode must PREEMPT (asserted via the
+		// decision's RuleID below).
+		Rules: []policy.Rule{allowRule()},
+		Mode:  policy.ModePlan,
+		// The held call is auto-DENIED by the scripted human resolution.
+		Approvals: map[string]domain.AskResolution{"call-write-1": domain.AskDenied},
+		// No ToolResults scripted: a dispatch would panic the fake runtime,
+		// proving the held tool was never executed.
+
+		WantReason: domain.Success,
+		WantEvents: []domain.EventType{
+			domain.EventMessageAppended,   // user task
+			domain.EventTurnStarted,       // turn 1
+			domain.EventAssistantMessage,  // tool_call
+			domain.EventPermissionDecided, // ASK, resolved denied (no ToolExecutionStarted)
+			domain.EventToolResult,        // synthetic error observation fed back
+			domain.EventMessageAppended,   // results fed back (tool role)
+			domain.EventTurnStarted,       // turn 2
+			domain.EventAssistantMessage,  // final text
+			domain.EventTurnFinished,      // success
+		},
+		WantNumTurns:        2,
+		WantNoToolExecution: true,
+	}.WithCheck(func(t *testing.T, r eval.Result) {
+		// Exactly one PermissionDecided: an ASK raised by plan mode (not the allow
+		// rule) and resolved DENIED by the human.
+		decs := eval.PayloadsOf[domain.PermissionDecided](r)
+		if len(decs) != 1 {
+			t.Fatalf("want exactly one PermissionDecided, got %d", len(decs))
+		}
+		if decs[0].Decision != domain.PermissionAsk {
+			t.Errorf("decision = %q, want ask", decs[0].Decision)
+		}
+		if decs[0].Resolved != domain.AskDenied {
+			t.Errorf("ask resolution = %q, want denied", decs[0].Resolved)
+		}
+		if decs[0].RuleID != string(policy.ModePlan) {
+			t.Errorf("RuleID = %q, want %q (plan-mode hold, not the allow rule)", decs[0].RuleID, policy.ModePlan)
+		}
+		// No execution intent was ever committed (no side effect).
+		if n := eval.CountEventType(r, domain.EventToolExecutionStarted); n != 0 {
+			t.Errorf("ToolExecutionStarted count = %d, want 0 (held tool not dispatched)", n)
+		}
+		// The denied call was fed back to the model as an error observation.
+		results := eval.PayloadsOf[domain.ToolResult](r)
+		if len(results) != 1 {
+			t.Fatalf("want exactly one ToolResult (the deny observation), got %d", len(results))
+		}
+		if !results[0].IsError {
+			t.Error("denied ToolResult.IsError = false, want true (error observation)")
+		}
+	}).Exec(t)
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 11 — compaction trigger (FR-CTX-01 AC-1; DOD-03): the model-visible
+// window crosses the configured context-budget threshold, so the loop appends
+// exactly one CompactionPerformed boundary BEFORE the turn's TurnStarted and
+// the same turn generates from the reduced window. The REAL agentctx.Manager
+// decides; only the token counter is scripted (current window = 1000 tokens
+// >= threshold 80, projected post-boundary window = 10).
+// ---------------------------------------------------------------------------
+
+func TestScenario_CompactionTriggered(t *testing.T) {
+	eval.Scenario{
+		Name:        "compaction-triggered",
+		UserMessage: "summarize this very long conversation",
+		ModelTurns: []eval.ModelTurn{
+			// The single post-compaction turn completes with text.
+			eval.TextTurn("done, working from the compacted summary"),
+		},
+		MaxContextTokens:  100,             // threshold = 80 at the default 0.8 fraction
+		WindowTokenCounts: []int{1000, 10}, // current (over budget), then projected
+
+		WantReason: domain.Success,
+		WantEvents: []domain.EventType{
+			domain.EventMessageAppended,     // user task
+			domain.EventCompactionPerformed, // boundary appended BEFORE the turn it reduces
+			domain.EventTurnStarted,         // turn 1 (generates from the reduced window)
+			domain.EventAssistantMessage,    // final text
+			domain.EventTurnFinished,        // success
+		},
+		WantNumTurns: 1,
+	}.WithCheck(func(t *testing.T, r eval.Result) {
+		// Exactly one boundary carrying the measured before/after token counts,
+		// so the reclamation is visible to cost/observability consumers.
+		comps := eval.PayloadsOf[domain.CompactionPerformed](r)
+		if len(comps) != 1 {
+			t.Fatalf("want exactly one CompactionPerformed, got %d", len(comps))
+		}
+		if comps[0].BeforeTokens != 1000 {
+			t.Errorf("BeforeTokens = %d, want 1000", comps[0].BeforeTokens)
+		}
+		if comps[0].AfterTokens != 10 {
+			t.Errorf("AfterTokens = %d, want 10", comps[0].AfterTokens)
+		}
+		if comps[0].Reason == "" {
+			t.Error("CompactionPerformed.Reason is empty, want a recorded trigger reason")
+		}
+	}).Exec(t)
 }
 
 // idxPath renders a distinct path argument per turn for the max-turns scenario.

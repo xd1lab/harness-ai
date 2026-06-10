@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://goreleaser.com/static/schema-pro.json
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
 # SPDX-License-Identifier: Apache-2.0
 #
 # GoReleaser configuration for Boltrope (NFR-PORT-04, DOD-10; ADR-0006).
@@ -16,8 +16,10 @@
 #     identically to the archived one;
 #   - generates an SBOM per archive with syft;
 #   - signs checksums and images keylessly with cosign (Sigstore/Fulcio/Rekor),
-#     using the workflow's OIDC token (no long-lived keys);
-#   - emits SLSA build provenance attestations for the binaries.
+#     using the workflow's OIDC token (no long-lived keys).
+#
+# SLSA build-provenance attestation is NOT emitted yet (Pro-only key; see the
+# note above the changelog section) — a future opt-in.
 #
 # Validate without releasing:  goreleaser check   /   goreleaser release --snapshot --clean
 #
@@ -40,6 +42,9 @@ builds:
     binary: boltrope-orchestratord
     env: [CGO_ENABLED=0]
     flags: [-trimpath]
+    # The daemons build with the spire tag (SPIFFE/SPIRE identity wiring),
+    # matching the Dockerfile's in-image builds; the CLI/migrate do not.
+    tags: [spire]
     goos: [linux]
     goarch: [amd64, arm64]
     mod_timestamp: "{{ .CommitTimestamp }}"
@@ -54,6 +59,7 @@ builds:
     binary: boltrope-modelgwd
     env: [CGO_ENABLED=0]
     flags: [-trimpath]
+    tags: [spire]
     goos: [linux]
     goarch: [amd64, arm64]
     mod_timestamp: "{{ .CommitTimestamp }}"
@@ -68,6 +74,7 @@ builds:
     binary: boltrope-toolruntimed
     env: [CGO_ENABLED=0]
     flags: [-trimpath]
+    tags: [spire]
     goos: [linux]
     goarch: [amd64, arm64]
     mod_timestamp: "{{ .CommitTimestamp }}"
@@ -82,6 +89,7 @@ builds:
     binary: boltrope-projectord
     env: [CGO_ENABLED=0]
     flags: [-trimpath]
+    tags: [spire]
     goos: [linux]
     goarch: [amd64, arm64]
     mod_timestamp: "{{ .CommitTimestamp }}"
@@ -391,22 +399,13 @@ docker_signs:
     artifacts: all
     output: true
 
-# ── SLSA build provenance ───────────────────────────────────────────────────
-# Attestations for the binary artifacts; uploaded alongside the release.
-attestations:
-  - id: provenance
-    cmd: cosign
-    args:
-      - attest-blob
-      - "--predicate={{ .ArtifactPath }}.slsa.json"
-      - "--type=slsaprovenance"
-      - "--output-signature={{ .ArtifactPath }}.att"
-      - "--yes"
-      - "{{ .ArtifactPath }}"
-    artifacts: binary
+# NOTE: SLSA build-provenance attestation is a future opt-in — the top-level
+# `attestations:` key is GoReleaser Pro-only (`goreleaser check` on OSS v2.16.0
+# rejects it: "field attestations not found in type config.Project").
 
 # ── Release notes / changelog ───────────────────────────────────────────────
-# Conventional-Commits grouping; release-please owns the human changelog + tag.
+# Conventional-Commits grouping; tags are pushed manually by a maintainer (see
+# .github/workflows/release.yml) and this changelog is the release notes.
 changelog:
   sort: asc
   use: github

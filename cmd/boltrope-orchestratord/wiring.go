@@ -60,6 +60,12 @@ type orchSettings struct {
 	MaxContextTokens int
 	// SubAgentMaxDepth bounds sub-agent recursion (FR-EXT-04).
 	SubAgentMaxDepth int
+	// PricingFile is the path to an optional JSON pricing-overrides document
+	// (see [pricing.ParseOverrides]) layered over the built-in placeholder
+	// rates for budget enforcement. Empty means defaults only; an unreadable
+	// or invalid file fails startup — silently mispriced budgets are worse
+	// than a crash.
+	PricingFile string
 	// TrustDomain is the SPIFFE trust domain for inter-service + edge mTLS.
 	TrustDomain string
 	// OIDCIssuer / OIDCAudience configure the client-edge JWT validation in
@@ -76,9 +82,11 @@ func loadOrchSettings() orchSettings {
 		DefaultModel:        envOr("BOLTROPE_DEFAULT_MODEL", "claude-3-5-sonnet-latest"),
 		MaxContextTokens:    envInt("BOLTROPE_MAX_CONTEXT_TOKENS", 0),
 		SubAgentMaxDepth:    envInt("BOLTROPE_SUBAGENT_MAX_DEPTH", 2),
-		TrustDomain:         envOr("BOLTROPE_TRUST_DOMAIN", "boltrope.local"),
-		OIDCIssuer:          os.Getenv("BOLTROPE_OIDC_ISSUER"),
-		OIDCAudience:        os.Getenv("BOLTROPE_OIDC_AUDIENCE"),
+		// Shared with the model-gateway so both daemons price a turn identically.
+		PricingFile:  os.Getenv("BOLTROPE_PRICING_FILE"),
+		TrustDomain:  envOr("BOLTROPE_TRUST_DOMAIN", "boltrope.local"),
+		OIDCIssuer:   os.Getenv("BOLTROPE_OIDC_ISSUER"),
+		OIDCAudience: os.Getenv("BOLTROPE_OIDC_AUDIENCE"),
 	}
 }
 
@@ -99,6 +107,27 @@ func envInt(key string, def int) int {
 		}
 	}
 	return def
+}
+
+// loadCostFunc returns the per-turn cost function for budget enforcement:
+// [pricing.Cost] when path is empty (built-in placeholder defaults, unchanged
+// behavior), or the defaults overlaid with the JSON overrides document at
+// path. A read or parse error is fatal — the operator explicitly asked for
+// corrected rates, so running with silently wrong budget accounting is worse
+// than refusing to start.
+func loadCostFunc(path string) (agent.CostFunc, error) {
+	if path == "" {
+		return agent.CostFunc(pricing.Cost), nil
+	}
+	data, err := os.ReadFile(path) //nolint:gosec // G304: path is operator-configured via BOLTROPE_PRICING_FILE, not model/client-driven
+	if err != nil {
+		return nil, fmt.Errorf("orchestratord: read pricing overrides (BOLTROPE_PRICING_FILE=%q): %w", path, err)
+	}
+	overrides, err := pricing.ParseOverrides(data)
+	if err != nil {
+		return nil, fmt.Errorf("orchestratord: invalid pricing overrides (BOLTROPE_PRICING_FILE=%q): %w", path, err)
+	}
+	return overrides.Cost, nil
 }
 
 // Run wires the orchestrator and serves it until ctx is cancelled or a signal
@@ -210,6 +239,13 @@ func buildLoopDeps(store *eventstore.Store, down *downstream, tel *daemon.Teleme
 		return agent.Deps{}, agent.Config{}, nil, fmt.Errorf("orchestratord: build policy engine: %w", err)
 	}
 
+	// Resolve the budget cost function (built-in placeholder defaults, optionally
+	// overlaid via BOLTROPE_PRICING_FILE); a bad file fails startup.
+	costFn, err := loadCostFunc(os.PricingFile)
+	if err != nil {
+		return agent.Deps{}, agent.Config{}, nil, err
+	}
+
 	ctxMgr := agentctx.NewManager(newGatewayTokenCounter(down.model), agentctx.Config{
 		Model:            os.DefaultModel,
 		MaxContextTokens: os.MaxContextTokens,
@@ -229,7 +265,7 @@ func buildLoopDeps(store *eventstore.Store, down *downstream, tel *daemon.Teleme
 		Clock:     clock.System{},
 		IDs:       ids.System{},
 		Metrics:   loopMetrics{m: tel.Metrics},
-		CostFunc:  agent.CostFunc(pricing.Cost),
+		CostFunc:  costFn,
 	}
 
 	loopCfg := agent.Config{Model: os.DefaultModel}

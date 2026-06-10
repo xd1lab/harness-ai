@@ -283,6 +283,136 @@ func TestNormalizer_ContinuationCarriesItems(t *testing.T) {
 	}
 }
 
+// TestNormalizer_RefusalDelta_SurfacesAsText asserts refusal deltas become
+// visible text so the assembled message is never silently empty, and that
+// empty-string deltas of any flavor produce no events.
+func TestNormalizer_RefusalDelta_SurfacesAsText(t *testing.T) {
+	got := runNormalizer([]responses.ResponseStreamEventUnion{
+		textDeltaEvent(""),      // empty deltas are dropped, not emitted
+		reasoningDeltaEvent(""), // ditto for thinking
+		{Type: evtRefusalDelta, Delta: "I cannot "},
+		{Type: evtRefusalDelta, Delta: ""},
+		{Type: evtRefusalDelta, Delta: "help"},
+		completedEvent(responses.Response{Status: responses.ResponseStatusCompleted}),
+	})
+	if len(got) != 3 {
+		t.Fatalf("want 2 text deltas + Done, got %s", dump(got))
+	}
+	if got[0].TextDelta == nil || got[0].TextDelta.Text != "I cannot " {
+		t.Fatalf("refusal delta must surface as text, got %s", dump(got[:1]))
+	}
+	if got[1].TextDelta == nil || got[1].TextDelta.Text != "help" {
+		t.Fatalf("second refusal delta wrong: %s", dump(got[1:2]))
+	}
+}
+
+// TestNormalizer_EmptyTerminalToolArgs_DefaultsToEmptyObject asserts a terminal
+// function_call item without argument bytes still emits a valid empty JSON object
+// in ArgsFragment, so downstream assembly never parses an empty string.
+func TestNormalizer_EmptyTerminalToolArgs_DefaultsToEmptyObject(t *testing.T) {
+	resp := responses.Response{
+		Status: responses.ResponseStatusCompleted,
+		Output: []responses.ResponseOutputItemUnion{functionCallItem("call_n", "noargs", "")},
+	}
+	got := runNormalizer([]responses.ResponseStreamEventUnion{completedEvent(resp)})
+	if len(got) != 2 || got[0].ToolCallDelta == nil {
+		t.Fatalf("want [ToolCallDelta Done], got %s", dump(got))
+	}
+	if string(got[0].ToolCallDelta.ArgsFragment) != "{}" {
+		t.Fatalf("empty args must default to {}, got %q", string(got[0].ToolCallDelta.ArgsFragment))
+	}
+}
+
+// TestNormalizer_UsageClampsNegativeInput pins the defensive clamp: a provider
+// reporting more cached tokens than total input must not yield negative input.
+func TestNormalizer_UsageClampsNegativeInput(t *testing.T) {
+	resp := responses.Response{
+		Status: responses.ResponseStatusCompleted,
+		Usage:  usage(10, 5, 50, 0),
+	}
+	got := runNormalizer([]responses.ResponseStreamEventUnion{completedEvent(resp)})
+	done := lastDone(t, got)
+	want := llm.Usage{InputTokens: 0, OutputTokens: 5, CacheReadTokens: 50}
+	if done.Usage != want {
+		t.Fatalf("usage clamp wrong:\n got %#v\nwant %#v", done.Usage, want)
+	}
+}
+
+// TestFailedRawReason_Table pins the raw-reason extraction for the two failure
+// event shapes, including the fallbacks when the provider omits a message.
+func TestFailedRawReason_Table(t *testing.T) {
+	withRespErr := responses.ResponseStreamEventUnion{Type: evtFailed}
+	withRespErr.Response.Error.Message = "server fell over"
+
+	cases := []struct {
+		name string
+		ev   responses.ResponseStreamEventUnion
+		want string
+	}{
+		{"error event with message", responses.ResponseStreamEventUnion{Type: evtError, Message: "boom"}, "boom"},
+		{"error event without message", responses.ResponseStreamEventUnion{Type: evtError}, "error"},
+		{"failed event with response error", withRespErr, "server fell over"},
+		{"failed event without message", responses.ResponseStreamEventUnion{Type: evtFailed}, "failed"},
+	}
+	for _, c := range cases {
+		if got := failedRawReason(c.ev); got != c.want {
+			t.Errorf("%s: failedRawReason = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// TestStopReasonFromResponse_Table covers the full stop-reason derivation,
+// including the non-completed statuses the streaming fixtures do not reach.
+func TestStopReasonFromResponse_Table(t *testing.T) {
+	incomplete := func(reason string) responses.Response {
+		r := responses.Response{Status: responses.ResponseStatusIncomplete}
+		r.IncompleteDetails.Reason = reason
+		return r
+	}
+	cases := []struct {
+		name string
+		resp responses.Response
+		want llm.StopReason
+	}{
+		{"completed", responses.Response{Status: responses.ResponseStatusCompleted}, llm.StopEnd},
+		{"completed with function call", responses.Response{
+			Status: responses.ResponseStatusCompleted,
+			Output: []responses.ResponseOutputItemUnion{functionCallItem("c", "f", `{}`)},
+		}, llm.StopToolUse},
+		// A tool call outranks the incomplete status: the model is mid tool turn.
+		{"incomplete with function call", responses.Response{
+			Status: responses.ResponseStatusIncomplete,
+			Output: []responses.ResponseOutputItemUnion{functionCallItem("c", "f", `{}`)},
+		}, llm.StopToolUse},
+		{"incomplete max tokens", incomplete(incompleteMaxOutputTokens), llm.StopMaxTokens},
+		{"incomplete content filter", incomplete(incompleteContentFilter), llm.StopContentFilter},
+		{"incomplete unknown reason", incomplete("mystery"), llm.StopOther},
+		{"failed", responses.Response{Status: responses.ResponseStatusFailed}, llm.StopOther},
+		{"cancelled", responses.Response{Status: responses.ResponseStatusCancelled}, llm.StopOther},
+	}
+	for _, c := range cases {
+		if got := stopReasonFromResponse(c.resp); got != c.want {
+			t.Errorf("%s: stopReasonFromResponse = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// TestRawStopReason asserts traceability: the incomplete reason wins when present,
+// otherwise the verbatim status string is carried.
+func TestRawStopReason(t *testing.T) {
+	withReason := responses.Response{Status: responses.ResponseStatusIncomplete}
+	withReason.IncompleteDetails.Reason = incompleteMaxOutputTokens
+	if got := rawStopReason(withReason); got != incompleteMaxOutputTokens {
+		t.Fatalf("rawStopReason(incomplete+reason) = %q, want %q", got, incompleteMaxOutputTokens)
+	}
+	if got := rawStopReason(responses.Response{Status: responses.ResponseStatusIncomplete}); got != "incomplete" {
+		t.Fatalf("rawStopReason(incomplete) = %q, want %q", got, "incomplete")
+	}
+	if got := rawStopReason(responses.Response{Status: responses.ResponseStatusCompleted}); got != "completed" {
+		t.Fatalf("rawStopReason(completed) = %q, want %q", got, "completed")
+	}
+}
+
 func TestNormalizer_IgnoresEventsAfterTerminal(t *testing.T) {
 	got := runNormalizer([]responses.ResponseStreamEventUnion{
 		completedEvent(responses.Response{Status: responses.ResponseStatusCompleted}),

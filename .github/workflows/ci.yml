@@ -78,14 +78,19 @@ jobs:
             echo "push to main: no earlier baseline to diff; skipping buf breaking"
           fi
 
-  # ── unit tests under the race detector, across supported Go versions ──────
+  # ── unit tests under the race detector ────────────────────────────────────
+  # Single-version matrix on purpose: go.mod requires go 1.25.0, so an older
+  # entry (e.g. 1.24.x) would just have its toolchain silently upgraded to
+  # 1.25 — advertising a compatibility level the job never actually tests.
+  # The matrix shape is kept so a second version can be added when go.mod
+  # genuinely supports a wider window.
   test:
     name: test (go ${{ matrix.go }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        go: ["1.24.x", "1.25.x"]
+        go: ["1.25.x"]
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -111,6 +116,54 @@ jobs:
           check-latest: true
       - name: go build
         run: go build ./...
+
+  # ── integration tests (testcontainers) with coverage ──────────────────────
+  # ubuntu-latest ships Docker, so the testcontainers-backed `integration`-tagged
+  # tests (Postgres event store, projections, tool-runtime dedup, …) run for
+  # real here. Coverage spans ./... via -coverpkg so the number reflects the
+  # whole module, not just the packages that happen to contain tagged tests.
+  integration:
+    name: integration (${{ matrix.pg-image }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # postgres:16 is the harnesses' default; postgres:13 keeps the
+        # NFR-PORT-03 floor (xid8 / pg_current_xact_id) CONTINUOUSLY proven
+        # rather than one-shot verified (DOD-12).
+        pg-image: ["postgres:16", "postgres:13"]
+    env:
+      BOLTROPE_TEST_PG_IMAGE: ${{ matrix.pg-image }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Set up Go
+        # setup-go caches the module + build cache by default (keyed on go.sum).
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+      - name: go test -tags integration (coverage)
+        # Generous -timeout: a cold runner pulls the Postgres image and starts
+        # one container per test package, which dwarfs the test time itself.
+        run: >-
+          go test -tags integration -timeout 20m
+          -coverpkg=./... -covermode=atomic -coverprofile=coverage.out ./...
+      - name: Enforce coverage threshold (DOD-06)
+        # The >=75% module-wide gate (DOD-06), measured over unit+integration
+        # with cross-package credit (-coverpkg=./...), INCLUDING generated gen/
+        # code at 0% — i.e. the strictest read of "across the entire module".
+        # Baseline at enablement: 81.6%.
+        run: |
+          total=$(go tool cover -func=coverage.out | tail -n 1 | grep -oE '[0-9]+\.[0-9]+')
+          echo "total coverage: ${total}%"
+          awk -v t="$total" 'BEGIN { if (t+0 < 75.0) { print "FAIL: coverage " t "% is below the 75% DoD gate (DOD-06)"; exit 1 } }'
+      - name: Upload coverage profile
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          # Unique per matrix leg (upload-artifact v4+ forbids duplicate names).
+          name: coverage-${{ strategy.job-index }}
+          path: coverage.out
 
   # ── docker-compose smoke: bring the full stack up KEYLESS and assert it is ──
   # ready cross-service within 120 s (DOD-05). The model-gateway defaults to the
@@ -243,8 +296,9 @@ jobs:
   livesmoke:
     name: livesmoke (opt-in)
     runs-on: ubuntu-latest
-    # Gate on a configured key so this job is a no-op unless a maintainer opts in
-    # by setting the secret. (The test additionally t.Skip()s without a key.)
+    # The job itself only gates on push-to-main (workflow `if:` cannot see
+    # secrets); the actual API-key gating is the t.Skip() inside the tests, so
+    # without a configured secret this job runs but skips cleanly, keyless.
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - name: Checkout

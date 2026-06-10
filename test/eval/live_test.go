@@ -17,11 +17,17 @@
 // selection and the loop's permission/scheduling/round-trip path against genuine
 // provider output, catching adapter drift that the deterministic scenarios cannot.
 //
-// Provider selection (first configured wins):
+// Provider selection (every configured provider runs as its OWN subtest, each
+// skipping independently when its key/endpoint is absent — so a fully-keyed run
+// demonstrates hosted AND self-hosted providers in one pass; DOD-04):
 //
-//   - ANTHROPIC_API_KEY            -> Anthropic (model: ANTHROPIC_SMOKE_MODEL or a default)
-//   - OPENAI_API_KEY + OPENAI_BASE_URL -> OpenAI-compatible endpoint (self-hosted: Ollama/vLLM)
-//   - OPENAI_API_KEY (no base URL) -> native OpenAI (Responses API)
+//   - anthropic:     ANTHROPIC_API_KEY (model: ANTHROPIC_SMOKE_MODEL or a default)
+//   - openai-compat: OPENAI_API_KEY + OPENAI_BASE_URL -> OpenAI-compatible endpoint
+//     (self-hosted: Ollama/vLLM)
+//   - openai:        OPENAI_API_KEY with NO OPENAI_BASE_URL -> native OpenAI
+//     (Responses API). When a base URL is set the key belongs to the
+//     self-hosted endpoint, so the native subtest skips rather than aim a
+//     non-OpenAI key at api.openai.com.
 package eval
 
 import (
@@ -44,40 +50,75 @@ import (
 	"github.com/boltrope/boltrope/internal/platform/ids"
 )
 
-// liveProvider resolves the model-gateway provider + model id from the
-// environment, or skips the test when none is configured. The returned provider
-// satisfies [app.ModelGatewayPort] (its method set matches), so it feeds the real
-// loop directly with no adapter.
-func liveProvider(t *testing.T) (app.ModelGatewayPort, string) {
+// liveProviderSpec is one provider tier of the live smoke suite: a stable
+// subtest name plus a resolver that builds the provider from the environment or
+// SKIPS the subtest when its key/endpoint is absent. Each resolved provider
+// satisfies [app.ModelGatewayPort] (its method set matches), so it feeds the
+// real loop directly with no adapter.
+type liveProviderSpec struct {
+	name    string
+	resolve func(t *testing.T) (app.ModelGatewayPort, string)
+}
+
+// liveProviders enumerates EVERY provider the live tier knows how to wire, in a
+// stable order. Each runs as its own subtest and skips individually, so a
+// fully-keyed environment exercises hosted and self-hosted providers in one
+// pass instead of first-configured-wins (DOD-04).
+func liveProviders() []liveProviderSpec {
+	return []liveProviderSpec{
+		{name: "anthropic", resolve: resolveAnthropic},
+		{name: "openai-compat", resolve: resolveOpenAICompat},
+		{name: "openai", resolve: resolveOpenAI},
+	}
+}
+
+// resolveAnthropic wires the hosted Anthropic provider, or skips when no key is
+// set.
+func resolveAnthropic(t *testing.T) (app.ModelGatewayPort, string) {
 	t.Helper()
-
-	if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
-		model := envOr("ANTHROPIC_SMOKE_MODEL", "claude-haiku-4-5")
-		return anthropic.New(anthropic.WithAPIKey(key), anthropic.WithDefaultMaxTokens(1024)), model
+	key := os.Getenv("ANTHROPIC_API_KEY")
+	if key == "" {
+		t.Skip("ANTHROPIC_API_KEY not set; skipping anthropic live smoke")
 	}
+	model := envOr("ANTHROPIC_SMOKE_MODEL", "claude-haiku-4-5")
+	return anthropic.New(anthropic.WithAPIKey(key), anthropic.WithDefaultMaxTokens(1024)), model
+}
 
-	if key := os.Getenv("OPENAI_API_KEY"); key != "" {
-		// A configured base URL selects the OpenAI-COMPATIBLE adapter, which is the
-		// path for self-hosted endpoints (Ollama, vLLM, LM Studio, …).
-		if base := os.Getenv("OPENAI_BASE_URL"); base != "" {
-			p, err := openaicompat.New(openaicompat.Config{BaseURL: base, APIKey: key})
-			if err != nil {
-				t.Fatalf("live: build openai-compatible provider: %v", err)
-			}
-			model := envOr("OPENAI_SMOKE_MODEL", "llama3")
-			return p, model
-		}
-		// No base URL: native OpenAI (Responses API by default).
-		p, err := openai.New(openai.Config{APIKey: key})
-		if err != nil {
-			t.Fatalf("live: build openai provider: %v", err)
-		}
-		model := envOr("OPENAI_SMOKE_MODEL", "gpt-4o-mini")
-		return p, model
+// resolveOpenAICompat wires the OpenAI-COMPATIBLE adapter against a configured
+// base URL — the path for self-hosted endpoints (Ollama, vLLM, LM Studio, …) —
+// or skips when the key/endpoint pair is incomplete.
+func resolveOpenAICompat(t *testing.T) (app.ModelGatewayPort, string) {
+	t.Helper()
+	key := os.Getenv("OPENAI_API_KEY")
+	base := os.Getenv("OPENAI_BASE_URL")
+	if key == "" || base == "" {
+		t.Skip("OPENAI_API_KEY + OPENAI_BASE_URL not both set; skipping openai-compatible (self-hosted) live smoke")
 	}
+	p, err := openaicompat.New(openaicompat.Config{BaseURL: base, APIKey: key})
+	if err != nil {
+		t.Fatalf("live: build openai-compatible provider: %v", err)
+	}
+	return p, envOr("OPENAI_SMOKE_MODEL", "llama3")
+}
 
-	t.Skip("no provider key set (ANTHROPIC_API_KEY or OPENAI_API_KEY); skipping live smoke eval")
-	return nil, "" // unreachable
+// resolveOpenAI wires the native OpenAI provider (Responses API by default), or
+// skips when no key is set. A configured OPENAI_BASE_URL means the key belongs
+// to a self-hosted endpoint (the openai-compat subtest runs it), so the native
+// subtest skips rather than send that key to api.openai.com.
+func resolveOpenAI(t *testing.T) (app.ModelGatewayPort, string) {
+	t.Helper()
+	key := os.Getenv("OPENAI_API_KEY")
+	if key == "" {
+		t.Skip("OPENAI_API_KEY not set; skipping openai live smoke")
+	}
+	if os.Getenv("OPENAI_BASE_URL") != "" {
+		t.Skip("OPENAI_BASE_URL set: OPENAI_API_KEY targets the openai-compat subtest; skipping native openai")
+	}
+	p, err := openai.New(openai.Config{APIKey: key})
+	if err != nil {
+		t.Fatalf("live: build openai provider: %v", err)
+	}
+	return p, envOr("OPENAI_SMOKE_MODEL", "gpt-4o-mini")
 }
 
 // envOr returns the env var named key, or def when unset/empty.
@@ -88,13 +129,27 @@ func envOr(key, def string) string {
 	return def
 }
 
-// TestLive_CodingTask drives ONE real coding task end-to-end against a real
+// TestLive_CodingTask drives ONE real coding task end-to-end per configured
 // provider: write a Go function to a file with `write`, then read it back with
-// `read`. It asserts the run terminates without an infrastructural error, the
-// loop performed at least one model round-trip, and (best-effort) that the model
-// engaged the tools — exercising the full loop against genuine model output.
+// `read`. EVERY provider tier runs as its own subtest (skipping individually
+// when unconfigured; DOD-04), each asserting the run terminates without an
+// infrastructural error, the loop performed at least one model round-trip, and
+// (best-effort) that the model engaged the tools — exercising the full loop
+// against genuine model output.
 func TestLive_CodingTask(t *testing.T) {
-	provider, model := liveProvider(t)
+	for _, spec := range liveProviders() {
+		t.Run(spec.name, func(t *testing.T) {
+			provider, model := spec.resolve(t)
+			runLiveCodingTask(t, spec.name, provider, model)
+		})
+	}
+}
+
+// runLiveCodingTask runs the live coding exercise against one resolved provider,
+// with its own in-memory workspace and a per-provider session id so subtests
+// never share state.
+func runLiveCodingTask(t *testing.T, name string, provider app.ModelGatewayPort, model string) {
+	t.Helper()
 
 	ws := newMemWorkspace()
 
@@ -122,7 +177,7 @@ func TestLive_CodingTask(t *testing.T) {
 		"then read add.go back to confirm it was written. When done, reply with a short confirmation."
 
 	res, err := loop.Run(ctx, agent.RunInput{
-		SessionID:   "live-coding-task",
+		SessionID:   "live-coding-task-" + name,
 		UserMessage: userMessage(task),
 	})
 	if err != nil {

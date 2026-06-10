@@ -61,7 +61,7 @@ func TestFakeStreamReader_PosTracking(t *testing.T) {
 		llm.StreamEvent{Done: &llm.Done{StopReason: llm.StopEnd}},
 	)
 	assert.Equal(t, 0, r.Pos())
-	r.Recv() //nolint:errcheck
+	r.Recv() //nolint:errcheck // advances the reader; only the Pos() cursor is under test
 	assert.Equal(t, 1, r.Pos())
 }
 
@@ -176,9 +176,9 @@ func TestFakeProvider_Capabilities(t *testing.T) {
 func TestFakeProvider_QueueExhaustedPanic(t *testing.T) {
 	fp := llmtest.NewFakeProvider()
 	fp.AddGenerateText("first")
-	fp.Generate(context.Background(), llm.Request{}) //nolint:errcheck
+	fp.Generate(context.Background(), llm.Request{}) //nolint:errcheck // drains the single scripted entry; the panic on the NEXT call is the assertion
 	assert.Panics(t, func() {
-		fp.Generate(context.Background(), llm.Request{}) //nolint:errcheck
+		fp.Generate(context.Background(), llm.Request{}) //nolint:errcheck // must panic on the exhausted queue — assert.Panics checks that, not the returns
 	})
 }
 
@@ -187,7 +187,7 @@ func TestFakeProvider_RecordedRequests(t *testing.T) {
 	fp := llmtest.NewFakeProvider()
 	fp.AddGenerateText("ok")
 	req := llm.Request{Model: "claude-test", System: "be helpful"}
-	fp.Generate(context.Background(), req) //nolint:errcheck
+	fp.Generate(context.Background(), req) //nolint:errcheck // only the captured RecordedRequests entry is under test, not the response
 	require.Len(t, fp.RecordedRequests, 1)
 	assert.Equal(t, "claude-test", fp.RecordedRequests[0].Model)
 }

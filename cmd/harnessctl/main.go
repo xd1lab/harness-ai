@@ -119,7 +119,7 @@ func run(args []string, w io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", cfg.Endpoint, err)
 	}
-	defer conn.Close() //nolint:errcheck
+	defer conn.Close() //nolint:errcheck // best-effort close on the exit path; nothing actionable on error
 
 	client := boltropev1.NewOrchestratorServiceClient(conn)
 	ctx := withToken(context.Background(), cfg.Token)

@@ -1,10 +1,13 @@
 # Boltrope release — GoReleaser on a version tag (NFR-PORT-04, DOD-10; ADR-0006).
 #
-# Triggered by pushing a SemVer tag (release-please opens the release PR and,
-# once merged, creates the `vX.Y.Z` tag that fires this workflow). GoReleaser
-# then builds the multi-arch static binaries, pushes multi-arch images to GHCR,
-# generates SBOMs (syft), and signs artifacts + images keylessly with cosign and
-# emits SLSA provenance — see .goreleaser.yaml.
+# Triggered by pushing a SemVer tag: a maintainer cuts a release manually with
+# `git tag vX.Y.Z && git push origin vX.Y.Z` (no release automation opens PRs
+# or creates tags for us — adopting release-please or similar is a possible
+# future change, not the current flow). GoReleaser then builds the multi-arch
+# static binaries, pushes multi-arch images to GHCR, generates SBOMs (syft),
+# and signs artifacts + images keylessly with cosign — see .goreleaser.yaml.
+# (SLSA provenance attestation is a future opt-in: the GoReleaser
+# `attestations:` key is Pro-only, so the OSS config does not emit it yet.)
 #
 # Conventions (ADR-0006):
 #   - All third-party actions are pinned to a commit SHA with the human-readable
@@ -14,7 +17,6 @@
 #       contents: write   -> create the GitHub Release + upload artifacts
 #       packages: write   -> push images to GHCR
 #       id-token: write   -> OIDC token for keyless cosign signing (Sigstore)
-#       attestations: write -> record build provenance attestations
 name: release
 
 on:
@@ -41,7 +43,6 @@ jobs:
       contents: write # create release + upload archives/checksums
       packages: write # push container images to GHCR
       id-token: write # keyless cosign signing via OIDC (no long-lived keys)
-      attestations: write # SLSA build provenance
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3

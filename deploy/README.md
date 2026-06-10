@@ -191,8 +191,11 @@ things make it **unsafe for multi-tenant or untrusted-code or production** use:
 2. **`BOLTROPE_DEV_INSECURE=1` (static-cert mTLS, not SPIRE).** Inter-service and
    edge mTLS use ephemeral self-signed certs minted at startup instead of
    SPIRE-issued SVIDs (ADR-0013, NFR-SEC-01). The services log a loud warning on
-   start. This path is compiled/configured out of release images; a production
-   build refuses to start without a SPIFFE source.
+   start. This path is present in **every** build but env-gated: it never
+   engages unless `BOLTROPE_DEV_INSECURE=1` is explicitly set, and it MUST NOT
+   be used in production. Without that variable, a process that has no SPIFFE
+   source refuses to start; release images build with `-tags spire` so the SPIRE
+   Workload API path is available.
 
 3. **Throwaway DB credentials in `.env.example`.** `boltrope_owner_pw` /
    `boltrope_app_pw` are placeholders for a local database. Never reuse them, and
