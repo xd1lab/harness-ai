@@ -597,7 +597,13 @@ All criteria below MUST be met before v1 is declared complete. Each is independe
 > path runs end-to-end in CI. **DOD-04 remains opt-in** — a real-model end-to-end
 > run is only exercised by the API-key-gated `livesmoke` job, which skips without a
 > key; the keyless `stub` provider used by DOD-05/09 deliberately does not satisfy
-> it (it proves the wiring, not real model behavior).
+> it (it proves the wiring, not real model behavior). **DOD-10 is partially met**
+> (as published, 2026-06): the Scorecard action runs in CI and publishes results —
+> the first public score is **4.3/10, below the 5.0 target** — and the OpenSSF
+> Best Practices Badge application has **not** been submitted yet. The ≥5.0 text is
+> retained as the frozen acceptance bar; this note records honestly that it is not
+> yet reached. `SECURITY.md` exists; private vulnerability reporting must be
+> enabled in the repository settings (a GitHub UI step, not CI-verifiable).
 
 ---
 

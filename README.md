@@ -35,12 +35,12 @@ Boltrope turns a stateless LLM completion API into a **stateful, tool-using, sel
 
 ## Quickstart
 
-Bring up the full stack (PostgreSQL, schema migration, the three services, and `projectord`) and run one task — **keyless, no model API key required**. Bringing up the stack needs only **Docker** with the Compose plugin; the `harnessctl` client in step 4 additionally needs **Go** to build/run (`go run ./cmd/harnessctl …`, or `go build -o bin/ ./cmd/harnessctl` once). The model-gateway defaults to the built-in `stub` provider (a deterministic, network-free provider), so a clean `docker compose up` runs an end-to-end task out of the box. Point it at a real model in [Use a real model](#use-a-real-model) below.
+Bring up the full stack (PostgreSQL, schema migration, and the four services — orchestrator, model-gateway, tool-runtime, `projectord`) and run one task — **keyless, no model API key required**. Bringing up the stack needs only **Docker** with the Compose plugin; the `harnessctl` client in step 4 additionally needs **Go** to build/run (`go run ./cmd/harnessctl …`, or `go build -o bin/ ./cmd/harnessctl` once). The model-gateway defaults to the built-in `stub` provider (a deterministic, network-free provider), so a clean `docker compose up` runs an end-to-end task out of the box. Point it at a real model in [Use a real model](#use-a-real-model) below.
 
 ```bash
 # 1. Clone.
 git clone https://github.com/xd1lab/harness-ai.git
-cd boltrope
+cd harness-ai
 
 # 2. Up — keyless. Postgres healthy -> migrate completes -> grant -> the four
 #    services start. The model-gateway defaults to BOLTROPE_MODELGW_PROVIDER=stub,
