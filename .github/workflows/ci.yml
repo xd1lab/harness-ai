@@ -159,7 +159,7 @@ jobs:
           echo "total coverage: ${total}%"
           awk -v t="$total" 'BEGIN { if (t+0 < 75.0) { print "FAIL: coverage " t "% is below the 75% DoD gate (DOD-06)"; exit 1 } }'
       - name: Upload coverage profile
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           # Unique per matrix leg (upload-artifact v4+ forbids duplicate names).
           name: coverage-${{ strategy.job-index }}
