@@ -18,6 +18,21 @@ Boltrope turns a stateless LLM completion API into a **stateful, tool-using, sel
 
 ---
 
+## Contents
+
+- [Quickstart](#quickstart) · [Use a real model](#use-a-real-model)
+- [Install — binaries & container images](#install)
+- [Feature overview](#feature-overview)
+- [Configuring a provider](#configuring-a-provider)
+- [Architecture](#architecture)
+- [Security](#security)
+- [Roadmap / Deferred](#roadmap--deferred)
+- [Documentation](#documentation)
+- [Contributing](#contributing) · [Community & support](#community--support)
+- [Development](#development) · [License](#license)
+
+---
+
 ## Quickstart
 
 Bring up the full stack (PostgreSQL, schema migration, the three services, and `projectord`) and run one task — **keyless, no model API key required**. Bringing up the stack needs only **Docker** with the Compose plugin; the `harnessctl` client in step 4 additionally needs **Go** to build/run (`go run ./cmd/harnessctl …`, or `go build -o bin/ ./cmd/harnessctl` once). The model-gateway defaults to the built-in `stub` provider (a deterministic, network-free provider), so a clean `docker compose up` runs an end-to-end task out of the box. Point it at a real model in [Use a real model](#use-a-real-model) below.
@@ -37,28 +52,18 @@ docker compose -f deploy/docker-compose.yml up --build --wait
 #    HTTP edge is published on host port 8080, the gRPC edge on 9000.
 curl -fsS http://localhost:8080/readyz && echo   # orchestrator: ready
 
-# 4. Run a hello-world task. harnessctl is the gRPC client CLI; BOLTROPE_DEV_INSECURE=1
-#    selects its shared-seed dev mTLS dial path so it handshakes the compose edge
-#    (see the note below). No --tenant is needed: under dev-insecure the orchestrator
-#    scopes the call to its fixed dev tenant (the authenticated principal), and the
-#    CLI sends no seed so it derives the same dev CA as the stack. It runs the real
-#    agent loop against the stub provider, which replies with one deterministic text
-#    turn, so the run streams the assistant TextDelta and then a terminal
-#    [result] subtype=success frame — keyless, with no approval step. This proves the
-#    full distributed pipeline end-to-end: client → orchestrator (mTLS + event-sourced
-#    log) → model-gateway, plus the orchestrator → tool-runtime tool advertisement and
-#    the resumable streaming relay. (Tool EXECUTION in the sandbox is covered by the
-#    tool-runtime integration suite, not this network-free demo provider. Point at a
-#    real model below to drive actual tool calls: under the default permission mode a
-#    model's tool call pauses at an [approval required] prompt printing a call_id —
-#    approve it from a second terminal with `harnessctl ... --session <id> approve
-#    <call-id>`. The standing mode is chosen when the CLI CREATES the session:
-#    --permission-mode default|acceptEdits|plan, env BOLTROPE_CTL_PERMISSION_MODE.)
-#    Reconnect to a dropped session with --session <id> --after-seq <n>;
-#    fork a trajectory with `harnessctl ... fork --at-seq <n>`.
+# 4. Run a task. harnessctl is the gRPC client CLI; BOLTROPE_DEV_INSECURE=1 makes it
+#    dial the compose edge over the shared-seed dev mTLS path (details in the note
+#    below). The keyless stub replies with one deterministic text turn, so this
+#    streams the assistant text and a terminal success frame.
 BOLTROPE_DEV_INSECURE=1 go run ./cmd/harnessctl --endpoint localhost:9000 \
     run "Write a hello-world Go program."
+# => session: 019eb1...
+#    I received your task and I am working on it.
+#    [result] subtype=success turns=1 cost=0.000000 USD
 ```
+
+> **What the keyless run proves, and the commands beyond it.** It exercises the full distributed pipeline end-to-end — client → orchestrator (mTLS + event-sourced log) → model-gateway, plus the orchestrator → tool-runtime tool advertisement and the resumable streaming relay. (Tool *execution* in the sandbox is covered by the tool-runtime integration suite, not this network-free demo provider — point at a [real model](#use-a-real-model) to drive actual tool calls.) Useful flags: a session's standing permission mode is chosen at creation with `--permission-mode default|acceptEdits|plan` (env `BOLTROPE_CTL_PERMISSION_MODE`); under the `default` mode a real model's tool call pauses at an `[approval required]` prompt printing a `call_id` — approve it from a second terminal with `harnessctl … --session <id> approve <call-id>`. Reconnect to a dropped session with `--session <id> --after-seq <n>`; fork a trajectory with `harnessctl … fork --at-seq <n>`.
 
 > **`harnessctl` over the dev edge.** Under `BOLTROPE_DEV_INSECURE=1` the orchestrator's gRPC edge speaks **static-cert mTLS** (it has no plaintext listener). Setting the same `BOLTROPE_DEV_INSECURE=1` on `harnessctl` (as in step 4) makes it dial over the **shared-seed dev CA**: the CLI presents the `spiffe://boltrope.local/edge` identity the orchestrator's RBAC admits and pins `spiffe://boltrope.local/orchestrator`, completing mutual TLS against the compose edge. (Override the trust domain / pinned id with `--trust-domain` / `--server-id`, or set `BOLTROPE_DEV_CA_SEED` consistently across the stack.) The bare `--insecure` flag is plaintext-only and is for a local orchestrator started **without** mTLS — it cannot handshake the compose dev edge. Production uses SPIFFE/SPIRE SVIDs and OIDC at the edge.
 
@@ -85,6 +90,69 @@ EOF
 | Self-hosted / OpenAI-compatible (Ollama, vLLM, LM Studio, …) | `openaicompat` | optional — set only if the endpoint requires one; point `BOLTROPE_MODELGW_OPENAI_BASE_URL` at the `/v1` URL |
 
 See [Configuring a provider](#configuring-a-provider) for the full matrix and per-`(endpoint, model)` capability resolution.
+
+<details>
+<summary><b>Example</b> — a real (self-hosted) model driving a tool through the sandbox</summary>
+
+With `BOLTROPE_MODELGW_PROVIDER=openaicompat` pointed at a local Ollama serving `gemma4:26b` and a session created in `acceptEdits` mode, asking the agent to write a file:
+
+```text
+$ harnessctl --endpoint localhost:9000 --session <id> \
+    run "Write a hello-world Go program to hello.go, then confirm."
+
+[tool] wrote 77 bytes to hello.go
+[result] subtype=success turns=2 cost=0.000000 USD
+File hello.go has been created successfully.
+```
+
+The model issued a real `write` tool call; the policy pipeline auto-approved it (`acceptEdits` mode), the tool executed inside the per-session Docker sandbox, and the result was fed back for a second turn — the complete gather → act → verify loop. The event log records the whole trajectory:
+
+```text
+seq  event                  detail
+1    SessionStarted
+2    MessageAppended        user task
+3    TurnStarted            model=gemma4:26b
+4    AssistantMessage       tool_call: write(hello.go)
+5    PermissionDecided      allow — "acceptEdits mode: file edit auto-approved"
+6    ToolExecutionStarted   durable intent (idempotency key)
+7    ToolResult             "wrote 77 bytes to hello.go"
+8    MessageAppended        tool result fed back
+9    TurnStarted            model=gemma4:26b
+10   AssistantMessage       confirmation text
+11   TurnFinished           success — usage 1670 in / 63 out tokens
+```
+
+Cost is `$0` because the model is self-hosted; against a metered provider the same run rolls up real token usage and USD cost on the `TurnFinished` event.
+
+</details>
+
+---
+
+## Install
+
+The Quickstart above runs everything from source. For a real deployment, use the **released artifacts** — produced by [GoReleaser](.goreleaser.yaml) on every tagged release: cross-compiled, checksummed, SBOM'd, and keyless-signed with cosign (Sigstore).
+
+**Container images** (multi-arch `linux/amd64` + `arm64`, on GHCR) — one per service, the same images `deploy/docker-compose.yml` can pin:
+
+```bash
+docker pull ghcr.io/boltrope/boltrope-orchestratord:latest
+docker pull ghcr.io/boltrope/boltrope-modelgwd:latest
+docker pull ghcr.io/boltrope/boltrope-toolruntimed:latest
+docker pull ghcr.io/boltrope/boltrope-projectord:latest
+docker pull ghcr.io/boltrope/boltrope-migrate:latest      # one-shot schema migration
+```
+
+**Binaries** — each GitHub release attaches `tar.gz` / `zip` archives named `boltrope_<version>_<os>_<arch>`, containing the four daemons + `boltrope-migrate` for `linux/{amd64,arm64}`, and the `harnessctl` client additionally for **macOS and Windows**. Verify the cosign-signed `checksums.txt` before use.
+
+**From source** (Go 1.25+):
+
+```bash
+go install github.com/boltrope/boltrope/cmd/harnessctl@latest   # the client CLI
+# daemons build with the `spire` tag for production SPIFFE/SPIRE identity:
+go build -tags spire ./cmd/...
+```
+
+> Releases are cut by a maintainer pushing a `vX.Y.Z` tag. Until the first public release (and the `boltrope` owner [rename](#license)), build from source as in the Quickstart — the `ghcr.io/boltrope/…` and `go install` paths resolve only once published.
 
 ---
 
@@ -225,6 +293,23 @@ v1 is a deliberately focused, irreducible harness. The `Provider`, `Workspace`/`
 - [docs/architecture/02-implementation-plan.md](docs/architecture/02-implementation-plan.md) — the test-first implementation plan.
 - [docs/decisions/](docs/decisions/) — Architecture Decision Records.
 - [CONTRIBUTING.md](CONTRIBUTING.md) · [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) · [SECURITY.md](SECURITY.md)
+
+---
+
+## Contributing
+
+Contributions are welcome. Boltrope is built **spec-first and test-first** — see [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow and [docs/decisions/0006-engineering-conventions.md](docs/decisions/0006-engineering-conventions.md) for the conventions CI enforces. In short:
+
+- **Sign off every commit** (`git commit -s`) — we use the [Developer Certificate of Origin](https://developercertificate.org/), not a CLA; PRs with unsigned commits fail the DCO check.
+- **[Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/)** — the type drives semantic versioning (`fix:` → patch, `feat:` → minor, `feat!:` / `BREAKING CHANGE:` → major).
+- **Tests first.** Keep `go test ./...` green; add `-race` and `-tags integration` for concurrency/DB changes; keep `golangci-lint run` clean — the depguard/forbidigo rules mechanically enforce the architecture boundaries.
+- Open a PR from a topic branch against `main`. All PRs need green CI (lint, unit `-race`, integration, build) and one maintainer approval; third-party GitHub Actions are pinned to commit SHAs — keep them pinned.
+
+## Community & support
+
+- **Questions & ideas** — open a [GitHub Discussion](https://github.com/boltrope/boltrope/discussions).
+- **Bugs & feature requests** — use the [issue templates](https://github.com/boltrope/boltrope/issues/new/choose).
+- **Security vulnerabilities** — do **not** open a public issue; report privately per [SECURITY.md](SECURITY.md).
 
 ---
 

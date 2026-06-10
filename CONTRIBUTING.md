@@ -33,8 +33,8 @@ The type drives semantic versioning:
 4. Lint (`golangci-lint run`) and format (`gofumpt`, `goimports`) before pushing.
 5. Open a PR with a Conventional-Commit title and a completed checklist.
 
-> Build & run instructions live in the [README](README.md) (added once the
-> architecture is finalized).
+> Build & run instructions live in the [README](README.md) (Quickstart, Install,
+> and Development sections).
 
 ## Reviews & CI
 
