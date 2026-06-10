@@ -48,3 +48,4 @@ The resulting trade-offs — good, bad, and neutral — and any follow-up work.
 | [0017](0017-operability-and-observability.md) | Operability and observability: health/readiness, startup/migration gate, RED/USE metrics + SLOs, stuck-loop detection, sandbox lifecycle | Accepted |
 | [0018](0018-keyless-demo-provider-and-gate7-reconciliations.md) | Keyless demo provider is text-only; Gate-7 deploy reconciliations (.env default, egress amendment, per-run-mode deferral) | Accepted |
 | [0019](0019-session-scoped-permission-mode.md) | Session-scoped permission mode persisted as `sessions.mode` (resolves ADR-0018 §4) | Accepted |
+| [0020](0020-production-oidc-edge-auth.md) | Production client-edge auth: OIDC discovery + JWKS Keyfunc (dependency-light, fail-closed startup, rate-limited rotation refresh) | Accepted |

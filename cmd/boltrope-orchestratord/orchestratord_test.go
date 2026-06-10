@@ -35,13 +35,13 @@ func TestLoadOrchSettings_Defaults(t *testing.T) {
 }
 
 // TestBuildAuthConfig_DevMode asserts that in dev-insecure mode the edge-auth
-// config is the permissive dev path (no Keyfunc/algorithms required), and in
-// production mode it would require a JWKS/issuer (fail-closed). We only assert the
-// dev path here because the production path needs external JWKS configuration.
+// config is the permissive dev path (no Keyfunc/algorithms required). The
+// production path (OIDC discovery + JWKS keyfunc, ADR-0020) is exercised
+// end-to-end in orchestratord_oidc_test.go.
 func TestBuildAuthConfig_DevMode(t *testing.T) {
 	cfg := baseConfig(t)
 	cfg.DevInsecure = true
-	ac := buildAuthConfig(cfg, orchSettings{})
+	ac := buildAuthConfig(cfg, orchSettings{}, nil)
 	assert.True(t, ac.DevInsecure, "dev-insecure config must enable the dev auth path")
 }
 

@@ -229,6 +229,8 @@ This compose file is **not** the production deployment. For production:
 - Run **SPIRE** so each workload gets an auto-rotating X.509 SVID; build the
   services with the `spire` build tag and **do not** set `BOLTROPE_DEV_INSECURE`.
   Readiness gates on SVID presence, so a workload with no identity is never ready.
+- Configure **client-edge OIDC auth** — see the walkthrough below. Without
+  `BOLTROPE_OIDC_ISSUER` a production orchestrator refuses to start (fail-closed).
 - Run migrations as a **Kubernetes init container / Job** (the same
   `boltrope-migrate` binary) gating the rollout, mirroring the compose gate.
 - Provision the `boltrope_app` login credential through your secrets manager;
@@ -237,3 +239,70 @@ This compose file is **not** the production deployment. For production:
   proxy, or microVM) per ADR-0005.
 - Publish multi-arch images + SBOM + signatures via the release pipeline
   (GoReleaser; NFR-PORT-04).
+
+## Client-edge auth in production (OIDC)
+
+In production (no `BOLTROPE_DEV_INSECURE`) the orchestrator validates every
+client call against your identity provider (FR-API-03; ADR-0020). Wiring is two
+environment variables on **orchestratord**:
+
+```bash
+BOLTROPE_OIDC_ISSUER=https://idp.example.com/realms/boltrope   # required
+BOLTROPE_OIDC_AUDIENCE=boltrope                                # recommended
+```
+
+**What happens at startup (fail-closed):** the orchestrator performs OIDC
+discovery (`<issuer>/.well-known/openid-configuration`), verifies the document
+asserts the same issuer, and fetches the JWKS it points at. An unreachable IdP,
+an issuer mismatch, or a key set with no usable RS256 signing keys refuses
+startup — there is no silently open (or silently unverifiable) edge. **Key
+rotation needs no restart**: a token signed by a key published after startup
+triggers an inline JWKS re-fetch (rate-limited to once a minute).
+
+**The token contract.** Boltrope is a resource server: any IdP that can issue
+an **RS256** JWT access token works (Keycloak, Dex, Auth0, Okta, Entra ID —
+RS256 is the default everywhere). The token MUST carry:
+
+| Claim | Requirement |
+| --- | --- |
+| `iss` | equals `BOLTROPE_OIDC_ISSUER` |
+| `aud` | contains `BOLTROPE_OIDC_AUDIENCE` (when set) |
+| `exp` | required; expired tokens are rejected |
+| `tenant_id` | **a UUID matching a row in the `tenants` table** — this is the RLS scoping tenant; every session/event the caller touches is bound to it at the database layer |
+| `sub` | the principal identity, recorded for audit |
+
+`alg=none` and any non-RS256 algorithm are rejected before the key is even
+consulted (pinned parser + a second explicit check).
+
+**Register the tenant** (one-time, as the owner role — same pattern as the dev
+`boltrope-grant` one-shot):
+
+```sql
+INSERT INTO tenants (id, name)
+VALUES ('8a3d2f1e-9c4b-4f6a-b1d2-3e4f5a6b7c8d', 'acme-corp')
+ON CONFLICT (id) DO NOTHING;
+```
+
+**Example: Keycloak.** Create a realm (its URL is your issuer), a client
+(e.g. `boltrope`, with the audience mapped), and a **user-attribute mapper**
+that emits the user's `tenant_id` attribute as a token claim named `tenant_id`.
+Dex: use the static client + a middleware/connector that injects the claim.
+The claim NAME is configurable server-side via the interceptor's `TenantClaim`
+(defaults to `tenant_id`).
+
+**Call the edge with a token:**
+
+```bash
+TOKEN=$(curl -s -X POST "$ISSUER/protocol/openid-connect/token" \
+  -d grant_type=client_credentials -d client_id=boltrope -d client_secret=$SECRET \
+  | jq -r .access_token)
+
+harnessctl --endpoint orchestrator.example.com:9000 --token "$TOKEN" \
+    run "Summarize the open incidents."
+# (or BOLTROPE_CTL_TOKEN=$TOKEN; the token rides as `authorization: Bearer` metadata)
+```
+
+A rejected token returns `UNAUTHENTICATED` with a deliberately coarse message
+(no oracle for why a token failed). A valid token scopes every query to the
+token's tenant via PostgreSQL row-level security — there is no code path that
+queries across tenants.

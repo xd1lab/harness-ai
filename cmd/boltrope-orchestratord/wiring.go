@@ -156,9 +156,15 @@ func Run(ctx context.Context, cfg *config.Config, logw io.Writer) error {
 	}
 
 	// Build the client-edge auth interceptors BEFORE anything expensive so a
-	// fail-closed misconfiguration (e.g. production without a JWKS) is reported
-	// immediately (NFR-SEC-01).
-	authOpts, err := authServerOptions(buildAuthConfig(cfg, osettings))
+	// fail-closed misconfiguration (production without a reachable OIDC issuer)
+	// is reported immediately (NFR-SEC-01). In production this performs OIDC
+	// discovery + the initial JWKS fetch (ADR-0020).
+	keyfunc, err := loadOIDCKeyfunc(ctx, cfg, osettings)
+	if err != nil {
+		_ = tel.Shutdown(ctx)
+		return err
+	}
+	authOpts, err := authServerOptions(buildAuthConfig(cfg, osettings, keyfunc))
 	if err != nil {
 		_ = tel.Shutdown(ctx)
 		return err
