@@ -6,9 +6,9 @@ import (
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"google.golang.org/grpc"
 
-	genproto "github.com/boltrope/boltrope/gen/boltrope/v1"
-	mgwgrpc "github.com/boltrope/boltrope/internal/modelgateway/adapter/inbound/grpc"
-	"github.com/boltrope/boltrope/internal/platform/grpcx"
+	genproto "github.com/xd1lab/harness-ai/gen/boltrope/v1"
+	mgwgrpc "github.com/xd1lab/harness-ai/internal/modelgateway/adapter/inbound/grpc"
+	"github.com/xd1lab/harness-ai/internal/platform/grpcx"
 )
 
 // version is the build version stamped via -ldflags at release time; it labels

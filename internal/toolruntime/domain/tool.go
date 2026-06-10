@@ -66,7 +66,7 @@ const (
 // validate-then-execute; ADR-0013 §"Tool execution guardrails"; architecture
 // §8.13), and the two safety classifications that govern scheduling and egress. It
 // is the data the registry stores and merges (native + MCP) and the basis for the
-// [github.com/boltrope/boltrope/internal/platform/llm.ToolDef] presented to the
+// [github.com/xd1lab/harness-ai/internal/platform/llm.ToolDef] presented to the
 // model.
 type ToolSpec struct {
 	// Name is the unique tool name the model uses to invoke the tool.
@@ -102,7 +102,7 @@ func (s ToolSpec) IsExternal() bool { return s.EgressClass == EgressClassExterna
 // app/adapter layers turn into a streamed terminal result across the service
 // boundary (and, in the orchestrator, into a persisted ToolResult event, offloading
 // large content to a blob; architecture §6.4). It mirrors the (Content, IsError)
-// shape of [github.com/boltrope/boltrope/internal/platform/llm.ToolResult] but is
+// shape of [github.com/xd1lab/harness-ai/internal/platform/llm.ToolResult] but is
 // the tool-runtime's own domain type (architecture §12.4).
 type Observation struct {
 	// Content is the textual result of the tool execution as the model should see

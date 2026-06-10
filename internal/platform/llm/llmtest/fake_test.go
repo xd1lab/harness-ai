@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/boltrope/boltrope/internal/platform/llm"
-	"github.com/boltrope/boltrope/internal/platform/llm/llmtest"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm/llmtest"
 )
 
 // ---------------------------------------------------------------------------

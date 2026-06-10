@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/boltrope/boltrope/internal/platform/clock/clocktest"
-	"github.com/boltrope/boltrope/internal/toolruntime/app"
+	"github.com/xd1lab/harness-ai/internal/platform/clock/clocktest"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/app"
 )
 
 // newTestContainer builds a container wired to a fake runner and fake clock, without

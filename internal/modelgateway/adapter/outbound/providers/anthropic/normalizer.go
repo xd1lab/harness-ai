@@ -6,7 +6,7 @@ import (
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // streamNormalizer converts the Anthropic Messages SSE event sequence into the

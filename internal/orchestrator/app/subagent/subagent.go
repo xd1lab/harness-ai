@@ -17,10 +17,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/boltrope/boltrope/internal/orchestrator/app"
-	"github.com/boltrope/boltrope/internal/orchestrator/app/agent"
-	"github.com/boltrope/boltrope/internal/orchestrator/domain"
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app/agent"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // Compile-time assertion that Spawner satisfies app.SubAgentPort.

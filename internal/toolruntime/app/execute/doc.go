@@ -1,7 +1,7 @@
 // Package execute implements the tool-runtime's ExecuteTool use-case (T-TR-07):
 // the orchestration that turns one validated tool call into a streamed terminal
 // result, behind the frozen consumer-defined ports in
-// [github.com/boltrope/boltrope/internal/toolruntime/app].
+// [github.com/xd1lab/harness-ai/internal/toolruntime/app].
 //
 // # Flow
 //
@@ -10,7 +10,7 @@
 //  1. looks up the tool in the [app.ToolRegistry] (the registry returns a
 //     validate-then-execute decorator, so JSON-Schema validation happens on
 //     dispatch and a schema violation surfaces as an error
-//     [github.com/boltrope/boltrope/internal/toolruntime/domain.Observation],
+//     [github.com/xd1lab/harness-ai/internal/toolruntime/domain.Observation],
 //     never a panic; FR-TOOL-01);
 //  2. ensures the per-session [app.Workspace] sandbox exists via the
 //     [app.RuntimePort] so cancellation propagates to a real in-sandbox kill
@@ -23,7 +23,7 @@
 //     architecture §8.4);
 //  5. executes the tool, streaming interim [Progress] through the injected
 //     [Emitter], then returns the terminal result, offloading output larger than
-//     [BlobThresholdBytes] to the [github.com/boltrope/boltrope/internal/platform/blob.BlobStorePort]
+//     [BlobThresholdBytes] to the [github.com/xd1lab/harness-ai/internal/platform/blob.BlobStorePort]
 //     (write-before-reference; architecture §6.4);
 //  6. records completion (or failure) in the dedup ledger.
 //

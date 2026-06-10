@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/boltrope/boltrope/internal/orchestrator/domain"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
 )
 
 // Conn is the minimal read-side query surface the [Source] needs: a consumer-

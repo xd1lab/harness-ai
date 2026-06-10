@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/boltrope/boltrope/internal/toolruntime/app"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/app"
 )
 
 // routingWorkspace adapts a [app.RuntimePort] (the per-session sandbox manager)

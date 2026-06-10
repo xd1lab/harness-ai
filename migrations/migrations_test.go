@@ -6,7 +6,7 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/boltrope/boltrope/migrations"
+	"github.com/xd1lab/harness-ai/migrations"
 )
 
 // TestEmbedNonEmpty asserts the //go:embed actually captured the .sql files so a

@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/boltrope/boltrope/internal/orchestrator/domain"
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // TokenCounter is the consumer-defined port the context manager uses to measure

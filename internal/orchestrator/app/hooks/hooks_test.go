@@ -8,8 +8,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/boltrope/boltrope/internal/orchestrator/app"
-	"github.com/boltrope/boltrope/internal/orchestrator/app/hooks"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app/hooks"
 )
 
 // ---------------------------------------------------------------------------

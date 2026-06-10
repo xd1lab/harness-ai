@@ -8,7 +8,7 @@ package domain
 // tool's spec; both services reason about it, and per architecture §12.4 each
 // service owns its own copy of this small vocabulary rather than importing the
 // other's domain. The authoritative producer is the tool-runtime
-// ([github.com/boltrope/boltrope/internal/toolruntime/domain]); the wire mapping
+// ([github.com/xd1lab/harness-ai/internal/toolruntime/domain]); the wire mapping
 // reconciles the two at the transport edge.
 type SideEffect string
 

@@ -8,7 +8,7 @@
 // It is intentionally tiny: all the work — connecting, the PostgreSQL >= 13
 // version gate, the forward-only guard, and applying the embedded Up migrations
 // — lives in the already-tested
-// [github.com/boltrope/boltrope/internal/orchestrator/infra/db] library half.
+// [github.com/xd1lab/harness-ai/internal/orchestrator/infra/db] library half.
 // This binary only loads config (for the DSN) and maps the library's error to a
 // process exit code.
 package main
@@ -18,8 +18,8 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/boltrope/boltrope/internal/orchestrator/infra/db"
-	"github.com/boltrope/boltrope/internal/platform/config"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/infra/db"
+	"github.com/xd1lab/harness-ai/internal/platform/config"
 )
 
 // parseConfig loads the shared service [config.Config] from flags + env. The

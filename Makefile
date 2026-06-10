@@ -35,7 +35,7 @@ GOLANGCI_LINT_VERSION    ?= v2.12.2
 MIGRATE_VERSION          ?= v4.18.3
 
 # Import path prefix used for goimports local grouping (matches .golangci.yml).
-LOCAL_PREFIX             := github.com/boltrope/boltrope
+LOCAL_PREFIX             := github.com/xd1lab/harness-ai
 
 # Branch buf compares against for breaking-change detection. Override on a
 # release/maintenance branch, e.g. `make proto-breaking BREAKING_AGAINST=.git#branch=release-1.0`.

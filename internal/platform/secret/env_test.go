@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/boltrope/boltrope/internal/platform/secret"
+	"github.com/xd1lab/harness-ai/internal/platform/secret"
 )
 
 func TestEnvSecrets_GetUnsetReturnsNotFound(t *testing.T) {

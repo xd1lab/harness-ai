@@ -6,7 +6,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/boltrope/boltrope/internal/orchestrator/domain"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
 )
 
 // mustJSON marshals v to compact JSON, panicking on error. Scenario inputs are
@@ -21,7 +21,7 @@ func mustJSON(v any) json.RawMessage {
 }
 
 // deterministicIDs returns a generous, stable id sequence ("eid-1".."eid-N") for
-// the fake [github.com/boltrope/boltrope/internal/platform/ids.IDGenerator]. The
+// the fake [github.com/xd1lab/harness-ai/internal/platform/ids.IDGenerator]. The
 // loop mints turn ids and per-append request ids from it; the count is sized to
 // comfortably outlast any scenario's appends.
 func deterministicIDs(n int) []string {

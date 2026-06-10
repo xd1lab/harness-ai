@@ -3,9 +3,9 @@ package grpc
 import (
 	"context"
 
-	"github.com/boltrope/boltrope/internal/orchestrator/app"
-	"github.com/boltrope/boltrope/internal/orchestrator/app/agent"
-	"github.com/boltrope/boltrope/internal/orchestrator/domain"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app/agent"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
 )
 
 // Compile-time assertion: *LoopRunner satisfies Runner.

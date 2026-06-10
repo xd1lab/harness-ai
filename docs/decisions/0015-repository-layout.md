@@ -22,7 +22,7 @@ the reference.
 
 ## Decision
 
-**Single Go module** (`module github.com/boltrope/boltrope`). Services that share
+**Single Go module** (`module github.com/xd1lab/harness-ai`). Services that share
 normalized llm types, generated protobuf stubs, and platform bootstrap are simplest to
 version and refactor atomically in one module. Multi-module `go.work`/replace friction
 provides no benefit at this size.

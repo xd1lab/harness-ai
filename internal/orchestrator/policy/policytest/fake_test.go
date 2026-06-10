@@ -7,9 +7,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/boltrope/boltrope/internal/orchestrator/domain"
-	"github.com/boltrope/boltrope/internal/orchestrator/policy"
-	"github.com/boltrope/boltrope/internal/orchestrator/policy/policytest"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/policy"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/policy/policytest"
 )
 
 func TestFakePolicyEngine_Interface(_ *testing.T) {

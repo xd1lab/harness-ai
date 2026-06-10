@@ -11,7 +11,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/boltrope/boltrope/internal/platform/jsonschema"
+	"github.com/xd1lab/harness-ai/internal/platform/jsonschema"
 )
 
 // schemaWith returns the raw bytes of a minimal JSON Schema object that

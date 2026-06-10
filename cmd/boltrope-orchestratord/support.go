@@ -1,11 +1,11 @@
 package main
 
 import (
-	igrpc "github.com/boltrope/boltrope/internal/orchestrator/adapter/inbound/grpc"
-	"github.com/boltrope/boltrope/internal/orchestrator/app/agent"
-	"github.com/boltrope/boltrope/internal/orchestrator/policy"
-	"github.com/boltrope/boltrope/internal/platform/config"
-	"github.com/boltrope/boltrope/internal/platform/obs"
+	igrpc "github.com/xd1lab/harness-ai/internal/orchestrator/adapter/inbound/grpc"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app/agent"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/policy"
+	"github.com/xd1lab/harness-ai/internal/platform/config"
+	"github.com/xd1lab/harness-ai/internal/platform/obs"
 )
 
 // loopMetrics adapts the shared [obs.Metrics] to the loop's

@@ -1,7 +1,7 @@
 # buf code-generation configuration for the Boltrope protobuf contracts.
 #
 # v2 schema. Managed mode sets the Go package prefix for every generated file to
-# github.com/boltrope/boltrope/gen, so boltrope/v1/*.proto generate under
+# github.com/xd1lab/harness-ai/gen, so boltrope/v1/*.proto generate under
 # gen/boltrope/v1 with import path .../gen/boltrope/v1. Two local plugins run:
 # protoc-gen-go (messages) and protoc-gen-go-grpc (service stubs). Both emit with
 # paths=source_relative so the on-disk layout mirrors the proto tree.
@@ -17,7 +17,7 @@ managed:
   enabled: true
   override:
     - file_option: go_package_prefix
-      value: github.com/boltrope/boltrope/gen
+      value: github.com/xd1lab/harness-ai/gen
 plugins:
   - local: protoc-gen-go
     out: gen

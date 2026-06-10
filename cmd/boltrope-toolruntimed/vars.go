@@ -9,10 +9,10 @@ import (
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"google.golang.org/grpc"
 
-	genproto "github.com/boltrope/boltrope/gen/boltrope/v1"
-	"github.com/boltrope/boltrope/internal/platform/daemon"
-	"github.com/boltrope/boltrope/internal/platform/grpcx"
-	trgrpc "github.com/boltrope/boltrope/internal/toolruntime/adapter/inbound/grpc"
+	genproto "github.com/xd1lab/harness-ai/gen/boltrope/v1"
+	"github.com/xd1lab/harness-ai/internal/platform/daemon"
+	"github.com/xd1lab/harness-ai/internal/platform/grpcx"
+	trgrpc "github.com/xd1lab/harness-ai/internal/toolruntime/adapter/inbound/grpc"
 )
 
 // version is the build version stamped via -ldflags at release time.

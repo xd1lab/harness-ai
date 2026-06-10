@@ -10,7 +10,7 @@
 // IMPORTANT: nothing here imports gen/. The gRPC server adapter that exposes
 // ExecuteTool/ListTools maps gen/ ⇄ these domain types at the transport edge and is
 // written separately (architecture §12.4). These ports are expressed over the
-// tool-runtime domain ([github.com/boltrope/boltrope/internal/toolruntime/domain])
+// tool-runtime domain ([github.com/xd1lab/harness-ai/internal/toolruntime/domain])
 // and the canonical llm kernel types only.
 package app
 
@@ -18,7 +18,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/boltrope/boltrope/internal/toolruntime/domain"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/domain"
 )
 
 // ----------------------------------------------------------------------------
@@ -178,7 +178,7 @@ type EgressPolicy struct {
 // http transports all route through it (ADR-0013 §"Egress broker"; architecture
 // §8.4). It is the real exfiltration control (output masking is only best-effort
 // hygiene, not containment; ADR-0013). It is an INFRA control: it remains in force
-// even under [github.com/boltrope/boltrope/internal/orchestrator/policy.ModeBypass]
+// even under [github.com/xd1lab/harness-ai/internal/orchestrator/policy.ModeBypass]
 // (architecture §8.13). Implementations must be safe for concurrent use and must
 // fail closed (deny) on any ambiguity.
 type EgressBroker interface {

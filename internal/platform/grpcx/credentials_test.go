@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/boltrope/boltrope/internal/platform/grpcx"
+	"github.com/xd1lab/harness-ai/internal/platform/grpcx"
 )
 
 // testTrustDomain is the SPIFFE trust domain used across grpcx tests. It mirrors

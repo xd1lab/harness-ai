@@ -18,7 +18,7 @@
 // boundary: it catches only known/registry/pattern secrets and is trivially
 // defeated by an adversarial model (base64/hex, splitting across calls,
 // paraphrase). The real exfiltration control is egress restriction
-// ([github.com/boltrope/boltrope/internal/toolruntime/app.EgressBroker] plus the
+// ([github.com/xd1lab/harness-ai/internal/toolruntime/app.EgressBroker] plus the
 // taint gate). [Secret] and [SecretsPort] exist for log/telemetry hygiene, not as a
 // security guarantee on tool output. This is stated in the type docs so callers do
 // not mistake redaction for containment.

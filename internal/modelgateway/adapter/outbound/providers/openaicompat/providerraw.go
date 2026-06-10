@@ -3,7 +3,7 @@ package openaicompat
 import (
 	"encoding/json"
 
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // continuationState is the openaicompat-scoped continuation blob carried in

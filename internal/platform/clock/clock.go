@@ -17,7 +17,7 @@
 //
 // The platform Clock is the canonical, richer time port used throughout the
 // services (it adds NewTimer and Since on top of Now/After). The narrower
-// [github.com/boltrope/boltrope/internal/platform/llm.Clock] is a kernel-local
+// [github.com/xd1lab/harness-ai/internal/platform/llm.Clock] is a kernel-local
 // contract the gateway's retry policy is written against; a Clock defined here
 // satisfies it structurally (same Now/After signatures), so production wiring can
 // pass one [Clock] everywhere.

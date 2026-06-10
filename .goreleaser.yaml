@@ -23,8 +23,9 @@
 #
 # Validate without releasing:  goreleaser check   /   goreleaser release --snapshot --clean
 #
-# NOTE: the `boltrope` owner segment in image names and the module path is a
-# PLACEHOLDER. Rename it to the real GitHub org/user before the first public tag.
+# Repo: github.com/xd1lab/harness-ai (GitHub owner `xd1lab`, repo `harness-ai`).
+# The `boltrope-*` image names and `project_name` keep the product name Boltrope by
+# design — only the GitHub owner / module path are tied to the hosting repo.
 version: 2
 
 project_name: boltrope
@@ -160,13 +161,13 @@ dockers:
     dockerfile: Dockerfile
     use: buildx
     image_templates:
-      - "ghcr.io/boltrope/boltrope-orchestratord:{{ .Version }}-amd64"
-      - "ghcr.io/boltrope/boltrope-orchestratord:latest-amd64"
+      - "ghcr.io/xd1lab/boltrope-orchestratord:{{ .Version }}-amd64"
+      - "ghcr.io/xd1lab/boltrope-orchestratord:latest-amd64"
     build_flag_templates:
       - "--platform=linux/amd64"
       - "--target=orchestratord"
       - "--build-arg=VERSION={{ .Version }}"
-      - "--label=org.opencontainers.image.source=https://github.com/boltrope/boltrope"
+      - "--label=org.opencontainers.image.source=https://github.com/xd1lab/harness-ai"
       - "--label=org.opencontainers.image.version={{ .Version }}"
       - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
       - "--label=org.opencontainers.image.licenses=Apache-2.0"
@@ -177,13 +178,13 @@ dockers:
     dockerfile: Dockerfile
     use: buildx
     image_templates:
-      - "ghcr.io/boltrope/boltrope-orchestratord:{{ .Version }}-arm64"
-      - "ghcr.io/boltrope/boltrope-orchestratord:latest-arm64"
+      - "ghcr.io/xd1lab/boltrope-orchestratord:{{ .Version }}-arm64"
+      - "ghcr.io/xd1lab/boltrope-orchestratord:latest-arm64"
     build_flag_templates:
       - "--platform=linux/arm64"
       - "--target=orchestratord"
       - "--build-arg=VERSION={{ .Version }}"
-      - "--label=org.opencontainers.image.source=https://github.com/boltrope/boltrope"
+      - "--label=org.opencontainers.image.source=https://github.com/xd1lab/harness-ai"
       - "--label=org.opencontainers.image.version={{ .Version }}"
       - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
       - "--label=org.opencontainers.image.licenses=Apache-2.0"
@@ -195,13 +196,13 @@ dockers:
     dockerfile: Dockerfile
     use: buildx
     image_templates:
-      - "ghcr.io/boltrope/boltrope-modelgwd:{{ .Version }}-amd64"
-      - "ghcr.io/boltrope/boltrope-modelgwd:latest-amd64"
+      - "ghcr.io/xd1lab/boltrope-modelgwd:{{ .Version }}-amd64"
+      - "ghcr.io/xd1lab/boltrope-modelgwd:latest-amd64"
     build_flag_templates:
       - "--platform=linux/amd64"
       - "--target=modelgwd"
       - "--build-arg=VERSION={{ .Version }}"
-      - "--label=org.opencontainers.image.source=https://github.com/boltrope/boltrope"
+      - "--label=org.opencontainers.image.source=https://github.com/xd1lab/harness-ai"
       - "--label=org.opencontainers.image.version={{ .Version }}"
       - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
       - "--label=org.opencontainers.image.licenses=Apache-2.0"
@@ -212,13 +213,13 @@ dockers:
     dockerfile: Dockerfile
     use: buildx
     image_templates:
-      - "ghcr.io/boltrope/boltrope-modelgwd:{{ .Version }}-arm64"
-      - "ghcr.io/boltrope/boltrope-modelgwd:latest-arm64"
+      - "ghcr.io/xd1lab/boltrope-modelgwd:{{ .Version }}-arm64"
+      - "ghcr.io/xd1lab/boltrope-modelgwd:latest-arm64"
     build_flag_templates:
       - "--platform=linux/arm64"
       - "--target=modelgwd"
       - "--build-arg=VERSION={{ .Version }}"
-      - "--label=org.opencontainers.image.source=https://github.com/boltrope/boltrope"
+      - "--label=org.opencontainers.image.source=https://github.com/xd1lab/harness-ai"
       - "--label=org.opencontainers.image.version={{ .Version }}"
       - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
       - "--label=org.opencontainers.image.licenses=Apache-2.0"
@@ -230,13 +231,13 @@ dockers:
     dockerfile: Dockerfile
     use: buildx
     image_templates:
-      - "ghcr.io/boltrope/boltrope-toolruntimed:{{ .Version }}-amd64"
-      - "ghcr.io/boltrope/boltrope-toolruntimed:latest-amd64"
+      - "ghcr.io/xd1lab/boltrope-toolruntimed:{{ .Version }}-amd64"
+      - "ghcr.io/xd1lab/boltrope-toolruntimed:latest-amd64"
     build_flag_templates:
       - "--platform=linux/amd64"
       - "--target=toolruntimed"
       - "--build-arg=VERSION={{ .Version }}"
-      - "--label=org.opencontainers.image.source=https://github.com/boltrope/boltrope"
+      - "--label=org.opencontainers.image.source=https://github.com/xd1lab/harness-ai"
       - "--label=org.opencontainers.image.version={{ .Version }}"
       - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
       - "--label=org.opencontainers.image.licenses=Apache-2.0"
@@ -247,13 +248,13 @@ dockers:
     dockerfile: Dockerfile
     use: buildx
     image_templates:
-      - "ghcr.io/boltrope/boltrope-toolruntimed:{{ .Version }}-arm64"
-      - "ghcr.io/boltrope/boltrope-toolruntimed:latest-arm64"
+      - "ghcr.io/xd1lab/boltrope-toolruntimed:{{ .Version }}-arm64"
+      - "ghcr.io/xd1lab/boltrope-toolruntimed:latest-arm64"
     build_flag_templates:
       - "--platform=linux/arm64"
       - "--target=toolruntimed"
       - "--build-arg=VERSION={{ .Version }}"
-      - "--label=org.opencontainers.image.source=https://github.com/boltrope/boltrope"
+      - "--label=org.opencontainers.image.source=https://github.com/xd1lab/harness-ai"
       - "--label=org.opencontainers.image.version={{ .Version }}"
       - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
       - "--label=org.opencontainers.image.licenses=Apache-2.0"
@@ -265,13 +266,13 @@ dockers:
     dockerfile: Dockerfile
     use: buildx
     image_templates:
-      - "ghcr.io/boltrope/boltrope-projectord:{{ .Version }}-amd64"
-      - "ghcr.io/boltrope/boltrope-projectord:latest-amd64"
+      - "ghcr.io/xd1lab/boltrope-projectord:{{ .Version }}-amd64"
+      - "ghcr.io/xd1lab/boltrope-projectord:latest-amd64"
     build_flag_templates:
       - "--platform=linux/amd64"
       - "--target=projectord"
       - "--build-arg=VERSION={{ .Version }}"
-      - "--label=org.opencontainers.image.source=https://github.com/boltrope/boltrope"
+      - "--label=org.opencontainers.image.source=https://github.com/xd1lab/harness-ai"
       - "--label=org.opencontainers.image.version={{ .Version }}"
       - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
       - "--label=org.opencontainers.image.licenses=Apache-2.0"
@@ -282,13 +283,13 @@ dockers:
     dockerfile: Dockerfile
     use: buildx
     image_templates:
-      - "ghcr.io/boltrope/boltrope-projectord:{{ .Version }}-arm64"
-      - "ghcr.io/boltrope/boltrope-projectord:latest-arm64"
+      - "ghcr.io/xd1lab/boltrope-projectord:{{ .Version }}-arm64"
+      - "ghcr.io/xd1lab/boltrope-projectord:latest-arm64"
     build_flag_templates:
       - "--platform=linux/arm64"
       - "--target=projectord"
       - "--build-arg=VERSION={{ .Version }}"
-      - "--label=org.opencontainers.image.source=https://github.com/boltrope/boltrope"
+      - "--label=org.opencontainers.image.source=https://github.com/xd1lab/harness-ai"
       - "--label=org.opencontainers.image.version={{ .Version }}"
       - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
       - "--label=org.opencontainers.image.licenses=Apache-2.0"
@@ -300,13 +301,13 @@ dockers:
     dockerfile: Dockerfile
     use: buildx
     image_templates:
-      - "ghcr.io/boltrope/boltrope-migrate:{{ .Version }}-amd64"
-      - "ghcr.io/boltrope/boltrope-migrate:latest-amd64"
+      - "ghcr.io/xd1lab/boltrope-migrate:{{ .Version }}-amd64"
+      - "ghcr.io/xd1lab/boltrope-migrate:latest-amd64"
     build_flag_templates:
       - "--platform=linux/amd64"
       - "--target=migrate"
       - "--build-arg=VERSION={{ .Version }}"
-      - "--label=org.opencontainers.image.source=https://github.com/boltrope/boltrope"
+      - "--label=org.opencontainers.image.source=https://github.com/xd1lab/harness-ai"
       - "--label=org.opencontainers.image.version={{ .Version }}"
       - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
       - "--label=org.opencontainers.image.licenses=Apache-2.0"
@@ -317,63 +318,63 @@ dockers:
     dockerfile: Dockerfile
     use: buildx
     image_templates:
-      - "ghcr.io/boltrope/boltrope-migrate:{{ .Version }}-arm64"
-      - "ghcr.io/boltrope/boltrope-migrate:latest-arm64"
+      - "ghcr.io/xd1lab/boltrope-migrate:{{ .Version }}-arm64"
+      - "ghcr.io/xd1lab/boltrope-migrate:latest-arm64"
     build_flag_templates:
       - "--platform=linux/arm64"
       - "--target=migrate"
       - "--build-arg=VERSION={{ .Version }}"
-      - "--label=org.opencontainers.image.source=https://github.com/boltrope/boltrope"
+      - "--label=org.opencontainers.image.source=https://github.com/xd1lab/harness-ai"
       - "--label=org.opencontainers.image.version={{ .Version }}"
       - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
       - "--label=org.opencontainers.image.licenses=Apache-2.0"
 
 # ── Multi-arch manifests (the tags users pull) ──────────────────────────────
 docker_manifests:
-  - name_template: "ghcr.io/boltrope/boltrope-orchestratord:{{ .Version }}"
+  - name_template: "ghcr.io/xd1lab/boltrope-orchestratord:{{ .Version }}"
     image_templates:
-      - "ghcr.io/boltrope/boltrope-orchestratord:{{ .Version }}-amd64"
-      - "ghcr.io/boltrope/boltrope-orchestratord:{{ .Version }}-arm64"
-  - name_template: "ghcr.io/boltrope/boltrope-orchestratord:latest"
+      - "ghcr.io/xd1lab/boltrope-orchestratord:{{ .Version }}-amd64"
+      - "ghcr.io/xd1lab/boltrope-orchestratord:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/xd1lab/boltrope-orchestratord:latest"
     image_templates:
-      - "ghcr.io/boltrope/boltrope-orchestratord:latest-amd64"
-      - "ghcr.io/boltrope/boltrope-orchestratord:latest-arm64"
+      - "ghcr.io/xd1lab/boltrope-orchestratord:latest-amd64"
+      - "ghcr.io/xd1lab/boltrope-orchestratord:latest-arm64"
 
-  - name_template: "ghcr.io/boltrope/boltrope-modelgwd:{{ .Version }}"
+  - name_template: "ghcr.io/xd1lab/boltrope-modelgwd:{{ .Version }}"
     image_templates:
-      - "ghcr.io/boltrope/boltrope-modelgwd:{{ .Version }}-amd64"
-      - "ghcr.io/boltrope/boltrope-modelgwd:{{ .Version }}-arm64"
-  - name_template: "ghcr.io/boltrope/boltrope-modelgwd:latest"
+      - "ghcr.io/xd1lab/boltrope-modelgwd:{{ .Version }}-amd64"
+      - "ghcr.io/xd1lab/boltrope-modelgwd:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/xd1lab/boltrope-modelgwd:latest"
     image_templates:
-      - "ghcr.io/boltrope/boltrope-modelgwd:latest-amd64"
-      - "ghcr.io/boltrope/boltrope-modelgwd:latest-arm64"
+      - "ghcr.io/xd1lab/boltrope-modelgwd:latest-amd64"
+      - "ghcr.io/xd1lab/boltrope-modelgwd:latest-arm64"
 
-  - name_template: "ghcr.io/boltrope/boltrope-toolruntimed:{{ .Version }}"
+  - name_template: "ghcr.io/xd1lab/boltrope-toolruntimed:{{ .Version }}"
     image_templates:
-      - "ghcr.io/boltrope/boltrope-toolruntimed:{{ .Version }}-amd64"
-      - "ghcr.io/boltrope/boltrope-toolruntimed:{{ .Version }}-arm64"
-  - name_template: "ghcr.io/boltrope/boltrope-toolruntimed:latest"
+      - "ghcr.io/xd1lab/boltrope-toolruntimed:{{ .Version }}-amd64"
+      - "ghcr.io/xd1lab/boltrope-toolruntimed:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/xd1lab/boltrope-toolruntimed:latest"
     image_templates:
-      - "ghcr.io/boltrope/boltrope-toolruntimed:latest-amd64"
-      - "ghcr.io/boltrope/boltrope-toolruntimed:latest-arm64"
+      - "ghcr.io/xd1lab/boltrope-toolruntimed:latest-amd64"
+      - "ghcr.io/xd1lab/boltrope-toolruntimed:latest-arm64"
 
-  - name_template: "ghcr.io/boltrope/boltrope-projectord:{{ .Version }}"
+  - name_template: "ghcr.io/xd1lab/boltrope-projectord:{{ .Version }}"
     image_templates:
-      - "ghcr.io/boltrope/boltrope-projectord:{{ .Version }}-amd64"
-      - "ghcr.io/boltrope/boltrope-projectord:{{ .Version }}-arm64"
-  - name_template: "ghcr.io/boltrope/boltrope-projectord:latest"
+      - "ghcr.io/xd1lab/boltrope-projectord:{{ .Version }}-amd64"
+      - "ghcr.io/xd1lab/boltrope-projectord:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/xd1lab/boltrope-projectord:latest"
     image_templates:
-      - "ghcr.io/boltrope/boltrope-projectord:latest-amd64"
-      - "ghcr.io/boltrope/boltrope-projectord:latest-arm64"
+      - "ghcr.io/xd1lab/boltrope-projectord:latest-amd64"
+      - "ghcr.io/xd1lab/boltrope-projectord:latest-arm64"
 
-  - name_template: "ghcr.io/boltrope/boltrope-migrate:{{ .Version }}"
+  - name_template: "ghcr.io/xd1lab/boltrope-migrate:{{ .Version }}"
     image_templates:
-      - "ghcr.io/boltrope/boltrope-migrate:{{ .Version }}-amd64"
-      - "ghcr.io/boltrope/boltrope-migrate:{{ .Version }}-arm64"
-  - name_template: "ghcr.io/boltrope/boltrope-migrate:latest"
+      - "ghcr.io/xd1lab/boltrope-migrate:{{ .Version }}-amd64"
+      - "ghcr.io/xd1lab/boltrope-migrate:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/xd1lab/boltrope-migrate:latest"
     image_templates:
-      - "ghcr.io/boltrope/boltrope-migrate:latest-amd64"
-      - "ghcr.io/boltrope/boltrope-migrate:latest-arm64"
+      - "ghcr.io/xd1lab/boltrope-migrate:latest-amd64"
+      - "ghcr.io/xd1lab/boltrope-migrate:latest-arm64"
 
 # ── Keyless signing (cosign + Sigstore) ─────────────────────────────────────
 # Signs the checksums file; the OIDC token comes from the release workflow.
@@ -427,6 +428,6 @@ changelog:
 
 release:
   github:
-    owner: boltrope
-    name: boltrope
+    owner: xd1lab
+    name: harness-ai
   prerelease: auto

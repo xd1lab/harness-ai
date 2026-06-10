@@ -6,9 +6,9 @@ import (
 	"io"
 	"sync"
 
-	genproto "github.com/boltrope/boltrope/gen/boltrope/v1"
-	"github.com/boltrope/boltrope/internal/orchestrator/app"
-	"github.com/boltrope/boltrope/internal/orchestrator/domain"
+	genproto "github.com/xd1lab/harness-ai/gen/boltrope/v1"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
 )
 
 // ApprovalNotifier is an OPTIONAL capability an [app.ApprovalGate] may implement

@@ -22,7 +22,7 @@ import (
 
 	"google.golang.org/genai"
 
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // errEOF is the sentinel [llm.StreamReader.Recv] returns once a stream is exhausted

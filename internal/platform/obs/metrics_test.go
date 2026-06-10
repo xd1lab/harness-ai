@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/boltrope/boltrope/internal/platform/obs"
+	"github.com/xd1lab/harness-ai/internal/platform/obs"
 )
 
 func TestMetrics_REDCounterIncrementsAndRenders(t *testing.T) {

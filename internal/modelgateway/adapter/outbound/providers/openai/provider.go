@@ -7,8 +7,8 @@ import (
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 
-	"github.com/boltrope/boltrope/internal/modelgateway/adapter/outbound/providers/openaicompat"
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/modelgateway/adapter/outbound/providers/openaicompat"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // Config configures a native OpenAI [Provider].

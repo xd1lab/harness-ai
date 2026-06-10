@@ -19,8 +19,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/boltrope/boltrope/internal/toolruntime/app"
-	"github.com/boltrope/boltrope/internal/toolruntime/domain"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/app"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/domain"
 )
 
 // ---------------------------------------------------------------------------

@@ -6,7 +6,7 @@ import (
 
 	"github.com/openai/openai-go/v3/responses"
 
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // runNormalizer feeds the synthetic Responses events through a fresh Normalizer and

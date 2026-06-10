@@ -1235,7 +1235,7 @@ const file_boltrope_v1_common_proto_rawDesc = "" +
 	"\x14TOOL_CHOICE_REQUIRED\x10\x03\x12\x14\n" +
 	"\x10TOOL_CHOICE_NONE\x10\x04\x12\x14\n" +
 	"\x10TOOL_CHOICE_TOOL\x10\x05B\xa4\x01\n" +
-	"\x0fcom.boltrope.v1B\vCommonProtoP\x01Z7github.com/boltrope/boltrope/gen/boltrope/v1;boltropev1\xa2\x02\x03BXX\xaa\x02\vBoltrope.V1\xca\x02\vBoltrope\\V1\xe2\x02\x17Boltrope\\V1\\GPBMetadata\xea\x02\fBoltrope::V1b\x06proto3"
+	"\x0fcom.boltrope.v1B\vCommonProtoP\x01Z7github.com/xd1lab/harness-ai/gen/boltrope/v1;boltropev1\xa2\x02\x03BXX\xaa\x02\vBoltrope.V1\xca\x02\vBoltrope\\V1\xe2\x02\x17Boltrope\\V1\\GPBMetadata\xea\x02\fBoltrope::V1b\x06proto3"
 
 var (
 	file_boltrope_v1_common_proto_rawDescOnce sync.Once

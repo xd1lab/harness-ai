@@ -25,7 +25,7 @@ package capabilities
 import (
 	"sync"
 
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // EndpointOverride holds capability overrides for all (or specific) models on

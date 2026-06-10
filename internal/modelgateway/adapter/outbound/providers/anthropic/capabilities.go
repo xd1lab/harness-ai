@@ -3,7 +3,7 @@ package anthropic
 import (
 	"strings"
 
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // capsEntry is a static per-model capability record. Capability variability on

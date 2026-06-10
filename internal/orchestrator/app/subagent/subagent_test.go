@@ -22,15 +22,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/boltrope/boltrope/internal/orchestrator/app"
-	"github.com/boltrope/boltrope/internal/orchestrator/app/agent"
-	"github.com/boltrope/boltrope/internal/orchestrator/app/apptest"
-	"github.com/boltrope/boltrope/internal/orchestrator/app/subagent"
-	"github.com/boltrope/boltrope/internal/orchestrator/domain"
-	"github.com/boltrope/boltrope/internal/orchestrator/policy/policytest"
-	"github.com/boltrope/boltrope/internal/platform/clock/clocktest"
-	"github.com/boltrope/boltrope/internal/platform/ids/idstest"
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app/agent"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app/apptest"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app/subagent"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/policy/policytest"
+	"github.com/xd1lab/harness-ai/internal/platform/clock/clocktest"
+	"github.com/xd1lab/harness-ai/internal/platform/ids/idstest"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // ---------------------------------------------------------------------------

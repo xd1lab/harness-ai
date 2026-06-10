@@ -16,7 +16,7 @@ import (
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
-	"github.com/boltrope/boltrope/internal/platform/grpcx"
+	"github.com/xd1lab/harness-ai/internal/platform/grpcx"
 )
 
 // shutdownTimeout bounds the graceful-drain + closer + telemetry-flush phase so a

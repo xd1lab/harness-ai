@@ -6,8 +6,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/boltrope/boltrope/internal/toolruntime/app"
-	"github.com/boltrope/boltrope/internal/toolruntime/domain"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/app"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/domain"
 )
 
 // hostFromURL extracts the host (without port) from a raw URL for an egress

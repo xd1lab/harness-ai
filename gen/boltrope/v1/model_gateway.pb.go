@@ -965,7 +965,7 @@ const file_boltrope_v1_model_gateway_proto_rawDesc = "" +
 	"\bGenerate\x12\x1c.boltrope.v1.GenerateRequest\x1a\x18.boltrope.v1.StreamEvent0\x01\x12P\n" +
 	"\vCountTokens\x12\x1f.boltrope.v1.CountTokensRequest\x1a .boltrope.v1.CountTokensResponse\x12\\\n" +
 	"\x0fGetCapabilities\x12#.boltrope.v1.GetCapabilitiesRequest\x1a$.boltrope.v1.GetCapabilitiesResponseB\xaa\x01\n" +
-	"\x0fcom.boltrope.v1B\x11ModelGatewayProtoP\x01Z7github.com/boltrope/boltrope/gen/boltrope/v1;boltropev1\xa2\x02\x03BXX\xaa\x02\vBoltrope.V1\xca\x02\vBoltrope\\V1\xe2\x02\x17Boltrope\\V1\\GPBMetadata\xea\x02\fBoltrope::V1b\x06proto3"
+	"\x0fcom.boltrope.v1B\x11ModelGatewayProtoP\x01Z7github.com/xd1lab/harness-ai/gen/boltrope/v1;boltropev1\xa2\x02\x03BXX\xaa\x02\vBoltrope.V1\xca\x02\vBoltrope\\V1\xe2\x02\x17Boltrope\\V1\\GPBMetadata\xea\x02\fBoltrope::V1b\x06proto3"
 
 var (
 	file_boltrope_v1_model_gateway_proto_rawDescOnce sync.Once

@@ -5,7 +5,7 @@
 # our SHA-pinned workflows together, so pinning stays maintainable.
 version: 2
 updates:
-  # Go modules (root module: github.com/boltrope/boltrope).
+  # Go modules (root module: github.com/xd1lab/harness-ai).
   - package-ecosystem: gomod
     directory: "/"
     schedule:

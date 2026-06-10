@@ -2,7 +2,7 @@
 // architecture §10.4). It runs the xmin-bounded safe-advance projection loop —
 // cost rollup, projection-lag gauge, and the orphan-blob sweeper — as a
 // background worker while serving gRPC health + HTTP /livez,/readyz,/metrics via
-// the shared [github.com/boltrope/boltrope/internal/platform/daemon] harness.
+// the shared [github.com/xd1lab/harness-ai/internal/platform/daemon] harness.
 // It never blocks an append: it reads the events table directly from a gap-safe
 // cursor (architecture §10.4).
 //
@@ -26,10 +26,10 @@ import (
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"google.golang.org/grpc"
 
-	"github.com/boltrope/boltrope/internal/orchestrator/projection"
-	"github.com/boltrope/boltrope/internal/platform/blob"
-	"github.com/boltrope/boltrope/internal/platform/config"
-	"github.com/boltrope/boltrope/internal/platform/daemon"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/projection"
+	"github.com/xd1lab/harness-ai/internal/platform/blob"
+	"github.com/xd1lab/harness-ai/internal/platform/config"
+	"github.com/xd1lab/harness-ai/internal/platform/daemon"
 )
 
 const serviceName = "projectord"

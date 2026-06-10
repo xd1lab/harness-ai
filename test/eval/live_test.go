@@ -38,16 +38,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/boltrope/boltrope/internal/modelgateway/adapter/outbound/providers/anthropic"
-	"github.com/boltrope/boltrope/internal/modelgateway/adapter/outbound/providers/openai"
-	"github.com/boltrope/boltrope/internal/modelgateway/adapter/outbound/providers/openaicompat"
-	"github.com/boltrope/boltrope/internal/orchestrator/app"
-	"github.com/boltrope/boltrope/internal/orchestrator/app/agent"
-	"github.com/boltrope/boltrope/internal/orchestrator/app/apptest"
-	"github.com/boltrope/boltrope/internal/orchestrator/domain"
-	"github.com/boltrope/boltrope/internal/orchestrator/policy"
-	"github.com/boltrope/boltrope/internal/platform/clock"
-	"github.com/boltrope/boltrope/internal/platform/ids"
+	"github.com/xd1lab/harness-ai/internal/modelgateway/adapter/outbound/providers/anthropic"
+	"github.com/xd1lab/harness-ai/internal/modelgateway/adapter/outbound/providers/openai"
+	"github.com/xd1lab/harness-ai/internal/modelgateway/adapter/outbound/providers/openaicompat"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app/agent"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app/apptest"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/policy"
+	"github.com/xd1lab/harness-ai/internal/platform/clock"
+	"github.com/xd1lab/harness-ai/internal/platform/ids"
 )
 
 // liveProviderSpec is one provider tier of the live smoke suite: a stable

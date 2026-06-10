@@ -3,7 +3,7 @@ package anthropic
 import (
 	sdk "github.com/anthropics/anthropic-sdk-go"
 
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // usageFromMessage converts the full [sdk.Usage] carried on message_start (and on

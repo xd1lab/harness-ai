@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/boltrope/boltrope/internal/platform/clock"
+	"github.com/xd1lab/harness-ai/internal/platform/clock"
 )
 
 // TestSystem_InterfaceCompliance ensures clock.System satisfies clock.Clock at

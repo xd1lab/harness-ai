@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/boltrope/boltrope/internal/platform/obs"
-	"github.com/boltrope/boltrope/internal/platform/secret"
+	"github.com/xd1lab/harness-ai/internal/platform/obs"
+	"github.com/xd1lab/harness-ai/internal/platform/secret"
 )
 
 // providerConfig mirrors a realistic config struct that carries a secret field.

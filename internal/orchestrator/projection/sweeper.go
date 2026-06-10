@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/boltrope/boltrope/internal/platform/blob"
+	"github.com/xd1lab/harness-ai/internal/platform/blob"
 )
 
 // DefaultSweepGracePeriod is the default age a blob must reach with no

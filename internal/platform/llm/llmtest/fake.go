@@ -33,7 +33,7 @@ import (
 	"io"
 	"sync/atomic"
 
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // Compile-time assertions.

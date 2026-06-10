@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/boltrope/boltrope/internal/platform/clock/clocktest"
+	"github.com/xd1lab/harness-ai/internal/platform/clock/clocktest"
 )
 
 func TestFake_NowReturnsInitial(t *testing.T) {

@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/boltrope/boltrope/internal/platform/grpcx"
+	"github.com/xd1lab/harness-ai/internal/platform/grpcx"
 )
 
 // version is the build version stamped via -ldflags at release time.

@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/boltrope/boltrope/internal/platform/ids"
+	"github.com/xd1lab/harness-ai/internal/platform/ids"
 )
 
 // TestSystem_InterfaceCompliance ensures ids.System satisfies ids.IDGenerator at

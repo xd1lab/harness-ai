@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/boltrope/boltrope/internal/platform/config"
+	"github.com/xd1lab/harness-ai/internal/platform/config"
 )
 
 // writeYAML writes a temporary YAML config file and returns its path.

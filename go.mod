@@ -1,4 +1,4 @@
-module github.com/boltrope/boltrope
+module github.com/xd1lab/harness-ai
 
 go 1.25.0
 

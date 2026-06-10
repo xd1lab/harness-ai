@@ -1,7 +1,7 @@
 package agent
 
 import (
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // ClientSink is the consumer-defined port the loop uses to forward live
@@ -45,7 +45,7 @@ type MetricsRecorder interface {
 
 // CostFunc computes the USD cost of a turn from the model id and the normalized
 // [llm.Usage] read off the provider stream. It is injected (production wiring
-// passes [github.com/boltrope/boltrope/internal/platform/pricing.Cost]; tests
+// passes [github.com/xd1lab/harness-ai/internal/platform/pricing.Cost]; tests
 // pass a deterministic function) so budget enforcement is testable without
 // coupling the loop to a pricing table. A nil CostFunc yields zero cost. An
 // error is treated as zero cost for that turn (cost is best-effort for the

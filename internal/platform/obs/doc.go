@@ -3,7 +3,7 @@
 // §9, FR-OBS-01..05):
 //
 //   - Structured logging — a [log/slog] JSON logger ([NewLogger]) whose handler
-//     redacts [github.com/boltrope/boltrope/internal/platform/secret.Secret]
+//     redacts [github.com/xd1lab/harness-ai/internal/platform/secret.Secret]
 //     values (via slog's LogValuer) and injects the active OTel span's trace_id
 //     and span_id into every record so logs correlate to traces (FR-OBS-03,
 //     NFR-OBS-02).

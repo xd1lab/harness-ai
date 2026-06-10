@@ -33,13 +33,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/boltrope/boltrope/internal/orchestrator/app"
-	"github.com/boltrope/boltrope/internal/orchestrator/app/agent"
-	"github.com/boltrope/boltrope/internal/orchestrator/app/apptest"
-	"github.com/boltrope/boltrope/internal/orchestrator/domain"
-	"github.com/boltrope/boltrope/internal/orchestrator/policy"
-	"github.com/boltrope/boltrope/internal/platform/llm"
-	"github.com/boltrope/boltrope/internal/platform/llm/llmtest"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app/agent"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app/apptest"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/policy"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm/llmtest"
 )
 
 // ---------------------------------------------------------------------------

@@ -22,7 +22,7 @@ const (
 //
 //   - uses [slog.JSONHandler] (FR-OBS-03: JSON in production);
 //   - honors [slog.LogValuer], so a
-//     [github.com/boltrope/boltrope/internal/platform/secret.Secret] (or any
+//     [github.com/xd1lab/harness-ai/internal/platform/secret.Secret] (or any
 //     value implementing LogValuer to mask itself) is recorded as "[REDACTED]",
 //     never its plaintext;
 //   - injects trace_id and span_id from the active OTel span carried on the

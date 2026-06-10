@@ -20,7 +20,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
-	boltropev1 "github.com/boltrope/boltrope/gen/boltrope/v1"
+	boltropev1 "github.com/xd1lab/harness-ai/gen/boltrope/v1"
 )
 
 // ---- fake server -------------------------------------------------------

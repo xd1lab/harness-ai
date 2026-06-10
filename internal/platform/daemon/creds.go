@@ -8,7 +8,7 @@ import (
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"google.golang.org/grpc/credentials"
 
-	"github.com/boltrope/boltrope/internal/platform/grpcx"
+	"github.com/xd1lab/harness-ai/internal/platform/grpcx"
 )
 
 // ErrNoServerIdentity is returned by [ServerCredentials] when a non-dev process

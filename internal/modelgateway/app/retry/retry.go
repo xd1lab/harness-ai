@@ -46,7 +46,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // Rand is the randomness port injected into the retry policy.  The single

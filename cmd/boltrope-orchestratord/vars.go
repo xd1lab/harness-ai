@@ -3,7 +3,7 @@ package main
 import (
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 
-	"github.com/boltrope/boltrope/internal/platform/grpcx"
+	"github.com/xd1lab/harness-ai/internal/platform/grpcx"
 )
 
 // version is the build version stamped via -ldflags at release time.

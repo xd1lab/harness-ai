@@ -1,5 +1,5 @@
 // Package apptest provides deterministic fakes for every consumer-defined port
-// in [github.com/boltrope/boltrope/internal/orchestrator/app]:
+// in [github.com/xd1lab/harness-ai/internal/orchestrator/app]:
 // [app.EventLogPort], [app.ModelGatewayPort], [app.ToolRuntimePort],
 // [app.ToolStream], [app.ApprovalGate], [app.HookRunner], and
 // [app.SubAgentPort].
@@ -17,9 +17,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/boltrope/boltrope/internal/orchestrator/app"
-	"github.com/boltrope/boltrope/internal/orchestrator/domain"
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // ---------------------------------------------------------------------------

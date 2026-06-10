@@ -3,7 +3,7 @@ package domain
 import (
 	"time"
 
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // EventType is the discriminator for an event stored in the append-only log. It

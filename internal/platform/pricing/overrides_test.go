@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/boltrope/boltrope/internal/platform/llm"
-	"github.com/boltrope/boltrope/internal/platform/pricing"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/pricing"
 )
 
 // epsilon is the floating-point tolerance shared by the cost assertions below.

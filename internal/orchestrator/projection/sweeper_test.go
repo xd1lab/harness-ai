@@ -14,9 +14,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/boltrope/boltrope/internal/platform/blob"
-	"github.com/boltrope/boltrope/internal/platform/blob/blobtest"
-	"github.com/boltrope/boltrope/internal/platform/clock/clocktest"
+	"github.com/xd1lab/harness-ai/internal/platform/blob"
+	"github.com/xd1lab/harness-ai/internal/platform/blob/blobtest"
+	"github.com/xd1lab/harness-ai/internal/platform/clock/clocktest"
 )
 
 // sweepConn is a hand-built [Conn] for the sweeper: it serves the orphan scan

@@ -7,8 +7,8 @@
 //
 // This is the only place the orchestrator maps gen/ wire types ⇄ domain / llm
 // kernel types on the client edge (architecture §12.4). The agent loop
-// ([github.com/boltrope/boltrope/internal/orchestrator/app/agent]) and the
-// consumer-defined ports ([github.com/boltrope/boltrope/internal/orchestrator/app])
+// ([github.com/xd1lab/harness-ai/internal/orchestrator/app/agent]) and the
+// consumer-defined ports ([github.com/xd1lab/harness-ai/internal/orchestrator/app])
 // never see gen/; the [Server] adapts between them.
 //
 // # Run (server-stream, resumable)

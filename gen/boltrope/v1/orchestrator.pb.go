@@ -1602,7 +1602,7 @@ const file_boltrope_v1_orchestrator_proto_rawDesc = "" +
 	"\x03Run\x12\x17.boltrope.v1.RunRequest\x1a\x15.boltrope.v1.RunEvent0\x01\x12D\n" +
 	"\aControl\x12\x1b.boltrope.v1.ControlRequest\x1a\x1c.boltrope.v1.ControlResponse\x12;\n" +
 	"\x04Fork\x12\x18.boltrope.v1.ForkRequest\x1a\x19.boltrope.v1.ForkResponseB\xaa\x01\n" +
-	"\x0fcom.boltrope.v1B\x11OrchestratorProtoP\x01Z7github.com/boltrope/boltrope/gen/boltrope/v1;boltropev1\xa2\x02\x03BXX\xaa\x02\vBoltrope.V1\xca\x02\vBoltrope\\V1\xe2\x02\x17Boltrope\\V1\\GPBMetadata\xea\x02\fBoltrope::V1b\x06proto3"
+	"\x0fcom.boltrope.v1B\x11OrchestratorProtoP\x01Z7github.com/xd1lab/harness-ai/gen/boltrope/v1;boltropev1\xa2\x02\x03BXX\xaa\x02\vBoltrope.V1\xca\x02\vBoltrope\\V1\xe2\x02\x17Boltrope\\V1\\GPBMetadata\xea\x02\fBoltrope::V1b\x06proto3"
 
 var (
 	file_boltrope_v1_orchestrator_proto_rawDescOnce sync.Once

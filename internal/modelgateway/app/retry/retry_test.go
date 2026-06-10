@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/boltrope/boltrope/internal/modelgateway/app/retry"
-	"github.com/boltrope/boltrope/internal/platform/clock/clocktest"
-	"github.com/boltrope/boltrope/internal/platform/llm"
-	"github.com/boltrope/boltrope/internal/platform/llm/llmtest"
+	"github.com/xd1lab/harness-ai/internal/modelgateway/app/retry"
+	"github.com/xd1lab/harness-ai/internal/platform/clock/clocktest"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm/llmtest"
 )
 
 // ---------------------------------------------------------------------------

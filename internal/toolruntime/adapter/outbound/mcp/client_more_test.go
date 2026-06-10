@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/boltrope/boltrope/internal/toolruntime/app"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/app"
 )
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 // Package runtime implements the tool-runtime's
-// [github.com/boltrope/boltrope/internal/toolruntime/app.RuntimePort] and
-// [github.com/boltrope/boltrope/internal/toolruntime/app.Workspace] over the Docker
+// [github.com/xd1lab/harness-ai/internal/toolruntime/app.RuntimePort] and
+// [github.com/xd1lab/harness-ai/internal/toolruntime/app.Workspace] over the Docker
 // CLI. It is the v1 container backend for the trust boundary that runs
 // model-influenced code (ADR-0005; ADR-0014; architecture §7.5, §9.3, §10.6).
 //

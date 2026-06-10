@@ -7,8 +7,8 @@
 package modelgw
 
 import (
-	genproto "github.com/boltrope/boltrope/gen/boltrope/v1"
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	genproto "github.com/xd1lab/harness-ai/gen/boltrope/v1"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // normalizeEvent maps a single gen.StreamEvent oneof to a llm.StreamEvent.

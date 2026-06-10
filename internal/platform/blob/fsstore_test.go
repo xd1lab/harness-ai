@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/boltrope/boltrope/internal/platform/blob"
+	"github.com/xd1lab/harness-ai/internal/platform/blob"
 )
 
 // newTestFS creates a filesystem-backed store rooted in a temp dir.

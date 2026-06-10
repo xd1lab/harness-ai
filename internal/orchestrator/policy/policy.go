@@ -45,7 +45,7 @@ package policy
 import (
 	"context"
 
-	"github.com/boltrope/boltrope/internal/orchestrator/domain"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
 )
 
 // Decision is the outcome of evaluating the permission pipeline for a single tool
@@ -62,7 +62,7 @@ const (
 	// §8.13: "deny always wins unconditionally").
 	Deny Decision = "deny"
 	// Ask requires human-in-the-loop approval via the
-	// [github.com/boltrope/boltrope/internal/orchestrator/app.ApprovalGate]. It is
+	// [github.com/xd1lab/harness-ai/internal/orchestrator/app.ApprovalGate]. It is
 	// the default fallthrough for an action that is neither denied, mode-resolved,
 	// nor explicitly allowed, and is also the result of a taint-gate escalation of
 	// an external-comms action (architecture §8.4).
@@ -162,7 +162,7 @@ type RuleSet struct {
 type Input struct {
 	// SessionID is the session the dispatch belongs to.
 	SessionID string
-	// CallID is the [github.com/boltrope/boltrope/internal/platform/llm.ToolCall]
+	// CallID is the [github.com/xd1lab/harness-ai/internal/platform/llm.ToolCall]
 	// id of the dispatch.
 	CallID string
 	// ToolName is the tool being dispatched.
@@ -189,7 +189,7 @@ type Input struct {
 // Result is the outcome of a [PolicyEngine.Evaluate] call: the [Decision] plus the
 // matched rule (or mode) that produced it and a human-readable reason, suitable for
 // raising an
-// [github.com/boltrope/boltrope/internal/orchestrator/app.ApprovalRequest] on [Ask]
+// [github.com/xd1lab/harness-ai/internal/orchestrator/app.ApprovalRequest] on [Ask]
 // and for recording a [domain.PermissionDecided] event.
 type Result struct {
 	// Decision is the pipeline outcome.

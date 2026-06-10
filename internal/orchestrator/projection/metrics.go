@@ -8,13 +8,13 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
-	"github.com/boltrope/boltrope/internal/platform/obs"
+	"github.com/xd1lab/harness-ai/internal/platform/obs"
 )
 
 // meterName is the OTel instrumentation scope for projectord's metrics. It names
 // this package so the cost instrument is attributable to the projection worker in
 // the exported scope.
-const meterName = "github.com/boltrope/boltrope/internal/orchestrator/projection"
+const meterName = "github.com/xd1lab/harness-ai/internal/orchestrator/projection"
 
 // otelMetrics is the production [MetricSink]: it sets the projection-lag
 // USE gauge on the shared [obs.Metrics] (so /metrics exposes projection_lag_events

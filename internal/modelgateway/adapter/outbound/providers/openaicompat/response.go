@@ -6,7 +6,7 @@ import (
 
 	openai "github.com/openai/openai-go/v3"
 
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // assembleResponse converts a non-streaming [openai.ChatCompletion] into the

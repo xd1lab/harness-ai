@@ -10,7 +10,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // eventCases enumerates EVERY event payload kind with a representative

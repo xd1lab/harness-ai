@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/boltrope/boltrope/internal/platform/blob"
-	"github.com/boltrope/boltrope/internal/toolruntime/app"
-	"github.com/boltrope/boltrope/internal/toolruntime/domain"
+	"github.com/xd1lab/harness-ai/internal/platform/blob"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/app"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/domain"
 )
 
 // BlobThresholdBytes is the inline-output threshold: a tool result whose content

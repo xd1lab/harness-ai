@@ -1,8 +1,8 @@
 package openai
 
 import (
-	"github.com/boltrope/boltrope/internal/modelgateway/adapter/outbound/providers/openaicompat"
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/modelgateway/adapter/outbound/providers/openaicompat"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // DefaultCapabilities returns the capability set for a current tool-capable OpenAI

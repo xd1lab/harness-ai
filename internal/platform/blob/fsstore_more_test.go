@@ -16,7 +16,7 @@ import (
 	"testing"
 	"testing/iotest"
 
-	"github.com/boltrope/boltrope/internal/platform/blob"
+	"github.com/xd1lab/harness-ai/internal/platform/blob"
 )
 
 // TestRefIsZero pins the unset-ref predicate: only the fully empty composite

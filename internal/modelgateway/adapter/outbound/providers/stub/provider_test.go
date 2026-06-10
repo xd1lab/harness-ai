@@ -7,8 +7,8 @@ import (
 	"io"
 	"testing"
 
-	"github.com/boltrope/boltrope/internal/modelgateway/adapter/outbound/providers/stub"
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/modelgateway/adapter/outbound/providers/stub"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // drain reads r to completion and returns all events collected before io.EOF.

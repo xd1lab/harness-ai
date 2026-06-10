@@ -25,9 +25,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	genproto "github.com/boltrope/boltrope/gen/boltrope/v1"
-	"github.com/boltrope/boltrope/internal/toolruntime/app/execute"
-	"github.com/boltrope/boltrope/internal/toolruntime/domain"
+	genproto "github.com/xd1lab/harness-ai/gen/boltrope/v1"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/app/execute"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/domain"
 )
 
 // executor is the consumer-defined port the transport needs for ExecuteTool: the
@@ -62,7 +62,7 @@ var _ genproto.ToolRuntimeServiceServer = (*Server)(nil)
 
 // NewServer returns a *Server backed by the ExecuteTool use-case exec and the
 // tool registry reg. exec is typically a [*execute.Service]; reg is typically the
-// tool-runtime [github.com/boltrope/boltrope/internal/toolruntime/adapter/registry.Registry].
+// tool-runtime [github.com/xd1lab/harness-ai/internal/toolruntime/adapter/registry.Registry].
 func NewServer(exec executor, reg lister) *Server {
 	return &Server{exec: exec, reg: reg}
 }

@@ -29,13 +29,13 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 
-	genproto "github.com/boltrope/boltrope/gen/boltrope/v1"
-	"github.com/boltrope/boltrope/internal/platform/blob/blobtest"
-	"github.com/boltrope/boltrope/internal/toolruntime/adapter/registry"
-	"github.com/boltrope/boltrope/internal/toolruntime/app"
-	"github.com/boltrope/boltrope/internal/toolruntime/app/execute"
-	"github.com/boltrope/boltrope/internal/toolruntime/app/truntimetest"
-	"github.com/boltrope/boltrope/internal/toolruntime/domain"
+	genproto "github.com/xd1lab/harness-ai/gen/boltrope/v1"
+	"github.com/xd1lab/harness-ai/internal/platform/blob/blobtest"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/registry"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/app"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/app/execute"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/app/truntimetest"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/domain"
 )
 
 const bufSize = 1 << 20 // 1 MiB

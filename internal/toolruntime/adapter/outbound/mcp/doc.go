@@ -1,4 +1,4 @@
-// Package mcp implements [github.com/boltrope/boltrope/internal/toolruntime/app.MCPClientPort]
+// Package mcp implements [github.com/xd1lab/harness-ai/internal/toolruntime/app.MCPClientPort]
 // as a minimal Model Context Protocol (MCP) client over JSON-RPC 2.0 on a stdio
 // transport. It is one of the tool-runtime's outbound adapters: it spawns a
 // third-party MCP server as a confined subprocess and talks to it over the
@@ -16,7 +16,7 @@
 //   - tools/list — fetched LAZILY, only when the registry asks (via
 //     [Client.ListTools]); never eagerly at construction.
 //   - tools/call — invokes a tool ([Client.CallTool]) and maps the result's
-//     content blocks to a [github.com/boltrope/boltrope/internal/toolruntime/domain.Observation].
+//     content blocks to a [github.com/xd1lab/harness-ai/internal/toolruntime/domain.Observation].
 //
 // Each [Client.ListTools]/[Client.CallTool] call spawns a fresh stdio session
 // (subprocess), performs the handshake, issues the one request, and tears the
@@ -30,14 +30,14 @@
 // therefore:
 //
 //   - Treats tool NAMES, DESCRIPTIONS, and SCHEMAS from the server as untrusted
-//     DATA. They are carried verbatim onto [github.com/boltrope/boltrope/internal/toolruntime/domain.ToolSpec]
+//     DATA. They are carried verbatim onto [github.com/xd1lab/harness-ai/internal/toolruntime/domain.ToolSpec]
 //     and surfaced to the registry's approval-on-first-use gate; they are never
 //     interpreted as instructions and never injected into a model prompt by this
 //     package. Tool-poisoning text in a description survives byte-for-byte so a
 //     reviewer (or the approval queue) can see exactly what the server sent.
 //   - Defaults every discovered tool to the FAIL-SAFE classifications
-//     [github.com/boltrope/boltrope/internal/toolruntime/domain.SideEffectMutating]
-//     and [github.com/boltrope/boltrope/internal/toolruntime/domain.EgressClassExternal]
+//     [github.com/xd1lab/harness-ai/internal/toolruntime/domain.SideEffectMutating]
+//     and [github.com/xd1lab/harness-ai/internal/toolruntime/domain.EgressClassExternal]
 //     — never ReadOnly/None — so an unannotated MCP tool is maximally gated.
 //   - Pins server identity/version: [app.MCPServerRef.VersionPin], when set, is
 //     compared against the hash of the server's reported serverInfo

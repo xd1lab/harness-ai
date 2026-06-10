@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/boltrope/boltrope/internal/orchestrator/adapter/inbound/approval"
-	"github.com/boltrope/boltrope/internal/orchestrator/app"
-	"github.com/boltrope/boltrope/internal/orchestrator/domain"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/adapter/inbound/approval"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
 )
 
 // compile-time assertion: *Gate satisfies app.ApprovalGate.

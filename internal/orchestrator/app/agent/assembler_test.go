@@ -13,9 +13,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/boltrope/boltrope/internal/orchestrator/app/agent"
-	"github.com/boltrope/boltrope/internal/platform/llm"
-	"github.com/boltrope/boltrope/internal/platform/llm/llmtest"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app/agent"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm/llmtest"
 )
 
 // textParts extracts the concatenated text from all TextPart content parts of a
@@ -481,7 +481,7 @@ func TestAssembler_NoGenOrSDKImports(t *testing.T) {
 	require.NoError(t, err)
 
 	forbidden := []string{
-		"github.com/boltrope/boltrope/gen",
+		"github.com/xd1lab/harness-ai/gen",
 		"google.golang.org/grpc",
 		"github.com/anthropics/anthropic-sdk-go",
 		"google.golang.org/genai",

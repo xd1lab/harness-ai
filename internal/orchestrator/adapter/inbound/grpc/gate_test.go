@@ -5,8 +5,8 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/boltrope/boltrope/internal/orchestrator/app"
-	"github.com/boltrope/boltrope/internal/orchestrator/domain"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
 )
 
 // notifyingGate is a test [app.ApprovalGate] that also implements

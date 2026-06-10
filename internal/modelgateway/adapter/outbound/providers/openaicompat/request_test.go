@@ -6,7 +6,7 @@ import (
 
 	"github.com/openai/openai-go/v3/packages/param"
 
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // marshalParams renders the built params to JSON so the wire shape can be asserted

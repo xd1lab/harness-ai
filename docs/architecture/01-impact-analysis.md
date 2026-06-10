@@ -75,7 +75,7 @@ Because this is greenfield, every component below is *new*. Listed by deployable
 
 A dependency-ordered path that lets failing tests be written first (TDD) at each step.
 
-1. **Foundations (no service logic).** Module `github.com/boltrope/boltrope`; `buf` + `proto/boltrope/v1/{common,orchestrator,model_gateway,tool_runtime}.proto` (**no event_store.proto**); commit `gen/`; `platform/{config,obs,grpcx}`; `.golangci.yml` with `depguard`/`forbidigo` (no direct `time.Now`/`rand`/`uuid.New`; `platform/llm` imports no `gen/`/SDK; no cross-service `domain`/`app` imports).
+1. **Foundations (no service logic).** Module `github.com/xd1lab/harness-ai`; `buf` + `proto/boltrope/v1/{common,orchestrator,model_gateway,tool_runtime}.proto` (**no event_store.proto**); commit `gen/`; `platform/{config,obs,grpcx}`; `.golangci.yml` with `depguard`/`forbidigo` (no direct `time.Now`/`rand`/`uuid.New`; `platform/llm` imports no `gen/`/SDK; no cross-service `domain`/`app` imports).
 2. **`platform/llm`.** The normalized message/tool/stop-reason/usage model + `Provider`/`StreamReader` interfaces (the single source of truth). Pure unit tests.
 3. **Event-store package + migrations.** `migrations/*.sql` (expand/contract); `boltrope-migrate`; the `Store` struct (`Append` optimistic+fenced+idempotent, `Load`, `Fork`, `Subscribe`, `LoadSnapshot`). **Testcontainers** tests: optimistic conflict, fencing, idempotent re-append (`request_id`), contiguity, RLS predicate-removed, concurrent-append race.
 4. **model-gateway.** `ProviderPort` + per-`(endpoint,model)` capabilities + retry (injected Clock/Jitter) + the ≥3 stream normalizers + `Pause`/`provider_raw`. Adapter unit tests with recorded fixtures; `bufconn` mapping tests. (Real-SDK wiring can lag behind fakes.)

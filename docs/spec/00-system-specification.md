@@ -2,7 +2,7 @@
 
 > **Status:** Gate 2 — accepted.
 > **Date:** 2026-06-10
-> **Project:** `github.com/boltrope/boltrope`
+> **Project:** `github.com/xd1lab/harness-ai`
 > **Tagline:** _A provider-portable, event-sourced AI agent harness in Go._
 > **Inputs:** `docs/research/00-research-report.md`; ADRs 0001–0008; `docs/architecture/00-architecture.md`; `docs/architecture/01-impact-analysis.md`.
 > **Audience:** Engineers writing contracts, TDD plans, and the implementation gating review.

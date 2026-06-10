@@ -5,7 +5,7 @@ import (
 
 	"github.com/openai/openai-go/v3/responses"
 
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // surfaceResponses is the continuation-blob surface tag for the OpenAI Responses

@@ -7,8 +7,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/boltrope/boltrope/internal/platform/secret"
-	"github.com/boltrope/boltrope/internal/platform/secret/secrettest"
+	"github.com/xd1lab/harness-ai/internal/platform/secret"
+	"github.com/xd1lab/harness-ai/internal/platform/secret/secrettest"
 )
 
 func TestFakeSecrets_GetFound(t *testing.T) {

@@ -3,10 +3,10 @@ package grpc
 import (
 	"encoding/json"
 
-	genproto "github.com/boltrope/boltrope/gen/boltrope/v1"
-	"github.com/boltrope/boltrope/internal/orchestrator/domain"
-	"github.com/boltrope/boltrope/internal/orchestrator/policy"
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	genproto "github.com/xd1lab/harness-ai/gen/boltrope/v1"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/policy"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // This file is the only place the orchestrator's client edge maps gen/ wire

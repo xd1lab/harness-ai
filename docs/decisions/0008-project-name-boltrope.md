@@ -14,7 +14,7 @@ trademark confusion. We need a distinctive, memorable, collision-light name and 
 
 Name the project **Boltrope** — the rope sewn into the edge of a sail to strengthen it
 and bind it to the rigging. It is a nautical metaphor for the harness that binds and
-controls the "sail" (the LLM). Module path: **`github.com/boltrope/boltrope`** (the
+controls the "sail" (the LLM). Module path: **`github.com/xd1lab/harness-ai`** (the
 owner segment is a placeholder; the maintainer should change it to their real GitHub
 org/user before publishing). A background research agent checked for obvious
 collisions with prominent AI/dev-tool projects before selecting it.

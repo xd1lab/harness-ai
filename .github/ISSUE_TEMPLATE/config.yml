@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Question / discussion
-    url: https://github.com/boltrope/boltrope/discussions
+    url: https://github.com/xd1lab/harness-ai/discussions
     about: Ask questions and discuss ideas here.
   - name: Report a security vulnerability (private)
-    url: https://github.com/boltrope/boltrope/security/advisories/new
+    url: https://github.com/xd1lab/harness-ai/security/advisories/new
     about: Report security issues privately — do not open a public issue.

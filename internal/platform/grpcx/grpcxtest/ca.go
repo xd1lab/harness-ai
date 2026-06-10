@@ -1,5 +1,5 @@
 // Package grpcxtest provides an in-process SPIFFE certificate authority for
-// exercising [github.com/boltrope/boltrope/internal/platform/grpcx] over real
+// exercising [github.com/xd1lab/harness-ai/internal/platform/grpcx] over real
 // mutual TLS in unit tests (bufconn), without a running SPIRE agent.
 //
 // It mints short-lived X509-SVIDs for arbitrary SPIFFE IDs under a single test

@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/boltrope/boltrope/internal/platform/jsonschema"
-	"github.com/boltrope/boltrope/internal/toolruntime/app"
-	"github.com/boltrope/boltrope/internal/toolruntime/domain"
+	"github.com/xd1lab/harness-ai/internal/platform/jsonschema"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/app"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/domain"
 )
 
 // Compile-time assertion that *Registry satisfies the frozen port.

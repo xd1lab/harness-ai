@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/boltrope/boltrope/internal/platform/config"
+	"github.com/xd1lab/harness-ai/internal/platform/config"
 )
 
 // main is the thin entrypoint: load+validate config (fail-fast, NFR-OPS-04) then

@@ -819,7 +819,7 @@ const file_boltrope_v1_tool_runtime_proto_rawDesc = "" +
 	"\x12ToolRuntimeService\x12O\n" +
 	"\vExecuteTool\x12\x1f.boltrope.v1.ExecuteToolRequest\x1a\x1d.boltrope.v1.ExecuteToolEvent0\x01\x12J\n" +
 	"\tListTools\x12\x1d.boltrope.v1.ListToolsRequest\x1a\x1e.boltrope.v1.ListToolsResponseB\xa9\x01\n" +
-	"\x0fcom.boltrope.v1B\x10ToolRuntimeProtoP\x01Z7github.com/boltrope/boltrope/gen/boltrope/v1;boltropev1\xa2\x02\x03BXX\xaa\x02\vBoltrope.V1\xca\x02\vBoltrope\\V1\xe2\x02\x17Boltrope\\V1\\GPBMetadata\xea\x02\fBoltrope::V1b\x06proto3"
+	"\x0fcom.boltrope.v1B\x10ToolRuntimeProtoP\x01Z7github.com/xd1lab/harness-ai/gen/boltrope/v1;boltropev1\xa2\x02\x03BXX\xaa\x02\vBoltrope.V1\xca\x02\vBoltrope\\V1\xe2\x02\x17Boltrope\\V1\\GPBMetadata\xea\x02\fBoltrope::V1b\x06proto3"
 
 var (
 	file_boltrope_v1_tool_runtime_proto_rawDescOnce sync.Once

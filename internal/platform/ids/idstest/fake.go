@@ -15,7 +15,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"github.com/boltrope/boltrope/internal/platform/ids"
+	"github.com/xd1lab/harness-ai/internal/platform/ids"
 )
 
 // Compile-time assertion that Fake satisfies ids.IDGenerator.

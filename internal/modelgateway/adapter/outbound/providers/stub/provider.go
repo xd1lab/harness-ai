@@ -4,7 +4,7 @@ import (
 	"context"
 	"io"
 
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // Compile-time assertion that Provider satisfies the kernel contract.

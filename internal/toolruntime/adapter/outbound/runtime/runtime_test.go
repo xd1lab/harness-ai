@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/boltrope/boltrope/internal/platform/clock/clocktest"
-	"github.com/boltrope/boltrope/internal/toolruntime/app"
+	"github.com/xd1lab/harness-ai/internal/platform/clock/clocktest"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/app"
 )
 
 func newTestRuntime(t *testing.T, fr *fakeRunner, fc *clocktest.Fake, opts ...Option) *Runtime {

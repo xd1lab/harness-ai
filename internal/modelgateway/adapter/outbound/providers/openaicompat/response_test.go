@@ -6,7 +6,7 @@ import (
 
 	openai "github.com/openai/openai-go/v3"
 
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // chatCompletion builds a synthetic non-streaming completion with one choice.

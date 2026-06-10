@@ -14,7 +14,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
-	"github.com/boltrope/boltrope/internal/platform/obs"
+	"github.com/xd1lab/harness-ai/internal/platform/obs"
 )
 
 // swapMeterProvider installs mp as the global OTel meter provider for the test

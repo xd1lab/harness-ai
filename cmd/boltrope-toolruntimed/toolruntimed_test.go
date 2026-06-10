@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/boltrope/boltrope/internal/platform/config"
-	"github.com/boltrope/boltrope/internal/toolruntime/app"
+	"github.com/xd1lab/harness-ai/internal/platform/config"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/app"
 )
 
 func baseConfig(t *testing.T) *config.Config {

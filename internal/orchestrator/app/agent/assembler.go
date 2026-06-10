@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // Outcome is the three-way terminal classification of an assembled generation,

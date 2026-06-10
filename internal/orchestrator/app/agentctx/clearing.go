@@ -3,7 +3,7 @@ package agentctx
 import (
 	"errors"
 
-	"github.com/boltrope/boltrope/internal/orchestrator/domain"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
 )
 
 // ErrFailedPrecondition is the sentinel returned by [ValidateClear] when a

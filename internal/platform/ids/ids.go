@@ -59,7 +59,7 @@ type IDGenerator interface {
 	NewSessionID() ID
 
 	// NewRequestID returns a fresh [ID] to use as the per-append request_id — the
-	// idempotency token carried on every [github.com/boltrope/boltrope/internal/orchestrator/app.EventLogPort]
+	// idempotency token carried on every [github.com/xd1lab/harness-ai/internal/orchestrator/app.EventLogPort]
 	// Append so a retried append whose ack was lost is a no-op rather than a
 	// spurious conflict (ADR-0011; architecture §6.3, §7.3). A new request_id is
 	// minted per append attempt's logical operation, then reused across retries of

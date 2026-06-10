@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/boltrope/boltrope/internal/toolruntime/adapter/outbound/egress"
-	"github.com/boltrope/boltrope/internal/toolruntime/app"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/outbound/egress"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/app"
 )
 
 // ctx is the background context shared by all sub-tests.

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/boltrope/boltrope/internal/platform/clock"
-	"github.com/boltrope/boltrope/internal/toolruntime/app"
+	"github.com/xd1lab/harness-ai/internal/platform/clock"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/app"
 )
 
 // ErrMaxLiveSandboxes is returned by [Runtime.Create] when the max-live-sandboxes

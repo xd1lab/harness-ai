@@ -10,7 +10,7 @@ import (
 	"google.golang.org/grpc"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
-	"github.com/boltrope/boltrope/internal/platform/obs"
+	"github.com/xd1lab/harness-ai/internal/platform/obs"
 )
 
 // ReadinessCheck reports whether one dependency is currently reachable/usable.

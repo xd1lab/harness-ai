@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/boltrope/boltrope/internal/platform/grpcx"
+	"github.com/xd1lab/harness-ai/internal/platform/grpcx"
 )
 
 // spiffeSource connects to the SPIRE Workload API and returns the live,

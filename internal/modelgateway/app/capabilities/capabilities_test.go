@@ -3,8 +3,8 @@ package capabilities_test
 import (
 	"testing"
 
-	"github.com/boltrope/boltrope/internal/modelgateway/app/capabilities"
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/modelgateway/app/capabilities"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // ----------------------------------------------------------------------------

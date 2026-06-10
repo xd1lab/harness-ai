@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/boltrope/boltrope/internal/orchestrator/infra/db"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/infra/db"
 )
 
 // TestTenantContextRoundTrip asserts a tenant placed with WithTenant is read back

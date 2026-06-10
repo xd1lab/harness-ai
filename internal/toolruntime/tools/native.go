@@ -1,8 +1,8 @@
 package tools
 
 import (
-	"github.com/boltrope/boltrope/internal/toolruntime/app"
-	"github.com/boltrope/boltrope/internal/toolruntime/domain"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/app"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/domain"
 )
 
 // Native returns the full set of native tools wired to the given session ports:
@@ -16,7 +16,7 @@ import (
 // webfetch, websearch.
 //
 // Callers (the tool-runtime wiring) register these into a
-// [github.com/boltrope/boltrope/internal/toolruntime/app.ToolRegistry], which
+// [github.com/xd1lab/harness-ai/internal/toolruntime/app.ToolRegistry], which
 // wraps each with schema validation before execution (FR-TOOL-01).
 func Native(ws app.Workspace, broker app.EgressBroker) []domain.Tool {
 	return []domain.Tool{

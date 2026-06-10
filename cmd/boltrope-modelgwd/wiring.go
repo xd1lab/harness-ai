@@ -4,7 +4,7 @@
 // adapter (Anthropic / Gemini / OpenAI / OpenAI-compatible) decorated with the
 // harness retry policy, the per-(endpoint,model) capability resolver, and
 // cost-on-Done, then serves Generate/CountTokens/GetCapabilities over mTLS with
-// the shared [github.com/boltrope/boltrope/internal/platform/daemon] harness
+// the shared [github.com/xd1lab/harness-ai/internal/platform/daemon] harness
 // (health, readiness, graceful shutdown).
 //
 // Provider selection is a deployment concern, not part of the frozen shared
@@ -22,20 +22,20 @@ import (
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"google.golang.org/grpc"
 
-	mgwgrpc "github.com/boltrope/boltrope/internal/modelgateway/adapter/inbound/grpc"
-	"github.com/boltrope/boltrope/internal/modelgateway/adapter/outbound/providers/anthropic"
-	"github.com/boltrope/boltrope/internal/modelgateway/adapter/outbound/providers/gemini"
-	"github.com/boltrope/boltrope/internal/modelgateway/adapter/outbound/providers/openai"
-	"github.com/boltrope/boltrope/internal/modelgateway/adapter/outbound/providers/openaicompat"
-	"github.com/boltrope/boltrope/internal/modelgateway/adapter/outbound/providers/stub"
-	mgwapp "github.com/boltrope/boltrope/internal/modelgateway/app"
-	"github.com/boltrope/boltrope/internal/modelgateway/app/capabilities"
-	"github.com/boltrope/boltrope/internal/modelgateway/app/retry"
-	"github.com/boltrope/boltrope/internal/platform/config"
-	"github.com/boltrope/boltrope/internal/platform/daemon"
-	"github.com/boltrope/boltrope/internal/platform/llm"
-	"github.com/boltrope/boltrope/internal/platform/pricing"
-	"github.com/boltrope/boltrope/internal/platform/secret"
+	mgwgrpc "github.com/xd1lab/harness-ai/internal/modelgateway/adapter/inbound/grpc"
+	"github.com/xd1lab/harness-ai/internal/modelgateway/adapter/outbound/providers/anthropic"
+	"github.com/xd1lab/harness-ai/internal/modelgateway/adapter/outbound/providers/gemini"
+	"github.com/xd1lab/harness-ai/internal/modelgateway/adapter/outbound/providers/openai"
+	"github.com/xd1lab/harness-ai/internal/modelgateway/adapter/outbound/providers/openaicompat"
+	"github.com/xd1lab/harness-ai/internal/modelgateway/adapter/outbound/providers/stub"
+	mgwapp "github.com/xd1lab/harness-ai/internal/modelgateway/app"
+	"github.com/xd1lab/harness-ai/internal/modelgateway/app/capabilities"
+	"github.com/xd1lab/harness-ai/internal/modelgateway/app/retry"
+	"github.com/xd1lab/harness-ai/internal/platform/config"
+	"github.com/xd1lab/harness-ai/internal/platform/daemon"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/pricing"
+	"github.com/xd1lab/harness-ai/internal/platform/secret"
 )
 
 const serviceName = "model-gateway"

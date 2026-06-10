@@ -1,6 +1,6 @@
 // Package migrations holds the Boltrope event-store schema as embedded
 // golang-migrate SQL files and exposes them as an [io/fs.FS] so the migrate
-// runner ([github.com/boltrope/boltrope/internal/orchestrator/infra/db]) can
+// runner ([github.com/xd1lab/harness-ai/internal/orchestrator/infra/db]) can
 // apply them to a DSN without any filesystem dependency at runtime (ADR-0011
 // §"Migration policy"; architecture §6.1, §10.2).
 //

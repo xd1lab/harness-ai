@@ -10,10 +10,10 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/boltrope/boltrope/internal/toolruntime/adapter/registry"
-	"github.com/boltrope/boltrope/internal/toolruntime/app"
-	"github.com/boltrope/boltrope/internal/toolruntime/app/truntimetest"
-	"github.com/boltrope/boltrope/internal/toolruntime/domain"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/registry"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/app"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/app/truntimetest"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/domain"
 )
 
 // objectSchema requires a single string field "x" and forbids extras.

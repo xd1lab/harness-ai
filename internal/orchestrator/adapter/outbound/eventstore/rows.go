@@ -8,8 +8,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/boltrope/boltrope/internal/orchestrator/app"
-	"github.com/boltrope/boltrope/internal/orchestrator/domain"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
 )
 
 // defaultSchemaVersion is the per-event-type payload version stamped when an
@@ -40,7 +40,7 @@ const selectEventsAfterSeqSQL = "SELECT " + eventColumns +
 
 // BlobUpload carries the metadata for the blobs row inserted in the same
 // transaction as a blob-referencing event ([Store.AppendWithBlob]). The bytes
-// themselves are written to the [github.com/boltrope/boltrope/internal/platform/blob.BlobStorePort]
+// themselves are written to the [github.com/xd1lab/harness-ai/internal/platform/blob.BlobStorePort]
 // by the caller BEFORE the append (write-before-reference; architecture §6.4,
 // §7.4); this struct is only the metadata row. The composite FK
 // events(tenant_id, blob_ref) -> blobs(tenant_id, ref) makes a dangling

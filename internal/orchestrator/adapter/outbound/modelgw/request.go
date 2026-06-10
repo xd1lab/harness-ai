@@ -3,8 +3,8 @@ package modelgw
 import (
 	"encoding/json"
 
-	genproto "github.com/boltrope/boltrope/gen/boltrope/v1"
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	genproto "github.com/xd1lab/harness-ai/gen/boltrope/v1"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // toGenerationParams maps an llm.Request to a gen.GenerationParams for the

@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/boltrope/boltrope/internal/toolruntime/app"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/app"
 )
 
 // The tests in this file cover the REAL subprocess path — execSpawn and

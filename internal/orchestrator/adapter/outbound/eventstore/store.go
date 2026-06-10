@@ -1,6 +1,6 @@
 // Package eventstore is the orchestrator's in-process event-store adapter: a
 // single pgx-backed [Store] that satisfies
-// [github.com/boltrope/boltrope/internal/orchestrator/app.EventLogPort] (ADR-0009,
+// [github.com/xd1lab/harness-ai/internal/orchestrator/app.EventLogPort] (ADR-0009,
 // ADR-0011; architecture §2.2, §4.2, §5.1). It is an outbound adapter — the only
 // place the orchestrator turns the append-only log into SQL — so the loop and
 // recovery depend only on the port, never on pgx.
@@ -23,7 +23,7 @@
 // # Tenant isolation
 //
 // Every method derives the tenant from the context
-// ([github.com/boltrope/boltrope/internal/orchestrator/infra/db.TenantFromContext],
+// ([github.com/xd1lab/harness-ai/internal/orchestrator/infra/db.TenantFromContext],
 // set from the verified principal token; §8.2) and SET LOCALs it on the
 // transaction's connection. A missing tenant fails closed; RLS is the backstop.
 //
@@ -43,9 +43,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/boltrope/boltrope/internal/orchestrator/app"
-	"github.com/boltrope/boltrope/internal/orchestrator/domain"
-	infradb "github.com/boltrope/boltrope/internal/orchestrator/infra/db"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
+	infradb "github.com/xd1lab/harness-ai/internal/orchestrator/infra/db"
 )
 
 // Store is the pgx-backed [app.EventLogPort] implementation. It holds a [Pool]

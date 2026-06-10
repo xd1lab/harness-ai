@@ -4,10 +4,10 @@
 
 **A provider-portable, event-sourced AI agent harness in Go.**
 
-[![CI](https://github.com/boltrope/boltrope/actions/workflows/ci.yml/badge.svg)](https://github.com/boltrope/boltrope/actions/workflows/ci.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/boltrope/boltrope.svg)](https://pkg.go.dev/github.com/boltrope/boltrope)
-[![Go Report Card](https://goreportcard.com/badge/github.com/boltrope/boltrope)](https://goreportcard.com/report/github.com/boltrope/boltrope)
-[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/boltrope/boltrope/badge)](https://securityscorecards.dev/viewer/?uri=github.com/boltrope/boltrope)
+[![CI](https://github.com/xd1lab/harness-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/xd1lab/harness-ai/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/xd1lab/harness-ai.svg)](https://pkg.go.dev/github.com/xd1lab/harness-ai)
+[![Go Report Card](https://goreportcard.com/badge/github.com/xd1lab/harness-ai)](https://goreportcard.com/report/github.com/xd1lab/harness-ai)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/xd1lab/harness-ai/badge)](https://securityscorecards.dev/viewer/?uri=github.com/xd1lab/harness-ai)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 Boltrope turns a stateless LLM completion API into a **stateful, tool-using, self-correcting agent** that you run on your own infrastructure, against any supported hosted or self-hosted model. It is backend-only (no frontend, no proprietary cloud dependency) and built on one idea: the single source of truth is an **append-only, event-sourced log in PostgreSQL**. Session resume, fork, replay, cost accounting, and observability all derive from that log.
@@ -39,7 +39,7 @@ Bring up the full stack (PostgreSQL, schema migration, the three services, and `
 
 ```bash
 # 1. Clone.
-git clone https://github.com/boltrope/boltrope.git
+git clone https://github.com/xd1lab/harness-ai.git
 cd boltrope
 
 # 2. Up — keyless. Postgres healthy -> migrate completes -> grant -> the four
@@ -135,11 +135,11 @@ The Quickstart above runs everything from source. For a real deployment, use the
 **Container images** (multi-arch `linux/amd64` + `arm64`, on GHCR) — one per service, the same images `deploy/docker-compose.yml` can pin:
 
 ```bash
-docker pull ghcr.io/boltrope/boltrope-orchestratord:latest
-docker pull ghcr.io/boltrope/boltrope-modelgwd:latest
-docker pull ghcr.io/boltrope/boltrope-toolruntimed:latest
-docker pull ghcr.io/boltrope/boltrope-projectord:latest
-docker pull ghcr.io/boltrope/boltrope-migrate:latest      # one-shot schema migration
+docker pull ghcr.io/xd1lab/boltrope-orchestratord:latest
+docker pull ghcr.io/xd1lab/boltrope-modelgwd:latest
+docker pull ghcr.io/xd1lab/boltrope-toolruntimed:latest
+docker pull ghcr.io/xd1lab/boltrope-projectord:latest
+docker pull ghcr.io/xd1lab/boltrope-migrate:latest      # one-shot schema migration
 ```
 
 **Binaries** — each GitHub release attaches `tar.gz` / `zip` archives named `boltrope_<version>_<os>_<arch>`, containing the four daemons + `boltrope-migrate` for `linux/{amd64,arm64}`, and the `harnessctl` client additionally for **macOS and Windows**. Verify the cosign-signed `checksums.txt` before use.
@@ -147,12 +147,12 @@ docker pull ghcr.io/boltrope/boltrope-migrate:latest      # one-shot schema migr
 **From source** (Go 1.25+):
 
 ```bash
-go install github.com/boltrope/boltrope/cmd/harnessctl@latest   # the client CLI
+go install github.com/xd1lab/harness-ai/cmd/harnessctl@latest   # the client CLI
 # daemons build with the `spire` tag for production SPIFFE/SPIRE identity:
 go build -tags spire ./cmd/...
 ```
 
-> Releases are cut by a maintainer pushing a `vX.Y.Z` tag. Until the first public release (and the `boltrope` owner [rename](#license)), build from source as in the Quickstart — the `ghcr.io/boltrope/…` and `go install` paths resolve only once published.
+> Releases are cut by a maintainer pushing a `vX.Y.Z` tag. Until the first public release (and the `boltrope` owner [rename](#license)), build from source as in the Quickstart — the `ghcr.io/xd1lab/…` and `go install` paths resolve only once published.
 
 ---
 
@@ -307,8 +307,8 @@ Contributions are welcome. Boltrope is built **spec-first and test-first** — s
 
 ## Community & support
 
-- **Questions & ideas** — open a [GitHub Discussion](https://github.com/boltrope/boltrope/discussions).
-- **Bugs & feature requests** — use the [issue templates](https://github.com/boltrope/boltrope/issues/new/choose).
+- **Questions & ideas** — open a [GitHub Discussion](https://github.com/xd1lab/harness-ai/discussions).
+- **Bugs & feature requests** — use the [issue templates](https://github.com/xd1lab/harness-ai/issues/new/choose).
 - **Security vulnerabilities** — do **not** open a public issue; report privately per [SECURITY.md](SECURITY.md).
 
 ---
@@ -330,5 +330,3 @@ On Windows, run the underlying tool commands directly (each Make recipe is a sin
 ## License
 
 Licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE). Contributions require a Developer Certificate of Origin sign-off (`git commit -s`); see [CONTRIBUTING.md](CONTRIBUTING.md) and [ADR-0002](docs/decisions/0002-license-apache-2.0.md).
-
-> **Before publishing:** the module path `github.com/boltrope/boltrope` uses a **placeholder owner segment**. Rename the `boltrope` owner (the GitHub org/user) to your own across `go.mod`, all import paths, the badge URLs above, and CI/release configuration before pushing to a public remote.

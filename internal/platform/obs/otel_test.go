@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/metric"
 
-	"github.com/boltrope/boltrope/internal/platform/obs"
+	"github.com/xd1lab/harness-ai/internal/platform/obs"
 )
 
 func TestSetupMetrics_FeedsPrometheusRegistry(t *testing.T) {

@@ -9,7 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/boltrope/boltrope/internal/orchestrator/policy"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/policy"
 )
 
 // Compile-time assertion that FakePolicyEngine satisfies policy.PolicyEngine.

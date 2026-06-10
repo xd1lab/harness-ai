@@ -3,9 +3,9 @@ package main
 import (
 	"context"
 
-	"github.com/boltrope/boltrope/internal/toolruntime/adapter/outbound/mcp"
-	"github.com/boltrope/boltrope/internal/toolruntime/app"
-	"github.com/boltrope/boltrope/internal/toolruntime/domain"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/outbound/mcp"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/app"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/domain"
 )
 
 // mcpServerName is the local name under which the single configured stdio MCP

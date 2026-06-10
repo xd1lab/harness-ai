@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // Overrides is a config-driven pricing overlay: model id → [ModelRates] that

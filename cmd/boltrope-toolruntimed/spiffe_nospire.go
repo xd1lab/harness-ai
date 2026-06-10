@@ -2,7 +2,7 @@
 
 package main
 
-import "github.com/boltrope/boltrope/internal/platform/grpcx"
+import "github.com/xd1lab/harness-ai/internal/platform/grpcx"
 
 // spiffeSource returns the live SPIFFE source for inter-service mTLS. The SPIRE
 // Workload API wiring is opt-in behind the `spire` build tag — release images

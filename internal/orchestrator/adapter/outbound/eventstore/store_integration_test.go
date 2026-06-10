@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/boltrope/boltrope/internal/orchestrator/app"
-	"github.com/boltrope/boltrope/internal/orchestrator/domain"
-	infradb "github.com/boltrope/boltrope/internal/orchestrator/infra/db"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
+	infradb "github.com/xd1lab/harness-ai/internal/orchestrator/infra/db"
 )
 
 // appendOne is a convenience to append a single TurnStarted event.

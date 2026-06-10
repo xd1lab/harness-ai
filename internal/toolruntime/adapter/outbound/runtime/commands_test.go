@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/boltrope/boltrope/internal/toolruntime/app"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/app"
 )
 
 func TestCreateArgs_HardLimitsAndDenyByDefaultNetwork(t *testing.T) {

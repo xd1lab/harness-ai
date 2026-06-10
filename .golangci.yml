@@ -84,7 +84,7 @@ linters:
           files:
             - "**/internal/platform/llm/**"
           deny:
-            - pkg: github.com/boltrope/boltrope/gen
+            - pkg: github.com/xd1lab/harness-ai/gen
               desc: "platform/llm is the pure normalized kernel; it must not import generated wire types (ADR-0015, DOD-08) — map gen<->llm in adapters only"
             - pkg: google.golang.org/grpc
               desc: "platform/llm is transport-agnostic; gRPC belongs in adapters/platform-grpcx (ADR-0015, DOD-08)"
@@ -105,7 +105,7 @@ linters:
             - "**/internal/*/app/**"
             - "**/internal/*/policy/**"
           deny:
-            - pkg: github.com/boltrope/boltrope/gen
+            - pkg: github.com/xd1lab/harness-ai/gen
               desc: "domain/app/policy are transport-agnostic; only adapter/** may import generated wire types (ADR-0015, DOD-08)"
             - pkg: google.golang.org/grpc
               desc: "domain/app/policy are transport-agnostic; gRPC lives in adapters (ADR-0015, DOD-08)"
@@ -119,27 +119,27 @@ linters:
           files:
             - "**/internal/orchestrator/**"
           deny:
-            - pkg: github.com/boltrope/boltrope/internal/toolruntime
+            - pkg: github.com/xd1lab/harness-ai/internal/toolruntime
               desc: "orchestrator must not import tool-runtime internals; talk via gen/ stubs only (ADR-0015 cross-service isolation)"
-            - pkg: github.com/boltrope/boltrope/internal/modelgateway
+            - pkg: github.com/xd1lab/harness-ai/internal/modelgateway
               desc: "orchestrator must not import model-gateway internals; talk via gen/ stubs only (ADR-0015 cross-service isolation)"
 
         toolruntime-no-cross-service:
           files:
             - "**/internal/toolruntime/**"
           deny:
-            - pkg: github.com/boltrope/boltrope/internal/orchestrator
+            - pkg: github.com/xd1lab/harness-ai/internal/orchestrator
               desc: "tool-runtime must not import orchestrator internals; talk via gen/ stubs only (ADR-0015 cross-service isolation)"
-            - pkg: github.com/boltrope/boltrope/internal/modelgateway
+            - pkg: github.com/xd1lab/harness-ai/internal/modelgateway
               desc: "tool-runtime must not import model-gateway internals; talk via gen/ stubs only (ADR-0015 cross-service isolation)"
 
         modelgateway-no-cross-service:
           files:
             - "**/internal/modelgateway/**"
           deny:
-            - pkg: github.com/boltrope/boltrope/internal/orchestrator
+            - pkg: github.com/xd1lab/harness-ai/internal/orchestrator
               desc: "model-gateway must not import orchestrator internals; talk via gen/ stubs only (ADR-0015 cross-service isolation)"
-            - pkg: github.com/boltrope/boltrope/internal/toolruntime
+            - pkg: github.com/xd1lab/harness-ai/internal/toolruntime
               desc: "model-gateway must not import tool-runtime internals; talk via gen/ stubs only (ADR-0015 cross-service isolation)"
 
   exclusions:
@@ -226,7 +226,7 @@ formatters:
     goimports:
       # Group module-local imports into their own block.
       local-prefixes:
-        - github.com/boltrope/boltrope
+        - github.com/xd1lab/harness-ai
     gofumpt:
       # Apply gofumpt's extra-strict rules in addition to gofmt.
       extra-rules: true

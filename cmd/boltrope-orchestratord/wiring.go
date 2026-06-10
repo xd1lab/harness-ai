@@ -7,7 +7,7 @@
 // context manager — into a LoopRunner, fronts it with the boltrope.v1
 // OrchestratorService (CreateSession/GetSession/Run/Control/Fork), and serves it
 // over mTLS + client-edge JWT auth with the shared
-// [github.com/boltrope/boltrope/internal/platform/daemon] harness (health,
+// [github.com/xd1lab/harness-ai/internal/platform/daemon] harness (health,
 // dependency-gated readiness, graceful shutdown).
 //
 // It refuses to accept traffic before its dependencies are reachable: /readyz
@@ -28,19 +28,19 @@ import (
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"google.golang.org/grpc"
 
-	genproto "github.com/boltrope/boltrope/gen/boltrope/v1"
-	"github.com/boltrope/boltrope/internal/orchestrator/adapter/inbound/approval"
-	igrpc "github.com/boltrope/boltrope/internal/orchestrator/adapter/inbound/grpc"
-	"github.com/boltrope/boltrope/internal/orchestrator/adapter/outbound/eventstore"
-	"github.com/boltrope/boltrope/internal/orchestrator/app/agent"
-	"github.com/boltrope/boltrope/internal/orchestrator/app/agentctx"
-	"github.com/boltrope/boltrope/internal/orchestrator/app/hooks"
-	"github.com/boltrope/boltrope/internal/orchestrator/app/subagent"
-	"github.com/boltrope/boltrope/internal/platform/clock"
-	"github.com/boltrope/boltrope/internal/platform/config"
-	"github.com/boltrope/boltrope/internal/platform/daemon"
-	"github.com/boltrope/boltrope/internal/platform/ids"
-	"github.com/boltrope/boltrope/internal/platform/pricing"
+	genproto "github.com/xd1lab/harness-ai/gen/boltrope/v1"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/adapter/inbound/approval"
+	igrpc "github.com/xd1lab/harness-ai/internal/orchestrator/adapter/inbound/grpc"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/adapter/outbound/eventstore"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app/agent"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app/agentctx"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app/hooks"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app/subagent"
+	"github.com/xd1lab/harness-ai/internal/platform/clock"
+	"github.com/xd1lab/harness-ai/internal/platform/config"
+	"github.com/xd1lab/harness-ai/internal/platform/daemon"
+	"github.com/xd1lab/harness-ai/internal/platform/ids"
+	"github.com/xd1lab/harness-ai/internal/platform/pricing"
 )
 
 const serviceName = "orchestrator"

@@ -9,8 +9,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	genproto "github.com/boltrope/boltrope/gen/boltrope/v1"
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	genproto "github.com/xd1lab/harness-ai/gen/boltrope/v1"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // TestNormalizeEvent_TextDelta verifies that a gen TextDelta maps to

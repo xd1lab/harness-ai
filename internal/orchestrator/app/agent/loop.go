@@ -34,7 +34,7 @@
 // # Resume / adjudication (T-LOOP-07)
 //
 // On start [Loop.Run] loads the session, folds it through
-// [github.com/boltrope/boltrope/internal/orchestrator/app/recovery.Analyze], and
+// [github.com/xd1lab/harness-ai/internal/orchestrator/app/recovery.Analyze], and
 // adjudicates: open turns are closed with a [domain.TurnAborted] carrying the
 // recovered usage (never silently replayed), and unknown mutating tool
 // executions are NOT re-dispatched (at-most-once; FR-TOOL-03 AC-1).
@@ -56,15 +56,15 @@ import (
 	"runtime"
 	"strconv"
 
-	"github.com/boltrope/boltrope/internal/orchestrator/app"
-	"github.com/boltrope/boltrope/internal/orchestrator/app/agentctx"
-	"github.com/boltrope/boltrope/internal/orchestrator/app/recovery"
-	"github.com/boltrope/boltrope/internal/orchestrator/domain"
-	"github.com/boltrope/boltrope/internal/orchestrator/policy"
-	"github.com/boltrope/boltrope/internal/platform/clock"
-	"github.com/boltrope/boltrope/internal/platform/ids"
-	"github.com/boltrope/boltrope/internal/platform/jsonschema"
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app/agentctx"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app/recovery"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/policy"
+	"github.com/xd1lab/harness-ai/internal/platform/clock"
+	"github.com/xd1lab/harness-ai/internal/platform/ids"
+	"github.com/xd1lab/harness-ai/internal/platform/jsonschema"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // Deps bundles the injected ports the loop depends on. Every field is a

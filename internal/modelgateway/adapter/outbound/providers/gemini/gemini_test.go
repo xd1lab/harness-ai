@@ -9,7 +9,7 @@ import (
 
 	"google.golang.org/genai"
 
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // compile-time assertion that Provider implements llm.Provider.

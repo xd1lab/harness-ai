@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/boltrope/boltrope/internal/orchestrator/domain"
-	"github.com/boltrope/boltrope/internal/platform/blob"
-	"github.com/boltrope/boltrope/internal/platform/blob/blobtest"
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
+	"github.com/xd1lab/harness-ai/internal/platform/blob"
+	"github.com/xd1lab/harness-ai/internal/platform/blob/blobtest"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // tfPayload marshals a TurnFinished payload for direct event insertion.

@@ -40,7 +40,7 @@
 //   - Per-(tenant, session) COST ROLLUP folded from TurnFinished / TurnAborted
 //     events (their per-turn CostUSD and Usage; architecture §11.6, §3). The
 //     running total matches the event sum exactly (FR-OBS-02 input).
-//   - OTel/Prometheus metrics via [github.com/boltrope/boltrope/internal/platform/obs]:
+//   - OTel/Prometheus metrics via [github.com/xd1lab/harness-ai/internal/platform/obs]:
 //     the projection-lag gauge (USE saturation, FR-OBS-02) and the running cost
 //     counter, exported through the obs meter (FR-OBS-01).
 //   - An ORPHAN-BLOB sweeper that reclaims bytes whose owning append transaction

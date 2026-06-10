@@ -6,7 +6,7 @@
 // request mapping ([llm.Request] -> Messages API params), stream normalization
 // (the SSE event sequence -> [llm.StreamEvent]), stop-reason normalization, usage
 // extraction, capability resolution, and error classification. Every method
-// returns the normalized types from [github.com/boltrope/boltrope/internal/platform/llm]
+// returns the normalized types from [github.com/xd1lab/harness-ai/internal/platform/llm]
 // and a failure is always a [*llm.ProviderError], so the orchestrator stays
 // provider-agnostic.
 //

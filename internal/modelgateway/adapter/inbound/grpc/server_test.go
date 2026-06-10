@@ -28,13 +28,13 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
-	genproto "github.com/boltrope/boltrope/gen/boltrope/v1"
-	"github.com/boltrope/boltrope/internal/modelgateway/app"
-	"github.com/boltrope/boltrope/internal/modelgateway/app/capabilities"
-	"github.com/boltrope/boltrope/internal/modelgateway/app/retry"
-	"github.com/boltrope/boltrope/internal/platform/llm"
-	"github.com/boltrope/boltrope/internal/platform/llm/llmtest"
-	"github.com/boltrope/boltrope/internal/platform/pricing"
+	genproto "github.com/xd1lab/harness-ai/gen/boltrope/v1"
+	"github.com/xd1lab/harness-ai/internal/modelgateway/app"
+	"github.com/xd1lab/harness-ai/internal/modelgateway/app/capabilities"
+	"github.com/xd1lab/harness-ai/internal/modelgateway/app/retry"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm/llmtest"
+	"github.com/xd1lab/harness-ai/internal/platform/pricing"
 )
 
 const bufSize = 1 << 20 // 1 MiB

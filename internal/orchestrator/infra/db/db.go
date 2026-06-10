@@ -1,5 +1,5 @@
 // Package db is the orchestrator's migration-runner library half: it applies the
-// embedded event-store migrations ([github.com/boltrope/boltrope/migrations]) to
+// embedded event-store migrations ([github.com/xd1lab/harness-ai/migrations]) to
 // a PostgreSQL DSN and gates on the pinned minimum server version. It is the
 // library that cmd/boltrope-migrate (written later) wraps, and it backs the
 // startup migration-gate check the orchestrator runs before accepting traffic
@@ -26,7 +26,7 @@
 // # Forward-only
 //
 // Before applying, [Migrate] re-checks the forward-only convention via
-// [github.com/boltrope/boltrope/migrations.CheckForwardOnly] so a destructive
+// [github.com/xd1lab/harness-ai/migrations.CheckForwardOnly] so a destructive
 // down on the log fails loudly even outside CI (ADR-0011 §6.1). Only Up
 // migrations are applied here; this library never runs Down on the event log.
 package db
@@ -44,7 +44,7 @@ import (
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/boltrope/boltrope/migrations"
+	"github.com/xd1lab/harness-ai/migrations"
 )
 
 const (

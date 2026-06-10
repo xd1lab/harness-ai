@@ -10,7 +10,7 @@ import (
 	"io"
 	"sync"
 
-	"github.com/boltrope/boltrope/internal/platform/blob"
+	"github.com/xd1lab/harness-ai/internal/platform/blob"
 )
 
 // Compile-time assertion that FakeBlobStore satisfies blob.BlobStorePort.

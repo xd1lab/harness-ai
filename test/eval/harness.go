@@ -1,6 +1,6 @@
 // Package eval is Boltrope's bespoke, network-free, DETERMINISTIC eval harness
 // (ADR-0007; NFR-TEST-04; DOD-03). It drives the REAL orchestrator agent loop
-// ([github.com/boltrope/boltrope/internal/orchestrator/app/agent.Loop]) end-to-end
+// ([github.com/xd1lab/harness-ai/internal/orchestrator/app/agent.Loop]) end-to-end
 // against a scripted, in-memory provider and fakes — no network, no Docker, no
 // real clock — so each golden SCENARIO is reproducible and fast (the whole suite
 // is a required CI gate that must finish well under 60 s).
@@ -48,15 +48,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/boltrope/boltrope/internal/orchestrator/app"
-	"github.com/boltrope/boltrope/internal/orchestrator/app/agent"
-	"github.com/boltrope/boltrope/internal/orchestrator/app/agentctx"
-	"github.com/boltrope/boltrope/internal/orchestrator/app/apptest"
-	"github.com/boltrope/boltrope/internal/orchestrator/domain"
-	"github.com/boltrope/boltrope/internal/orchestrator/policy"
-	"github.com/boltrope/boltrope/internal/platform/clock/clocktest"
-	"github.com/boltrope/boltrope/internal/platform/ids/idstest"
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app/agent"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app/agentctx"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app/apptest"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/policy"
+	"github.com/xd1lab/harness-ai/internal/platform/clock/clocktest"
+	"github.com/xd1lab/harness-ai/internal/platform/ids/idstest"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // ----------------------------------------------------------------------------

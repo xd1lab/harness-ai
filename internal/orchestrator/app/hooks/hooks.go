@@ -28,7 +28,7 @@ import (
 	"fmt"
 	"os/exec"
 
-	"github.com/boltrope/boltrope/internal/orchestrator/app"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app"
 )
 
 // ---------------------------------------------------------------------------

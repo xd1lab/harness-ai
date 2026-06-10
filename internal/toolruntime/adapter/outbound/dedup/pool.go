@@ -3,7 +3,7 @@
 //
 // # Design
 //
-// [Store] satisfies [github.com/boltrope/boltrope/internal/toolruntime/app.DedupStore]
+// [Store] satisfies [github.com/xd1lab/harness-ai/internal/toolruntime/app.DedupStore]
 // using pgx/v5 against the table created by migration 0002_events_blobs_ledgers.
 // The key namespace is (tenant_id, session_id, idempotency_key) — server-derived,
 // never client/model-supplied (ADR-0012 §"Idempotency key scoping").
@@ -11,7 +11,7 @@
 // # Tenant isolation
 //
 // Every public method reads the tenant from the context via
-// [github.com/boltrope/boltrope/internal/orchestrator/infra/db.TenantFromContext]
+// [github.com/xd1lab/harness-ai/internal/orchestrator/infra/db.TenantFromContext]
 // and scopes the transaction with SET LOCAL app.current_tenant so RLS
 // (FORCE ROW LEVEL SECURITY) applies on the non-owner application role
 // (ADR-0013 §"Concrete RLS"; migration 0003_rls_policies).

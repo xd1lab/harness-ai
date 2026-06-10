@@ -19,7 +19,7 @@ import (
 // the active span context for the handler — this is the trace-propagation seam of
 // FR-OBS-01 (trace context propagates via gRPC metadata). It uses the globally
 // configured TracerProvider and propagator set by
-// [github.com/boltrope/boltrope/internal/platform/obs.SetupTracing].
+// [github.com/xd1lab/harness-ai/internal/platform/obs.SetupTracing].
 //
 // Stats handlers are the current, non-deprecated OTel gRPC instrumentation path
 // (the older otelgrpc.UnaryServerInterceptor is deprecated); using it keeps span

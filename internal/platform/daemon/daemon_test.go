@@ -18,9 +18,9 @@ import (
 	"google.golang.org/grpc/credentials"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
-	"github.com/boltrope/boltrope/internal/platform/config"
-	"github.com/boltrope/boltrope/internal/platform/grpcx"
-	"github.com/boltrope/boltrope/internal/platform/grpcx/grpcxtest"
+	"github.com/xd1lab/harness-ai/internal/platform/config"
+	"github.com/xd1lab/harness-ai/internal/platform/grpcx"
+	"github.com/xd1lab/harness-ai/internal/platform/grpcx/grpcxtest"
 )
 
 // minimalConfig returns a Config that passes validation, with no OTLP endpoint

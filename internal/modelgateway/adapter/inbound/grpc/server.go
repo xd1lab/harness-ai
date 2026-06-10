@@ -16,8 +16,8 @@ import (
 	"errors"
 	"io"
 
-	genproto "github.com/boltrope/boltrope/gen/boltrope/v1"
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	genproto "github.com/xd1lab/harness-ai/gen/boltrope/v1"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // gatewayService is the consumer-defined port this server depends on: the subset

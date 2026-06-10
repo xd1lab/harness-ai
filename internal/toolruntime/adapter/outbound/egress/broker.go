@@ -67,7 +67,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/boltrope/boltrope/internal/toolruntime/app"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/app"
 )
 
 // Decision records one evaluated egress request. It is the audit record for

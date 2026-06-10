@@ -3,7 +3,7 @@ package anthropic
 import (
 	"testing"
 
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // TestMapStopReason is the stop-reason mapping table (architecture §11.3): every

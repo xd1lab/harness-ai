@@ -4,7 +4,7 @@
 // Workspace runtime with hard limits and process-group kill, the deny-by-default
 // egress broker, the durable pgx dedup ledger, the filesystem blob store, and the
 // ExecuteTool use-case behind the boltrope.v1 ToolRuntimeService — served over
-// mTLS with the shared [github.com/boltrope/boltrope/internal/platform/daemon]
+// mTLS with the shared [github.com/xd1lab/harness-ai/internal/platform/daemon]
 // harness (health, readiness gated on container-runtime availability, graceful
 // shutdown).
 //
@@ -23,18 +23,18 @@ import (
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"google.golang.org/grpc"
 
-	"github.com/boltrope/boltrope/internal/platform/blob"
-	"github.com/boltrope/boltrope/internal/platform/config"
-	"github.com/boltrope/boltrope/internal/platform/daemon"
-	trgrpc "github.com/boltrope/boltrope/internal/toolruntime/adapter/inbound/grpc"
-	"github.com/boltrope/boltrope/internal/toolruntime/adapter/outbound/dedup"
-	"github.com/boltrope/boltrope/internal/toolruntime/adapter/outbound/egress"
-	"github.com/boltrope/boltrope/internal/toolruntime/adapter/outbound/mcp"
-	"github.com/boltrope/boltrope/internal/toolruntime/adapter/outbound/runtime"
-	"github.com/boltrope/boltrope/internal/toolruntime/adapter/registry"
-	"github.com/boltrope/boltrope/internal/toolruntime/app"
-	"github.com/boltrope/boltrope/internal/toolruntime/app/execute"
-	"github.com/boltrope/boltrope/internal/toolruntime/tools"
+	"github.com/xd1lab/harness-ai/internal/platform/blob"
+	"github.com/xd1lab/harness-ai/internal/platform/config"
+	"github.com/xd1lab/harness-ai/internal/platform/daemon"
+	trgrpc "github.com/xd1lab/harness-ai/internal/toolruntime/adapter/inbound/grpc"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/outbound/dedup"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/outbound/egress"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/outbound/mcp"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/outbound/runtime"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/registry"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/app"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/app/execute"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/tools"
 )
 
 const serviceName = "tool-runtime"

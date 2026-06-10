@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/boltrope/boltrope/internal/platform/llm"
-	"github.com/boltrope/boltrope/internal/platform/pricing"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/pricing"
 )
 
 // TestCost_KnownModel_CacheReadWriteSplit verifies that Cost computes the

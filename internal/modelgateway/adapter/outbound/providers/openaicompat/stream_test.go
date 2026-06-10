@@ -14,7 +14,7 @@ import (
 
 	"github.com/openai/openai-go/v3/option"
 
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // These tests drive Generate/Stream through a real HTTP round-trip against an

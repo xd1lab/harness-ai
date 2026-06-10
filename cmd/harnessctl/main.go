@@ -66,8 +66,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
-	boltropev1 "github.com/boltrope/boltrope/gen/boltrope/v1"
-	"github.com/boltrope/boltrope/internal/platform/grpcx"
+	boltropev1 "github.com/xd1lab/harness-ai/gen/boltrope/v1"
+	"github.com/xd1lab/harness-ai/internal/platform/grpcx"
 )
 
 // devInsecureEnv unlocks the shared-seed static-cert dev mTLS path (mirrors the

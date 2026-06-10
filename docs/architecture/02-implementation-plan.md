@@ -2,7 +2,7 @@
 
 > **Status:** Gate 4 — implementation plan. Drives test-first (TDD) implementation.
 > **Date:** 2026-06-10
-> **Project:** Boltrope (`github.com/boltrope/boltrope`) — provider-portable, event-sourced AI agent harness.
+> **Project:** Boltrope (`github.com/xd1lab/harness-ai`) — provider-portable, event-sourced AI agent harness.
 > **Inputs (frozen):** `docs/spec/00-system-specification.md` (41 FRs + 12 DoD); `docs/architecture/00-architecture.md` (§§1–14); ADRs 0001–0017; the frozen contracts — `proto/boltrope/v1/*.proto` + committed `gen/`, `internal/platform/llm` (the normalized kernel), `internal/platform/{clock,ids,secret,blob}` (cross-service ports), `internal/orchestrator/{domain,app/ports.go,policy}`, `internal/toolruntime/{domain,app/ports.go}`.
 > **Audience:** Engineers writing failing tests then code, and the gating reviewer.
 
@@ -64,7 +64,7 @@ Within a wave, the listed tracks have **no shared files** and merge in any order
 - **Component:** repo root (`Makefile`, `.golangci.yml`, `.github/workflows/*`, `buf.yaml`/`buf.gen.yaml` verification, `go.mod` tool directives)
 - **FRs:** DOD-07, DOD-08, DOD-11; NFR-TEST-02, NFR-OPS-04 (toolchain), NFR-PORT-04 (release wiring stub)
 - **dependsOn:** —
-- **Tests first:** a CI smoke that asserts `golangci-lint run` exits 0 on the existing tree; a `buf lint` + `buf breaking` (against `main`) job that must pass on the committed protos; a `go test ./...` job that is green (no tests yet) and a `-race` variant; a unit test asserting the `depguard` config *would* reject an `import "github.com/boltrope/boltrope/gen/..."` from `internal/platform/llm` and a `forbidigo` rule rejecting `time.Now()` in `domain`/`app` (table-driven golden against a tiny fixture file under `testdata/`).
+- **Tests first:** a CI smoke that asserts `golangci-lint run` exits 0 on the existing tree; a `buf lint` + `buf breaking` (against `main`) job that must pass on the committed protos; a `go test ./...` job that is green (no tests yet) and a `-race` variant; a unit test asserting the `depguard` config *would* reject an `import "github.com/xd1lab/harness-ai/gen/..."` from `internal/platform/llm` and a `forbidigo` rule rejecting `time.Now()` in `domain`/`app` (table-driven golden against a tiny fixture file under `testdata/`).
 
 ### T-FND-02 — In-repo fakes/testkit for every consumer-defined + platform port
 - **Component:** `internal/<svc>/app/apptest/` (fakes live next to the ports that define them) + `internal/platform/<p>/<p>test/`

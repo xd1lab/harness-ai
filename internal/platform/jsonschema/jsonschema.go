@@ -18,8 +18,8 @@
 // # Determinism
 //
 // This package is pure and stateless: it does not inject or rely on
-// [github.com/boltrope/boltrope/internal/platform/clock.Clock] or
-// [github.com/boltrope/boltrope/internal/platform/ids.IDGenerator] because it
+// [github.com/xd1lab/harness-ai/internal/platform/clock.Clock] or
+// [github.com/xd1lab/harness-ai/internal/platform/ids.IDGenerator] because it
 // contains no time- or id-dependent logic. It is a platform helper, not a
 // domain/app component, so it is outside the forbidigo scope for time.Now.
 package jsonschema

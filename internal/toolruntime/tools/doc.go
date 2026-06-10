@@ -1,12 +1,12 @@
 // Package tools implements the native tools that make up the Agent-Computer
 // Interface (ADR-0013; architecture §2.3, §8.13): bash, read, write, edit, glob,
-// grep, webfetch, and websearch. Each is a [github.com/boltrope/boltrope/internal/toolruntime/domain.Tool]
+// grep, webfetch, and websearch. Each is a [github.com/xd1lab/harness-ai/internal/toolruntime/domain.Tool]
 // that declares its [domain.ToolSpec] (name, model-facing description, input JSON
 // Schema, and the [domain.SideEffect]/[domain.EgressClass] safety classifications)
 // and executes through the injected app ports — a per-session
-// [github.com/boltrope/boltrope/internal/toolruntime/app.Workspace] (filesystem +
+// [github.com/xd1lab/harness-ai/internal/toolruntime/app.Workspace] (filesystem +
 // in-sandbox command execution) and, for the external-comms tools, the
-// [github.com/boltrope/boltrope/internal/toolruntime/app.EgressBroker]
+// [github.com/xd1lab/harness-ai/internal/toolruntime/app.EgressBroker]
 // (deny-by-default per-session allowlist).
 //
 // # Classification (FR-TOOL-02)

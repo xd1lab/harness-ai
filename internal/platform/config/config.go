@@ -37,7 +37,7 @@
 // YAML file. The config carries only the NAME of the environment variable that
 // holds a key (for example [ModelGatewayConfig.APIKeyEnv]); the value is resolved
 // at the trusted boundary through
-// [github.com/boltrope/boltrope/internal/platform/secret.SecretsPort], whose v1
+// [github.com/xd1lab/harness-ai/internal/platform/secret.SecretsPort], whose v1
 // backend is env-only (ADR-0013; architecture §8.10). Keeping only the env-var
 // name here means a leaked config file or a logged Config never exposes a credential.
 package config

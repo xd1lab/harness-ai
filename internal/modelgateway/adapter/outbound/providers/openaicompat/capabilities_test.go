@@ -3,7 +3,7 @@ package openaicompat
 import (
 	"testing"
 
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // TestOllamaProfile_TracksGeneric pins the deliberate choice that current Ollama

@@ -7,12 +7,12 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
-	genproto "github.com/boltrope/boltrope/gen/boltrope/v1"
-	"github.com/boltrope/boltrope/internal/orchestrator/adapter/outbound/modelgw"
-	"github.com/boltrope/boltrope/internal/orchestrator/adapter/outbound/toolrt"
-	"github.com/boltrope/boltrope/internal/orchestrator/app"
-	"github.com/boltrope/boltrope/internal/platform/daemon"
-	"github.com/boltrope/boltrope/internal/platform/grpcx"
+	genproto "github.com/xd1lab/harness-ai/gen/boltrope/v1"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/adapter/outbound/modelgw"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/adapter/outbound/toolrt"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/app"
+	"github.com/xd1lab/harness-ai/internal/platform/daemon"
+	"github.com/xd1lab/harness-ai/internal/platform/grpcx"
 )
 
 // downstream bundles the dialed gRPC client connections to the model-gateway and

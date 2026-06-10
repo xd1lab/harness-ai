@@ -3,9 +3,9 @@
 // declared in the package that USES them (architecture §5). The concrete adapters
 // that satisfy these ports live in internal/orchestrator/adapter/* and are wired in
 // the infra layer; the loop itself depends only on the interfaces here plus the
-// platform ports ([github.com/boltrope/boltrope/internal/platform/clock.Clock],
-// [github.com/boltrope/boltrope/internal/platform/ids.IDGenerator]) and the
-// canonical [github.com/boltrope/boltrope/internal/platform/llm] kernel types.
+// platform ports ([github.com/xd1lab/harness-ai/internal/platform/clock.Clock],
+// [github.com/xd1lab/harness-ai/internal/platform/ids.IDGenerator]) and the
+// canonical [github.com/xd1lab/harness-ai/internal/platform/llm] kernel types.
 //
 // IMPORTANT: nothing here imports the generated gen/ protobuf package. These ports
 // are the in-process contract; the gRPC↔domain mapping is done by transport
@@ -18,8 +18,8 @@ import (
 	"context"
 	"errors"
 
-	"github.com/boltrope/boltrope/internal/orchestrator/domain"
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // ----------------------------------------------------------------------------
@@ -180,7 +180,7 @@ type ModelGatewayPort interface {
 // safety-classification flags that drive scheduling (read-only parallelism vs.
 // serialized mutation; architecture §9.2) and the egress/taint gate (architecture
 // §8.4). The authoritative tool model lives in
-// [github.com/boltrope/boltrope/internal/toolruntime/domain]; this is the minimal
+// [github.com/xd1lab/harness-ai/internal/toolruntime/domain]; this is the minimal
 // projection crossing the service boundary.
 type ToolDescriptor struct {
 	// Name is the unique tool name (matches an [llm.ToolDef.Name]).

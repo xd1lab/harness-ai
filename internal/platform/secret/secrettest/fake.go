@@ -9,7 +9,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/boltrope/boltrope/internal/platform/secret"
+	"github.com/xd1lab/harness-ai/internal/platform/secret"
 )
 
 // Compile-time assertions.

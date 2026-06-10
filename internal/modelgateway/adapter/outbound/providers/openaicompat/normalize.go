@@ -5,7 +5,7 @@ import (
 
 	openai "github.com/openai/openai-go/v3"
 
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // Normalizer converts a stream of OpenAI Chat Completions chunks

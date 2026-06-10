@@ -27,7 +27,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
-	infradb "github.com/boltrope/boltrope/internal/orchestrator/infra/db"
+	infradb "github.com/xd1lab/harness-ai/internal/orchestrator/infra/db"
 )
 
 const (

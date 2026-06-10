@@ -22,12 +22,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/boltrope/boltrope/internal/platform/blob"
-	"github.com/boltrope/boltrope/internal/platform/blob/blobtest"
-	"github.com/boltrope/boltrope/internal/toolruntime/adapter/registry"
-	"github.com/boltrope/boltrope/internal/toolruntime/app"
-	"github.com/boltrope/boltrope/internal/toolruntime/app/truntimetest"
-	"github.com/boltrope/boltrope/internal/toolruntime/domain"
+	"github.com/xd1lab/harness-ai/internal/platform/blob"
+	"github.com/xd1lab/harness-ai/internal/platform/blob/blobtest"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/registry"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/app"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/app/truntimetest"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/domain"
 )
 
 // objectSchema is a permissive object schema accepting a single string field.

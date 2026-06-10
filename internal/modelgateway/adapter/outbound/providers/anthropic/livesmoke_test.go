@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // liveModel is the model exercised by the smoke test; overridable via

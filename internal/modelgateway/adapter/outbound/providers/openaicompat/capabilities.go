@@ -1,6 +1,6 @@
 package openaicompat
 
-import "github.com/boltrope/boltrope/internal/platform/llm"
+import "github.com/xd1lab/harness-ai/internal/platform/llm"
 
 // EndpointProfile captures the capability defaults for one OpenAI-compatible
 // endpoint kind. Self-hosted servers vary in what they support — notably LM Studio

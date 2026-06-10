@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/boltrope/boltrope/internal/platform/clock"
+	"github.com/xd1lab/harness-ai/internal/platform/clock"
 )
 
 // Compile-time assertion that Fake satisfies clock.Clock.

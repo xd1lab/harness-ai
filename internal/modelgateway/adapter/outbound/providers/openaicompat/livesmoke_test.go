@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // liveBaseURL is the endpoint to exercise; defaults to a local Ollama OpenAI shim.

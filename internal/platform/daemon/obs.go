@@ -21,9 +21,9 @@
 // It deliberately holds no service-specific knowledge: each daemon's wiring file
 // constructs its adapters + inbound gRPC server and hands them to [Run] via a
 // [Service]. The package depends only on the platform packages
-// ([github.com/boltrope/boltrope/internal/platform/obs],
-// [github.com/boltrope/boltrope/internal/platform/grpcx],
-// [github.com/boltrope/boltrope/internal/platform/config]) and gRPC, never on a
+// ([github.com/xd1lab/harness-ai/internal/platform/obs],
+// [github.com/xd1lab/harness-ai/internal/platform/grpcx],
+// [github.com/xd1lab/harness-ai/internal/platform/config]) and gRPC, never on a
 // service's app/domain, so it cannot violate the service-isolation boundary
 // (DOD-08; architecture §12.4).
 package daemon
@@ -36,8 +36,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/boltrope/boltrope/internal/platform/config"
-	"github.com/boltrope/boltrope/internal/platform/obs"
+	"github.com/xd1lab/harness-ai/internal/platform/config"
+	"github.com/xd1lab/harness-ai/internal/platform/obs"
 )
 
 // Telemetry bundles the bootstrapped observability primitives a daemon shares: a

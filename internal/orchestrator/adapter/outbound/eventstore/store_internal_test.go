@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/boltrope/boltrope/internal/orchestrator/domain"
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // TestDecodePayloadRoundTrip asserts every closed domain.EventType marshals and

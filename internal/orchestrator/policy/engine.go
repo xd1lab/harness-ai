@@ -7,7 +7,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/boltrope/boltrope/internal/orchestrator/domain"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
 )
 
 // ErrBypassForbidden is returned by [Engine.Evaluate] when [ModeBypass] is

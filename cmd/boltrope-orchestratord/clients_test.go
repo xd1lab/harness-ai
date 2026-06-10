@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
-	"github.com/boltrope/boltrope/internal/platform/grpcx"
+	"github.com/xd1lab/harness-ai/internal/platform/grpcx"
 )
 
 // startDownstreamHealthServer stands up a shared-seed dev-mTLS gRPC server for the

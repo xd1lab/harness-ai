@@ -31,7 +31,7 @@ package pricing
 import (
 	"fmt"
 
-	"github.com/boltrope/boltrope/internal/platform/llm"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
 
 // ModelRates holds the per-token USD prices for a single model.

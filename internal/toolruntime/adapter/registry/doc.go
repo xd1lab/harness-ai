@@ -1,8 +1,8 @@
-// Package registry implements [github.com/boltrope/boltrope/internal/toolruntime/app.ToolRegistry]:
+// Package registry implements [github.com/xd1lab/harness-ai/internal/toolruntime/app.ToolRegistry]:
 // the merged, validate-then-execute tool catalog the tool-runtime exposes to the
 // orchestrator (architecture §2.3, §5.3, §8.13). It holds the eagerly-registered
 // native tools and merges in tools discovered LAZILY from MCP servers, validates
-// every registration's [github.com/boltrope/boltrope/internal/toolruntime/domain.ToolSpec],
+// every registration's [github.com/xd1lab/harness-ai/internal/toolruntime/domain.ToolSpec],
 // and — crucially — wraps each tool so its inputs are validated against its JSON
 // Schema before [domain.Tool.Execute] is ever invoked (FR-TOOL-01).
 //

@@ -1,5 +1,5 @@
 // Package truntimetest provides deterministic fakes for every consumer-defined
-// port in [github.com/boltrope/boltrope/internal/toolruntime/app]:
+// port in [github.com/xd1lab/harness-ai/internal/toolruntime/app]:
 // [app.ToolRegistry], [app.RuntimePort], [app.Workspace], [app.EgressBroker],
 // [app.MCPClientPort], and [app.DedupStore].
 //
@@ -14,8 +14,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/boltrope/boltrope/internal/toolruntime/app"
-	"github.com/boltrope/boltrope/internal/toolruntime/domain"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/app"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/domain"
 )
 
 // ---------------------------------------------------------------------------
