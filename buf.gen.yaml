@@ -1,0 +1,29 @@
+# buf code-generation configuration for the Boltrope protobuf contracts.
+#
+# v2 schema. Managed mode sets the Go package prefix for every generated file to
+# github.com/boltrope/boltrope/gen, so boltrope/v1/*.proto generate under
+# gen/boltrope/v1 with import path .../gen/boltrope/v1. Two local plugins run:
+# protoc-gen-go (messages) and protoc-gen-go-grpc (service stubs). Both emit with
+# paths=source_relative so the on-disk layout mirrors the proto tree.
+#
+# The REST/JSON facade is intentionally NOT generated yet: the client-facing
+# service (orchestrator.proto) carries no google.api.http annotations and the
+# module has no buf.build/googleapis/googleapis dependency, so a grpc-gateway
+# plugin would emit nothing. When the facade is added, annotate orchestrator.proto,
+# add the googleapis dep, and re-introduce a protoc-gen-grpc-gateway plugin entry
+# here (architecture 4.1).
+version: v2
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: github.com/boltrope/boltrope/gen
+plugins:
+  - local: protoc-gen-go
+    out: gen
+    opt:
+      - paths=source_relative
+  - local: protoc-gen-go-grpc
+    out: gen
+    opt:
+      - paths=source_relative

@@ -1,0 +1,87 @@
+# Boltrope release — GoReleaser on a version tag (NFR-PORT-04, DOD-10; ADR-0006).
+#
+# Triggered by pushing a SemVer tag (release-please opens the release PR and,
+# once merged, creates the `vX.Y.Z` tag that fires this workflow). GoReleaser
+# then builds the multi-arch static binaries, pushes multi-arch images to GHCR,
+# generates SBOMs (syft), and signs artifacts + images keylessly with cosign and
+# emits SLSA provenance — see .goreleaser.yaml.
+#
+# Conventions (ADR-0006):
+#   - All third-party actions are pinned to a commit SHA with the human-readable
+#     version in a trailing comment (Dependabot bumps SHA + comment together).
+#   - Permissions are least-privilege at the workflow level and widened only on
+#     the release job, which needs:
+#       contents: write   -> create the GitHub Release + upload artifacts
+#       packages: write   -> push images to GHCR
+#       id-token: write   -> OIDC token for keyless cosign signing (Sigstore)
+#       attestations: write -> record build provenance attestations
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+# Least privilege by default; the release job opts into exactly what it needs.
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GO_VERSION: "1.25.x"
+
+jobs:
+  goreleaser:
+    name: goreleaser
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create release + upload archives/checksums
+      packages: write # push container images to GHCR
+      id-token: write # keyless cosign signing via OIDC (no long-lived keys)
+      attestations: write # SLSA build provenance
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          # Full history + tags so GoReleaser can build the changelog/version.
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+
+      # QEMU + Buildx enable linux/arm64 image builds on an amd64 runner.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      # syft (SBOM) and cosign (keyless signing) on PATH for GoReleaser hooks.
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@d8a2c0130026bf585de5c176ab8f7ce62d75bf04 # v0.20.7
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62 # v3.10.0
+
+      # Push to GHCR under the repository owner; GITHUB_TOKEN has packages:write.
+      - name: Log in to GHCR
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          # Default token is sufficient for the GitHub Release + GHCR push.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # cosign keyless: no key material, identity comes from the OIDC token.
+          COSIGN_YES: "true"

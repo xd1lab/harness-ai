@@ -1,0 +1,28 @@
+# buf configuration for the Boltrope protobuf contracts.
+#
+# v2 schema. A single local module rooted at proto/ holds boltrope/v1/*.proto
+# (package boltrope.v1). Lint uses the STANDARD rule set (formerly named DEFAULT);
+# breaking-change detection uses FILE granularity so the committed contracts in
+# gen/ stay wire-compatible across changes (wired into CI per spec DOD-11).
+version: v2
+modules:
+  - path: proto
+lint:
+  use:
+    - STANDARD
+  # Scoped exception: the three server-streaming RPCs (Generate, Run, ExecuteTool)
+  # stream a typed *Event* oneof of frames (StreamEvent, RunEvent, ExecuteToolEvent)
+  # rather than a <Rpc>Response message. This is intentional and load-bearing:
+  # StreamEvent is the SHARED normalized stream-event contract that the gateway
+  # emits and the orchestrator relays (architecture 4.3), so it cannot be renamed
+  # per-RPC; "Event" is the accurate name for a stream-frame union. The exception
+  # is limited to RPC_RESPONSE_STANDARD_NAME on exactly these service files; all
+  # unary RPCs still follow the <Rpc>Request/<Rpc>Response discipline.
+  ignore_only:
+    RPC_RESPONSE_STANDARD_NAME:
+      - proto/boltrope/v1/model_gateway.proto
+      - proto/boltrope/v1/orchestrator.proto
+      - proto/boltrope/v1/tool_runtime.proto
+breaking:
+  use:
+    - FILE

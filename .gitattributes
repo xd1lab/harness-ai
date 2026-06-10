@@ -1,0 +1,22 @@
+# Normalize line endings to LF on check-in
+* text=auto eol=lf
+
+*.go   text eol=lf
+*.sh   text eol=lf
+*.md   text eol=lf
+
+# Windows-native scripts keep CRLF
+*.ps1  text eol=crlf
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# Generated / vendored — exclude from language stats and collapse in diffs
+*.pb.go        linguist-generated=true
+**/mocks/*.go  linguist-generated=true
+go.sum         -diff
+
+# Binary assets
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary

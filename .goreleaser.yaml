@@ -1,0 +1,433 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema-pro.json
+# SPDX-License-Identifier: Apache-2.0
+#
+# GoReleaser configuration for Boltrope (NFR-PORT-04, DOD-10; ADR-0006).
+#
+# On a tag push, .github/workflows/release.yml runs `goreleaser release`, which:
+#   - cross-compiles the six cmd/ binaries as static (CGO_OFF) linux amd64+arm64
+#     binaries with ldflags version stamping (main.version / .commit / .date) and
+#     ships them in the release archives + checksums (the harnessctl client also
+#     gets darwin/windows builds);
+#   - builds and pushes multi-arch Docker images to GHCR, joined by a manifest,
+#     reusing the repo's single multi-target ./Dockerfile (one stage per service,
+#     selected with --target; the same Dockerfile deploy/docker-compose.yml uses).
+#     That Dockerfile compiles the in-image binary from source in its `builder`
+#     stage with -X main.version=$VERSION, so the image binary is version-stamped
+#     identically to the archived one;
+#   - generates an SBOM per archive with syft;
+#   - signs checksums and images keylessly with cosign (Sigstore/Fulcio/Rekor),
+#     using the workflow's OIDC token (no long-lived keys);
+#   - emits SLSA build provenance attestations for the binaries.
+#
+# Validate without releasing:  goreleaser check   /   goreleaser release --snapshot --clean
+#
+# NOTE: the `boltrope` owner segment in image names and the module path is a
+# PLACEHOLDER. Rename it to the real GitHub org/user before the first public tag.
+version: 2
+
+project_name: boltrope
+
+before:
+  hooks:
+    - go mod download
+
+# ── Binaries ────────────────────────────────────────────────────────────────
+# One build per cmd/ entrypoint. Static, reproducible-ish (-trimpath), linux
+# only for v1 (the runtime targets Linux amd64/arm64; NFR-PORT-01).
+builds:
+  - id: orchestratord
+    main: ./cmd/boltrope-orchestratord
+    binary: boltrope-orchestratord
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    goos: [linux]
+    goarch: [amd64, arm64]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .FullCommit }}
+      - -X main.date={{ .CommitDate }}
+
+  - id: modelgwd
+    main: ./cmd/boltrope-modelgwd
+    binary: boltrope-modelgwd
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    goos: [linux]
+    goarch: [amd64, arm64]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .FullCommit }}
+      - -X main.date={{ .CommitDate }}
+
+  - id: toolruntimed
+    main: ./cmd/boltrope-toolruntimed
+    binary: boltrope-toolruntimed
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    goos: [linux]
+    goarch: [amd64, arm64]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .FullCommit }}
+      - -X main.date={{ .CommitDate }}
+
+  - id: projectord
+    main: ./cmd/boltrope-projectord
+    binary: boltrope-projectord
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    goos: [linux]
+    goarch: [amd64, arm64]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .FullCommit }}
+      - -X main.date={{ .CommitDate }}
+
+  - id: migrate
+    main: ./cmd/boltrope-migrate
+    binary: boltrope-migrate
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    goos: [linux]
+    goarch: [amd64, arm64]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .FullCommit }}
+      - -X main.date={{ .CommitDate }}
+
+  - id: harnessctl
+    main: ./cmd/harnessctl
+    binary: harnessctl
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    # The client CLI is useful off-Linux too.
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .FullCommit }}
+      - -X main.date={{ .CommitDate }}
+
+# ── Archives ────────────────────────────────────────────────────────────────
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - NOTICE
+      - README.md
+
+checksum:
+  name_template: "checksums.txt"
+
+# ── SBOM (syft) ─────────────────────────────────────────────────────────────
+# One SPDX-JSON SBOM per produced archive.
+sboms:
+  - id: archive
+    artifacts: archive
+
+# ── Container images → GHCR (per-arch, joined by a manifest below) ──────────
+dockers:
+  - id: orchestratord-amd64
+    goos: linux
+    goarch: amd64
+    ids: [orchestratord]
+    dockerfile: Dockerfile
+    use: buildx
+    image_templates:
+      - "ghcr.io/boltrope/boltrope-orchestratord:{{ .Version }}-amd64"
+      - "ghcr.io/boltrope/boltrope-orchestratord:latest-amd64"
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--target=orchestratord"
+      - "--build-arg=VERSION={{ .Version }}"
+      - "--label=org.opencontainers.image.source=https://github.com/boltrope/boltrope"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+  - id: orchestratord-arm64
+    goos: linux
+    goarch: arm64
+    ids: [orchestratord]
+    dockerfile: Dockerfile
+    use: buildx
+    image_templates:
+      - "ghcr.io/boltrope/boltrope-orchestratord:{{ .Version }}-arm64"
+      - "ghcr.io/boltrope/boltrope-orchestratord:latest-arm64"
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--target=orchestratord"
+      - "--build-arg=VERSION={{ .Version }}"
+      - "--label=org.opencontainers.image.source=https://github.com/boltrope/boltrope"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+
+  - id: modelgwd-amd64
+    goos: linux
+    goarch: amd64
+    ids: [modelgwd]
+    dockerfile: Dockerfile
+    use: buildx
+    image_templates:
+      - "ghcr.io/boltrope/boltrope-modelgwd:{{ .Version }}-amd64"
+      - "ghcr.io/boltrope/boltrope-modelgwd:latest-amd64"
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--target=modelgwd"
+      - "--build-arg=VERSION={{ .Version }}"
+      - "--label=org.opencontainers.image.source=https://github.com/boltrope/boltrope"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+  - id: modelgwd-arm64
+    goos: linux
+    goarch: arm64
+    ids: [modelgwd]
+    dockerfile: Dockerfile
+    use: buildx
+    image_templates:
+      - "ghcr.io/boltrope/boltrope-modelgwd:{{ .Version }}-arm64"
+      - "ghcr.io/boltrope/boltrope-modelgwd:latest-arm64"
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--target=modelgwd"
+      - "--build-arg=VERSION={{ .Version }}"
+      - "--label=org.opencontainers.image.source=https://github.com/boltrope/boltrope"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+
+  - id: toolruntimed-amd64
+    goos: linux
+    goarch: amd64
+    ids: [toolruntimed]
+    dockerfile: Dockerfile
+    use: buildx
+    image_templates:
+      - "ghcr.io/boltrope/boltrope-toolruntimed:{{ .Version }}-amd64"
+      - "ghcr.io/boltrope/boltrope-toolruntimed:latest-amd64"
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--target=toolruntimed"
+      - "--build-arg=VERSION={{ .Version }}"
+      - "--label=org.opencontainers.image.source=https://github.com/boltrope/boltrope"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+  - id: toolruntimed-arm64
+    goos: linux
+    goarch: arm64
+    ids: [toolruntimed]
+    dockerfile: Dockerfile
+    use: buildx
+    image_templates:
+      - "ghcr.io/boltrope/boltrope-toolruntimed:{{ .Version }}-arm64"
+      - "ghcr.io/boltrope/boltrope-toolruntimed:latest-arm64"
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--target=toolruntimed"
+      - "--build-arg=VERSION={{ .Version }}"
+      - "--label=org.opencontainers.image.source=https://github.com/boltrope/boltrope"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+
+  - id: projectord-amd64
+    goos: linux
+    goarch: amd64
+    ids: [projectord]
+    dockerfile: Dockerfile
+    use: buildx
+    image_templates:
+      - "ghcr.io/boltrope/boltrope-projectord:{{ .Version }}-amd64"
+      - "ghcr.io/boltrope/boltrope-projectord:latest-amd64"
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--target=projectord"
+      - "--build-arg=VERSION={{ .Version }}"
+      - "--label=org.opencontainers.image.source=https://github.com/boltrope/boltrope"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+  - id: projectord-arm64
+    goos: linux
+    goarch: arm64
+    ids: [projectord]
+    dockerfile: Dockerfile
+    use: buildx
+    image_templates:
+      - "ghcr.io/boltrope/boltrope-projectord:{{ .Version }}-arm64"
+      - "ghcr.io/boltrope/boltrope-projectord:latest-arm64"
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--target=projectord"
+      - "--build-arg=VERSION={{ .Version }}"
+      - "--label=org.opencontainers.image.source=https://github.com/boltrope/boltrope"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+
+  - id: migrate-amd64
+    goos: linux
+    goarch: amd64
+    ids: [migrate]
+    dockerfile: Dockerfile
+    use: buildx
+    image_templates:
+      - "ghcr.io/boltrope/boltrope-migrate:{{ .Version }}-amd64"
+      - "ghcr.io/boltrope/boltrope-migrate:latest-amd64"
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--target=migrate"
+      - "--build-arg=VERSION={{ .Version }}"
+      - "--label=org.opencontainers.image.source=https://github.com/boltrope/boltrope"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+  - id: migrate-arm64
+    goos: linux
+    goarch: arm64
+    ids: [migrate]
+    dockerfile: Dockerfile
+    use: buildx
+    image_templates:
+      - "ghcr.io/boltrope/boltrope-migrate:{{ .Version }}-arm64"
+      - "ghcr.io/boltrope/boltrope-migrate:latest-arm64"
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--target=migrate"
+      - "--build-arg=VERSION={{ .Version }}"
+      - "--label=org.opencontainers.image.source=https://github.com/boltrope/boltrope"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+
+# ── Multi-arch manifests (the tags users pull) ──────────────────────────────
+docker_manifests:
+  - name_template: "ghcr.io/boltrope/boltrope-orchestratord:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/boltrope/boltrope-orchestratord:{{ .Version }}-amd64"
+      - "ghcr.io/boltrope/boltrope-orchestratord:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/boltrope/boltrope-orchestratord:latest"
+    image_templates:
+      - "ghcr.io/boltrope/boltrope-orchestratord:latest-amd64"
+      - "ghcr.io/boltrope/boltrope-orchestratord:latest-arm64"
+
+  - name_template: "ghcr.io/boltrope/boltrope-modelgwd:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/boltrope/boltrope-modelgwd:{{ .Version }}-amd64"
+      - "ghcr.io/boltrope/boltrope-modelgwd:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/boltrope/boltrope-modelgwd:latest"
+    image_templates:
+      - "ghcr.io/boltrope/boltrope-modelgwd:latest-amd64"
+      - "ghcr.io/boltrope/boltrope-modelgwd:latest-arm64"
+
+  - name_template: "ghcr.io/boltrope/boltrope-toolruntimed:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/boltrope/boltrope-toolruntimed:{{ .Version }}-amd64"
+      - "ghcr.io/boltrope/boltrope-toolruntimed:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/boltrope/boltrope-toolruntimed:latest"
+    image_templates:
+      - "ghcr.io/boltrope/boltrope-toolruntimed:latest-amd64"
+      - "ghcr.io/boltrope/boltrope-toolruntimed:latest-arm64"
+
+  - name_template: "ghcr.io/boltrope/boltrope-projectord:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/boltrope/boltrope-projectord:{{ .Version }}-amd64"
+      - "ghcr.io/boltrope/boltrope-projectord:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/boltrope/boltrope-projectord:latest"
+    image_templates:
+      - "ghcr.io/boltrope/boltrope-projectord:latest-amd64"
+      - "ghcr.io/boltrope/boltrope-projectord:latest-arm64"
+
+  - name_template: "ghcr.io/boltrope/boltrope-migrate:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/boltrope/boltrope-migrate:{{ .Version }}-amd64"
+      - "ghcr.io/boltrope/boltrope-migrate:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/boltrope/boltrope-migrate:latest"
+    image_templates:
+      - "ghcr.io/boltrope/boltrope-migrate:latest-amd64"
+      - "ghcr.io/boltrope/boltrope-migrate:latest-arm64"
+
+# ── Keyless signing (cosign + Sigstore) ─────────────────────────────────────
+# Signs the checksums file; the OIDC token comes from the release workflow.
+signs:
+  - cmd: cosign
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--output-certificate=${certificate}"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
+
+# Keyless signing of every pushed image + manifest.
+docker_signs:
+  - cmd: cosign
+    args:
+      - sign
+      - "${artifact}@${digest}"
+      - "--yes"
+    artifacts: all
+    output: true
+
+# ── SLSA build provenance ───────────────────────────────────────────────────
+# Attestations for the binary artifacts; uploaded alongside the release.
+attestations:
+  - id: provenance
+    cmd: cosign
+    args:
+      - attest-blob
+      - "--predicate={{ .ArtifactPath }}.slsa.json"
+      - "--type=slsaprovenance"
+      - "--output-signature={{ .ArtifactPath }}.att"
+      - "--yes"
+      - "{{ .ArtifactPath }}"
+    artifacts: binary
+
+# ── Release notes / changelog ───────────────────────────────────────────────
+# Conventional-Commits grouping; release-please owns the human changelog + tag.
+changelog:
+  sort: asc
+  use: github
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\(.+\))??!?:.+$'
+      order: 0
+    - title: Bug fixes
+      regexp: '^.*?fix(\(.+\))??!?:.+$'
+      order: 1
+    - title: Others
+      order: 999
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "merge conflict"
+
+release:
+  github:
+    owner: boltrope
+    name: boltrope
+  prerelease: auto

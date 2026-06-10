@@ -1,0 +1,273 @@
+// Boltrope model-gateway wire contract.
+//
+// ModelGatewayService is the stateless provider-abstraction proxy: it normalizes
+// Boltrope's canonical message/tool model (common.proto, mirroring
+// internal/platform/llm) to and from each LLM provider family, streams token
+// deltas, counts tokens, and exposes per-(endpoint, model) capability flags.
+//
+// ALL provider-specific behavior — wire-format mapping, stream normalization,
+// stop-reason/usage/error normalization, capability resolution, retry — lives
+// behind this service (architecture 4.3, 11). The orchestrator relay is
+// provider-agnostic. Mirrors the llm.Provider interface (Generate/Stream map onto
+// the single streaming Generate RPC; CountTokens and Capabilities map onto unary
+// RPCs).
+//
+// This is an internal orchestrator -> model-gateway boundary spoken over gRPC; it
+// carries no REST/JSON facade. A facade is added only on the client-facing edge
+// (orchestrator.proto) later, via google.api.http annotations and a
+// buf.build/googleapis/googleapis dependency (architecture 4.1).
+syntax = "proto3";
+
+package boltrope.v1;
+
+import "boltrope/v1/common.proto";
+
+// ModelGatewayService is the orchestrator -> model-gateway boundary.
+service ModelGatewayService {
+  // Generate runs a single generation and server-streams normalized
+  // StreamEvents, terminated by a StreamEvent carrying Done. The caller forwards
+  // text/thinking deltas live and assembles the terminal Message in its app layer
+  // (architecture 4.3). It backs both llm.Provider.Generate (caller aggregates the
+  // stream) and llm.Provider.Stream (caller relays it). A STOP_REASON_PAUSE in the
+  // terminal Done is non-terminal: the caller re-issues with the prior assistant
+  // content echoed back via GenerateRequest.provider_raw.
+  rpc Generate(GenerateRequest) returns (stream StreamEvent);
+
+  // CountTokens returns the input token count for a request under its target
+  // model. Capability-gated: when Capabilities.supports_token_counting is false
+  // for the model, the gateway returns gRPC UNIMPLEMENTED (mapping
+  // llm.ErrUnsupported). Never used for billing where the provider reports
+  // authoritative usage (architecture 11.6).
+  rpc CountTokens(CountTokensRequest) returns (CountTokensResponse);
+
+  // GetCapabilities returns the Capabilities for a given model on this gateway's
+  // endpoint. The model id is an input because capability variability is per-
+  // (endpoint, model) (architecture 11.4). Mirrors llm.Provider.Capabilities.
+  rpc GetCapabilities(GetCapabilitiesRequest) returns (GetCapabilitiesResponse);
+}
+
+// GenerationParams is the normalized, provider-agnostic generation request body.
+// The gateway adapter maps it onto each provider's wire format, placing system,
+// tools, and tool_choice where that provider requires. Mirrors llm.Request.
+//
+// It is a standalone message (rather than inlined into GenerateRequest) so the
+// identical request body can seed CountTokens without duplicating the field set.
+message GenerationParams {
+  // model is the provider model identifier to target (e.g. "claude-opus-4-8").
+  // It is also the key for per-(endpoint, model) capability resolution.
+  string model = 1;
+
+  // system is the system prompt as a single string, placed correctly per provider
+  // (top-level system, instructions, or a leading system message). Gated by
+  // Capabilities.supports_system_prompt.
+  string system = 2;
+
+  // messages is the ordered conversation history, oldest first.
+  repeated Message messages = 3;
+
+  // tools is the set of tools the model may call. Empty means no tools.
+  repeated ToolDefinition tools = 4;
+
+  // tool_choice constrains tool usage for this request. TOOL_CHOICE_UNSPECIFIED
+  // lets the adapter apply the provider default.
+  ToolChoice tool_choice = 5;
+
+  // tool_name names the specific tool the model must call; it is meaningful only
+  // when tool_choice is TOOL_CHOICE_TOOL and ignored otherwise.
+  string tool_name = 6;
+
+  // max_tokens is the maximum number of tokens to generate. Zero lets the adapter
+  // apply a provider/model default; adapters may clamp it to
+  // Capabilities.max_output_tokens.
+  int64 max_tokens = 7;
+
+  // temperature is the sampling temperature. It is optional so that an absent
+  // value distinctly means "use the provider default" rather than 0.0; adapters
+  // drop it where the model rejects sampling parameters.
+  optional double temperature = 8;
+
+  // stream records the caller's streaming intent for adapters that vary request
+  // construction by mode. It is advisory: the Generate RPC always streams.
+  bool stream = 9;
+
+  // provider_raw is the opaque, provider-scoped continuation blob returned by a
+  // previous turn's Done.provider_raw, echoed back unmodified to continue
+  // (notably on STOP_REASON_PAUSE) or to replay statelessly. Empty on a fresh
+  // turn. It is raw JSON bytes, never interpreted outside the originating
+  // adapter (ADR-0016, architecture 11.1). Mirrors llm.ProviderRaw.
+  bytes provider_raw = 10;
+
+  // output_schema is an OPTIONAL JSON Schema (a JSON object encoded as bytes)
+  // constraining the model's final response to structured output. Empty/unset
+  // means unconstrained free-form output. When set, the orchestrator loop
+  // validates each response against this schema and, on failure, retries up to a
+  // configured cap; exhausting the cap terminates the run with
+  // TERMINATION_SUBTYPE_ERROR_MAX_STRUCTURED_OUTPUT_RETRIES. The adapter maps it
+  // onto the provider's structured-output / response-format facility where
+  // available. Mirrors llm.Request.OutputSchema.
+  bytes output_schema = 11;
+
+  // strict requests strict schema enforcement of output_schema (provider-native
+  // strict structured output, gated by Capabilities.supports_json_schema_strict).
+  // Meaningful only when output_schema is set; ignored otherwise. Mirrors
+  // llm.Request.Strict.
+  bool strict = 12;
+}
+
+// GenerateRequest is the GenerateRequest envelope for the Generate RPC.
+message GenerateRequest {
+  // params is the normalized generation request body.
+  GenerationParams params = 1;
+}
+
+// TextDelta and ThinkingDelta are shared streaming primitives defined in
+// common.proto (they are also relayed on the orchestrator Run stream). The
+// ToolCallDelta below is gateway-specific.
+
+// ToolCallDelta is a fragment (or the entirety) of a single tool call, identified
+// by an OPAQUE per-call id rather than an integer index.
+//
+// Providers encode streamed tool-call arguments differently — OpenAI Chat
+// Completions sends a concatenable JSON-string fragment, Gemini sends
+// path-addressed (jsonPath) partial-args fragments, OpenAI Responses sends
+// item-scoped deltas. An opaque call_id plus an optional args_path and a raw
+// args_fragment lets the gateway normalize all of these without an
+// accumulate-by-index assumption (architecture 11.2).
+//
+// A COMPLETE tool call is always expressible as a SINGLE ToolCallDelta: call_id
+// set, name set, the full arguments object in args_fragment, and args_path empty.
+// This is exactly how the gateway emits a tool call when the (endpoint, model)
+// lacks streaming tool-call support (Capabilities.supports_streaming_tool_calls is
+// false): it buffers the whole call and emits one whole-object ToolCallDelta on
+// the stream. Tool-call content therefore ALWAYS arrives as ToolCallDelta events
+// and NEVER on the terminal Done. Mirrors llm.ToolCallDelta.
+message ToolCallDelta {
+  // call_id is the opaque, provider-scoped id of the tool call this fragment
+  // belongs to. Fragments sharing a call_id belong to the same call.
+  string call_id = 1;
+  // name is the tool name when known for this call; it may be empty on fragments
+  // that carry only argument data.
+  string name = 2;
+  // args_path is the address of this fragment within the arguments object for
+  // path-addressed encodings (e.g. Gemini jsonPath). Empty for whole-object or
+  // append-style encodings.
+  string args_path = 3;
+  // args_fragment is the raw argument fragment for this delta, as JSON bytes. Its
+  // interpretation (append vs. set-at-path) is determined by args_path; the
+  // gateway assembles fragments into the final parsed ToolCall.
+  bytes args_fragment = 4;
+}
+
+// Done is the single terminal event of a Generate stream. It mirrors the terminal
+// fields of a non-streaming result so the orchestrator handles streamed and unary
+// outcomes uniformly. A STOP_REASON_PAUSE continuation is reported here too (with
+// the continuation state in provider_raw), so the loop distinguishes
+// needs-continuation from final by inspecting stop_reason.
+//
+// Done carries NO tool-call content: every tool call (including those buffered for
+// non-streaming models) is delivered as a ToolCallDelta event earlier in the
+// stream, never reflected in this terminal frame. Mirrors llm.Done.
+message Done {
+  // stop_reason is the normalized reason generation stopped. When STOP_REASON_OTHER,
+  // consult raw_stop_reason for the original provider value.
+  StopReason stop_reason = 1;
+  // raw_stop_reason is the verbatim provider stop-reason string, always populated
+  // for traceability and authoritative when stop_reason is STOP_REASON_OTHER.
+  string raw_stop_reason = 2;
+  // usage is the normalized token usage for the turn, read from the provider's
+  // authoritative usage field (architecture 11.6).
+  Usage usage = 3;
+  // provider_raw is the opaque, provider-scoped continuation blob for the turn,
+  // echoed back via GenerationParams.provider_raw to continue (notably on
+  // STOP_REASON_PAUSE) or to replay byte-faithfully. Empty when no continuation
+  // state is needed.
+  bytes provider_raw = 4;
+}
+
+// StreamEvent is one normalized event in a streamed generation: a discriminated
+// union with exactly one variant set. The gateway runs the provider-specific
+// stream normalizers and emits this single shape so the orchestrator relay stays
+// provider-agnostic (ADR-0016, architecture 4.3, 11.2). Mirrors llm.StreamEvent.
+message StreamEvent {
+  // event holds exactly one stream-event variant.
+  oneof event {
+    // text_delta is an incremental chunk of assistant text.
+    TextDelta text_delta = 1;
+    // thinking_delta is an incremental chunk of reasoning/thinking text.
+    ThinkingDelta thinking_delta = 2;
+    // tool_call_delta is an incremental fragment of a tool call.
+    ToolCallDelta tool_call_delta = 3;
+    // done is the single terminal event of the stream (terminal or PAUSE).
+    Done done = 4;
+  }
+}
+
+// CountTokensRequest carries the request whose input tokens are to be counted.
+message CountTokensRequest {
+  // params is the normalized generation request body to measure. Only the
+  // input-shaping fields (model, system, messages, tools) are significant;
+  // generation controls are ignored.
+  GenerationParams params = 1;
+}
+
+// CountTokensResponse is the result of CountTokens.
+message CountTokensResponse {
+  // input_tokens is the counted number of input tokens for the request under its
+  // target model.
+  int64 input_tokens = 1;
+}
+
+// GetCapabilitiesRequest carries the model id whose capabilities are requested.
+message GetCapabilitiesRequest {
+  // model is the provider model identifier whose per-(endpoint, model)
+  // capabilities are requested.
+  string model = 1;
+}
+
+// Capabilities describes what a specific (endpoint, model) pair supports. The
+// orchestrator consults these flags to fail fast or degrade rather than sending a
+// request the backend will reject. Capability variability is per-MODEL within an
+// endpoint (architecture 11.4). Mirrors llm.Capabilities.
+message Capabilities {
+  // supports_tools reports whether the model can be given tools and emit tool
+  // calls.
+  bool supports_tools = 1;
+  // supports_parallel_tool_calls reports whether the model may emit more than one
+  // tool call in a single turn.
+  bool supports_parallel_tool_calls = 2;
+  // supports_streaming_tool_calls reports whether tool-call arguments are streamed
+  // incrementally as multiple fragments. When false, the gateway buffers the whole
+  // call and emits it as a SINGLE whole-object ToolCallDelta (call_id + name + full
+  // args_fragment, args_path empty) rather than as incremental fragments — it is
+  // never folded into Done (architecture 11.2).
+  bool supports_streaming_tool_calls = 3;
+  // supports_vision reports whether the model accepts ImagePart inputs.
+  bool supports_vision = 4;
+  // supports_system_prompt reports whether the model accepts a first-class system
+  // instruction.
+  bool supports_system_prompt = 5;
+  // supports_thinking reports whether the model supports reasoning/extended
+  // thinking.
+  bool supports_thinking = 6;
+  // supports_token_counting reports whether CountTokens is backed by a real count
+  // for this model; when false, CountTokens returns UNIMPLEMENTED.
+  bool supports_token_counting = 7;
+  // supports_json_schema_strict reports whether the model enforces strict JSON
+  // Schema validation of tool arguments / structured output.
+  bool supports_json_schema_strict = 8;
+  // supports_server_side_tools reports whether the model exposes provider-native
+  // server-side tools. v1 DISABLES these via a hard gateway policy switch so all
+  // tools flow through tool-runtime's controls (architecture 8.12); the flag is
+  // carried for forward compatibility and is false in v1.
+  bool supports_server_side_tools = 9;
+  // max_output_tokens is the maximum number of tokens the model can generate in a
+  // single response. Zero means unknown/unspecified; adapters may clamp
+  // GenerationParams.max_tokens to this value.
+  int64 max_output_tokens = 10;
+}
+
+// GetCapabilitiesResponse is the result of GetCapabilities.
+message GetCapabilitiesResponse {
+  // capabilities is the resolved capability set for the requested model.
+  Capabilities capabilities = 1;
+}

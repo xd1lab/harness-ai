@@ -1,0 +1,357 @@
+# Boltrope — local / dev stack.
+# ============================================================================
+# Brings up the full v1 deployment on a single Docker host (UC-OPS-01, DOD-05):
+#
+#     postgres (healthcheck)
+#        └─► boltrope-migrate   (one-shot DDL gate; exits 0)            NFR-OPS-01
+#              └─► boltrope-grant (one-shot: give the RLS app-role LOGIN)
+#                    └─► orchestratord / modelgwd / toolruntimed / projectord
+#
+# Ordering is enforced with `depends_on` + `healthcheck` so a service never
+# starts against an unmigrated schema (NFR-OPS-02): Postgres must be healthy
+# before migrate runs, migrate must complete successfully before the grant runs,
+# and the grant must complete before any long-lived service starts. Each service
+# then has its own /readyz healthcheck so `docker compose up --wait` only returns
+# once the stack is actually serving (FR-OBS-05).
+#
+# This is the DEV / SINGLE-TENANT / TRUSTED-CODE stack. It runs with
+# BOLTROPE_DEV_INSECURE=1 (the static-cert mTLS fallback; ADR-0013, NFR-SEC-01)
+# and mounts the host docker socket into the tool-runtime (docker-out-of-docker).
+# Read deploy/README.md for the security caveats and the production posture
+# (SPIRE-issued SVIDs, a socket-proxied / rootless / microVM sandbox backend,
+# and the non-owner DB role provisioned out-of-band).
+#
+# All tunables come from `.env` (see .env.example); every value below has an
+# inline default so `docker compose up` works with an EMPTY .env and NO API key:
+# the model-gateway defaults to the built-in `stub` provider (a deterministic,
+# scripted, network-free provider) so the whole stack comes up and can run a task
+# keyless out of the box. Point it at a REAL model (Anthropic/Gemini/OpenAI or a
+# self-hosted OpenAI-compatible endpoint) by setting the provider + key env on the
+# modelgwd service — see the `modelgwd` block below and deploy/README.md.
+
+name: boltrope
+
+# ── reusable fragments ───────────────────────────────────────────────────────
+
+# Build block shared by every service image: the single root Dockerfile, one
+# stage per service selected by `target` in each service below.
+x-build: &boltrope-build
+  context: ..
+  dockerfile: Dockerfile
+  args:
+    VERSION: ${BOLTROPE_VERSION:-dev}
+
+# Env shared by every Boltrope binary. Per-service env (listen addresses, role
+# DSN, downstream endpoints) is layered on top in each service block. The DSN
+# the SERVICES use is the non-owner app role (RLS-bound); migrate uses the owner
+# DSN separately.
+x-common-env: &common-env
+  # Secure-by-default is off here: this is the documented dev escape hatch.
+  BOLTROPE_DEV_INSECURE: "1"
+  # SHARED dev-CA seed. Under BOLTROPE_DEV_INSECURE=1 each service mints its mTLS
+  # identity from a CA derived DETERMINISTICALLY from this seed, so every service
+  # that sets the SAME value trusts the others and inter-service mutual TLS
+  # completes cross-container (a server in one container trusts a client in
+  # another). It MUST be identical across all services — it is anchored here once
+  # via the shared fragment so it cannot drift. NOT a secret and NEVER for
+  # production (the seed is gated behind dev-insecure and compiled out of release
+  # images; production uses SPIRE-issued SVIDs). Override per-stack via .env.
+  #
+  # This default MUST equal grpcx.defaultDevCASeed (internal/platform/grpcx/
+  # devca.go), so a HOST client (harnessctl) run with NO BOLTROPE_DEV_CA_SEED set
+  # derives the SAME dev CA as the stack and completes mTLS against the compose
+  # edge — which is exactly the README Quickstart command (it sets no seed). Keep
+  # the two values identical.
+  BOLTROPE_DEV_CA_SEED: ${BOLTROPE_DEV_CA_SEED:-boltrope-dev-ca-seed/v1/DO-NOT-USE-IN-PRODUCTION}
+  BOLTROPE_LOG_LEVEL: ${BOLTROPE_LOG_LEVEL:-info}
+  BOLTROPE_TRUST_DOMAIN: ${BOLTROPE_TRUST_DOMAIN:-boltrope.local}
+  # PostgreSQL major version pin (NFR-PORT-03); must match the postgres image.
+  BOLTROPE_POSTGRES__VERSION: "16"
+  # The non-owner application role DSN every service connects with so RLS binds
+  # (FORCE ROW LEVEL SECURITY; the orchestrator SET LOCALs app.current_tenant per
+  # tx). sslmode=disable is fine on the private compose network.
+  BOLTROPE_POSTGRES__DSN: >-
+    postgres://${BOLTROPE_DB_APP_USER:-boltrope_app}:${BOLTROPE_DB_APP_PASSWORD:-boltrope_app_pw}@postgres:5432/${POSTGRES_DB:-boltrope}?sslmode=disable
+  # OTLP collector endpoint (host:port). Defaults to a collector named `otel` on
+  # the network; the stack does NOT start one (bring your own), so `insecure` is
+  # set and an absent collector simply means dropped spans — it never blocks a
+  # turn.
+  BOLTROPE_OTLP__ENDPOINT: ${BOLTROPE_OTLP__ENDPOINT:-otel:4317}
+  BOLTROPE_OTLP__INSECURE: "1"
+  # Shared filesystem blob store root (FR-STATE-05). Mounted from a named volume
+  # on every service that reads or writes blobs so they see the same bytes.
+  BOLTROPE_BLOB__DIR: /var/lib/boltrope/blobs
+
+# Standard /readyz healthcheck for the distroless service images. They have no
+# shell, so we invoke the static busybox baked in at /busybox (see Dockerfile)
+# directly (exec form, no shell). 8080 is the in-container HTTP port (fixed by
+# the per-service BOLTROPE_SERVER__HTTP_ADDR below).
+x-readyz-healthcheck: &readyz-healthcheck
+  test: ["CMD", "/busybox/busybox", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/readyz"]
+  interval: 5s
+  timeout: 4s
+  retries: 12
+  start_period: 10s
+
+# Conservative per-service resource hints (compose v3 `deploy.resources`; honored
+# by `docker compose` for limits). Tune in .env for heavier local models.
+x-svc-resources: &svc-resources
+  resources:
+    limits:
+      cpus: ${BOLTROPE_SVC_CPUS:-1.0}
+      memory: ${BOLTROPE_SVC_MEMORY:-512m}
+
+services:
+  # ── PostgreSQL: the single source of truth ──────────────────────────────────
+  postgres:
+    image: postgres:16
+    environment:
+      # OWNER / superuser credentials. migrate connects as this role; the grant
+      # one-shot uses it to give boltrope_app a login. Services do NOT use it.
+      POSTGRES_USER: ${BOLTROPE_DB_OWNER_USER:-boltrope_owner}
+      POSTGRES_PASSWORD: ${BOLTROPE_DB_OWNER_PASSWORD:-boltrope_owner_pw}
+      POSTGRES_DB: ${POSTGRES_DB:-boltrope}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Healthy only once the DB accepts connections for the owner+db, so the
+    # migrate gate cannot start against a still-initializing server.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${BOLTROPE_DB_OWNER_USER:-boltrope_owner} -d ${POSTGRES_DB:-boltrope}"]
+      interval: 5s
+      timeout: 4s
+      retries: 15
+      start_period: 5s
+    networks: [boltrope]
+    deploy: *svc-resources
+    # Not published by default; uncomment to inspect the DB from the host.
+    # ports: ["5432:5432"]
+
+  # ── migrate: one-shot DDL gate (NFR-OPS-01) ──────────────────────────────────
+  # Runs the embedded migrations as the OWNER, creating the schema + the
+  # NOBYPASSRLS `boltrope_app` role, then exits 0. Every service depends on this
+  # completing successfully, so none ever serves against an unmigrated schema.
+  boltrope-migrate:
+    build:
+      <<: *boltrope-build
+      target: migrate
+    image: boltrope/migrate:${BOLTROPE_VERSION:-dev}
+    command:
+      - --postgres-dsn=postgres://${BOLTROPE_DB_OWNER_USER:-boltrope_owner}:${BOLTROPE_DB_OWNER_PASSWORD:-boltrope_owner_pw}@postgres:5432/${POSTGRES_DB:-boltrope}?sslmode=disable
+      - --postgres-version=16
+      # migrate reuses the shared config loader, which validates ALL required
+      # fields even though it only consumes the DSN; supply harmless placeholders.
+      - --grpc-addr=:0
+      - --http-addr=:0
+      - --otlp-endpoint=otel:4317
+      - --blob-dir=/tmp
+      - --model-gateway-endpoint=unused:0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: on-failure
+    networks: [boltrope]
+
+  # ── grant: one-shot — give the RLS app-role a LOGIN + seed the dev tenant ─────
+  # The migration creates `boltrope_app` as NOBYPASSRLS *and NOLOGIN* on purpose;
+  # the deployment provisions its login credential out-of-band (see
+  # migrations/0003_rls_policies.up.sql and the eventstore integration harness).
+  # In dev we do that here with a tiny psql one-shot on the postgres image, so the
+  # services can connect as the non-owner role and RLS is genuinely enforced
+  # (rather than connecting as the superuser, which would bypass RLS entirely).
+  #
+  # This one-shot also SEEDS the dev tenant row. Under BOLTROPE_DEV_INSECURE=1 the
+  # orchestrator injects a fixed dev principal whose tenant is the valid UUID
+  # igrpc.DevTenantID (0de0c0de-0000-4000-8000-000000000000); sessions.tenant_id
+  # and events.tenant_id are FKs into tenants(id), so without this row the very
+  # first CreateSession fails the FK. We INSERT as the OWNER/superuser, which
+  # bypasses RLS even under FORCE ROW LEVEL SECURITY, so no app.current_tenant GUC
+  # is needed here. Keep this id in sync with igrpc.DevTenantID in
+  # internal/orchestrator/adapter/inbound/grpc/auth.go.
+  #
+  # Idempotent: ALTER ROLE is safe to re-run and the INSERT is ON CONFLICT DO
+  # NOTHING.
+  boltrope-grant:
+    image: postgres:16
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        psql "postgres://${BOLTROPE_DB_OWNER_USER:-boltrope_owner}:${BOLTROPE_DB_OWNER_PASSWORD:-boltrope_owner_pw}@postgres:5432/${POSTGRES_DB:-boltrope}?sslmode=disable"
+        -v ON_ERROR_STOP=1
+        -c "ALTER ROLE ${BOLTROPE_DB_APP_USER:-boltrope_app} WITH LOGIN PASSWORD '${BOLTROPE_DB_APP_PASSWORD:-boltrope_app_pw}';"
+        -c "INSERT INTO tenants (id, name) VALUES ('0de0c0de-0000-4000-8000-000000000000', 'dev') ON CONFLICT (id) DO NOTHING;"
+    depends_on:
+      boltrope-migrate:
+        condition: service_completed_successfully
+    restart: on-failure
+    networks: [boltrope]
+
+  # ── orchestratord: the client-facing agent-control edge ──────────────────────
+  orchestratord:
+    build:
+      <<: *boltrope-build
+      target: orchestratord
+    image: boltrope/orchestratord:${BOLTROPE_VERSION:-dev}
+    environment:
+      <<: *common-env
+      BOLTROPE_SERVER__GRPC_ADDR: ":9000"
+      BOLTROPE_SERVER__HTTP_ADDR: ":8080"
+      # Downstream service endpoints (resolved by compose DNS on the network).
+      BOLTROPE_MODEL_GATEWAY__ENDPOINT: modelgwd:9000
+      BOLTROPE_TOOLRUNTIME_ENDPOINT: toolruntimed:9000
+      BOLTROPE_DEFAULT_MODEL: ${BOLTROPE_DEFAULT_MODEL:-claude-3-5-sonnet-latest}
+      BOLTROPE_SUBAGENT_MAX_DEPTH: ${BOLTROPE_SUBAGENT_MAX_DEPTH:-2}
+      # Client-edge OIDC is unused under dev-insecure; set for production.
+      BOLTROPE_OIDC_ISSUER: ${BOLTROPE_OIDC_ISSUER:-}
+      BOLTROPE_OIDC_AUDIENCE: ${BOLTROPE_OIDC_AUDIENCE:-}
+    ports:
+      - "${BOLTROPE_ORCH_GRPC_PORT:-9000}:9000"   # gRPC edge (mTLS under dev-insecure)
+      - "${BOLTROPE_ORCH_HTTP_PORT:-8080}:8080"   # /livez /readyz /metrics + REST facade
+    volumes:
+      - blobs:/var/lib/boltrope/blobs
+    depends_on:
+      boltrope-grant:
+        condition: service_completed_successfully
+      modelgwd:
+        condition: service_healthy
+      toolruntimed:
+        condition: service_healthy
+    healthcheck: *readyz-healthcheck
+    restart: unless-stopped
+    networks: [boltrope]
+    deploy: *svc-resources
+
+  # ── modelgwd: stateless provider gateway ─────────────────────────────────────
+  modelgwd:
+    build:
+      <<: *boltrope-build
+      target: modelgwd
+    image: boltrope/modelgwd:${BOLTROPE_VERSION:-dev}
+    environment:
+      <<: *common-env
+      BOLTROPE_SERVER__GRPC_ADDR: ":9000"
+      BOLTROPE_SERVER__HTTP_ADDR: ":8080"
+      # modelgwd reuses the shared config loader, which validates the model-gateway
+      # endpoint even though the gateway never dials itself; point it at itself.
+      BOLTROPE_MODEL_GATEWAY__ENDPOINT: modelgwd:9000
+      # model-gateway is the ONLY place provider API keys live (NFR-SEC-05).
+      #
+      # DEFAULT: `stub` — the built-in deterministic, network-free provider. It
+      # streams a scripted response and needs NO API key and NO model backend, so
+      # `docker compose up` runs a task out of the box (this is the keyless DOD-05
+      # path the compose smoke job exercises). It is for local demo / smoke only,
+      # NEVER production.
+      #
+      # USE A REAL MODEL — set the provider AND its key (override in .env, do not
+      # edit this file):
+      #   * Anthropic Claude:
+      #       BOLTROPE_MODELGW_PROVIDER=anthropic
+      #       BOLTROPE_MODELGW_API_KEY_ENV=ANTHROPIC_API_KEY  ANTHROPIC_API_KEY=sk-ant-...
+      #   * Google Gemini:
+      #       BOLTROPE_MODELGW_PROVIDER=gemini
+      #       BOLTROPE_MODELGW_API_KEY_ENV=GEMINI_API_KEY      GEMINI_API_KEY=...
+      #   * OpenAI (Responses API):
+      #       BOLTROPE_MODELGW_PROVIDER=openai
+      #       BOLTROPE_MODELGW_API_KEY_ENV=OPENAI_API_KEY      OPENAI_API_KEY=sk-...
+      #   * Self-hosted / OpenAI-compatible (Ollama, vLLM, LM Studio, …):
+      #       BOLTROPE_MODELGW_PROVIDER=openaicompat
+      #       BOLTROPE_MODELGW_OPENAI_BASE_URL=http://host.docker.internal:11434/v1
+      #       (BOLTROPE_MODELGW_API_KEY_ENV optional — set it only if the endpoint needs a key)
+      # The gateway stores only the NAME of the key env var; it resolves the VALUE
+      # via the secrets port at this trusted boundary — the orchestrator and the
+      # event log never see it.
+      BOLTROPE_MODELGW_PROVIDER: ${BOLTROPE_MODELGW_PROVIDER:-stub}
+      BOLTROPE_MODELGW_API_KEY_ENV: ${BOLTROPE_MODELGW_API_KEY_ENV:-}
+      BOLTROPE_MODELGW_OPENAI_BASE_URL: ${BOLTROPE_MODELGW_OPENAI_BASE_URL:-http://host.docker.internal:11434/v1}
+      # Pass through the named provider key(s) so the in-container secrets port
+      # (env backend) can resolve BOLTROPE_MODELGW_API_KEY_ENV. Unset → keyless
+      # (the default `stub` provider reads none of these).
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    # No host port by default (internal service); HTTP health is reachable on the
+    # network and used by the orchestrator's dependency ordering.
+    extra_hosts:
+      # Lets the gateway reach an Ollama/vLLM running on the HOST at
+      # host.docker.internal (Linux needs this mapping; Docker Desktop adds it).
+      - "host.docker.internal:host-gateway"
+    healthcheck: *readyz-healthcheck
+    restart: unless-stopped
+    networks: [boltrope]
+    deploy: *svc-resources
+
+  # ── toolruntimed: the sandbox trust boundary (docker-out-of-docker) ──────────
+  toolruntimed:
+    build:
+      <<: *boltrope-build
+      target: toolruntimed
+    image: boltrope/toolruntimed:${BOLTROPE_VERSION:-dev}
+    environment:
+      <<: *common-env
+      BOLTROPE_SERVER__GRPC_ADDR: ":9000"
+      BOLTROPE_SERVER__HTTP_ADDR: ":8080"
+      # toolruntimed reuses the shared config loader, which validates the
+      # model-gateway endpoint even though the tool-runtime never dials it.
+      BOLTROPE_MODEL_GATEWAY__ENDPOINT: modelgwd:9000
+      # Sandbox image the runtime pulls/launches for tool execution. Pre-pull it
+      # on the host (`docker pull debian:stable-slim`) for a fast first tool call.
+      BOLTROPE_TOOLRT_IMAGE: ${BOLTROPE_TOOLRT_IMAGE:-debian:stable-slim}
+      BOLTROPE_TOOLRT_DOCKER_BIN: docker
+    volumes:
+      # docker-out-of-docker: the tool-runtime drives the HOST docker daemon to
+      # create sibling sandbox containers. SECURITY: this is root-equivalent on
+      # the host — dev/trusted-code only (ADR-0005; see deploy/README.md).
+      - "${BOLTROPE_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock"
+      - blobs:/var/lib/boltrope/blobs
+    # The non-root container user must be in the host docker socket's group to
+    # use it. Set BOLTROPE_DOCKER_GID to the host `getent group docker` gid.
+    group_add:
+      - "${BOLTROPE_DOCKER_GID:-0}"
+    # readiness runs `docker version` against the mounted socket; alpine ships
+    # busybox wget for the /readyz probe too. Use the same /readyz check (alpine
+    # busybox provides wget at /usr/bin/wget, so the absolute /busybox path used
+    # by distroless is not available — override with a plain wget).
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/readyz"]
+      interval: 5s
+      timeout: 4s
+      retries: 18
+      start_period: 15s
+    depends_on:
+      boltrope-grant:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    networks: [boltrope]
+    deploy: *svc-resources
+
+  # ── projectord: read-side projection worker (off the request path) ───────────
+  projectord:
+    build:
+      <<: *boltrope-build
+      target: projectord
+    image: boltrope/projectord:${BOLTROPE_VERSION:-dev}
+    environment:
+      <<: *common-env
+      BOLTROPE_SERVER__GRPC_ADDR: ":9000"
+      BOLTROPE_SERVER__HTTP_ADDR: ":8080"
+      # projectord reuses the shared config loader, which validates the
+      # model-gateway endpoint even though projectord never dials it.
+      BOLTROPE_MODEL_GATEWAY__ENDPOINT: modelgwd:9000
+      BOLTROPE_PROJECTOR_SUBSCRIPTION: ${BOLTROPE_PROJECTOR_SUBSCRIPTION:-cost-rollup}
+      BOLTROPE_PROJECTOR_SWEEP_INTERVAL: ${BOLTROPE_PROJECTOR_SWEEP_INTERVAL:-5m}
+    volumes:
+      - blobs:/var/lib/boltrope/blobs
+    depends_on:
+      boltrope-grant:
+        condition: service_completed_successfully
+    healthcheck: *readyz-healthcheck
+    restart: unless-stopped
+    networks: [boltrope]
+    deploy: *svc-resources
+
+networks:
+  boltrope:
+    driver: bridge
+
+volumes:
+  pgdata:
+  blobs:

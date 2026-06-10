@@ -1,0 +1,264 @@
+# Boltrope CI — lint, proto gates, test matrix, build.
+#
+# Conventions (ADR-0006):
+#   - All third-party actions are pinned to a commit SHA, with the human-
+#     readable version in a trailing comment (supply-chain hardening; renovate/
+#     dependabot bumps the SHA + comment together).
+#   - The default GITHUB_TOKEN is read-only (contents: read); no job needs more.
+#   - Runs on every push and pull_request.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+# Least privilege: CI only needs to read the repository contents.
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Single source of truth for the Go version used by the non-matrix jobs and
+  # for the golangci-lint version (kept in sync with .golangci.yml / Makefile).
+  GO_VERSION: "1.25.x"
+  GOLANGCI_LINT_VERSION: "v2.12.2"
+
+jobs:
+  # ── golangci-lint (depguard/forbidigo boundary + purity rules live here) ──
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          args: --timeout=5m
+
+  # ── buf: lint the contracts + breaking-change detection vs. the base ──────
+  proto:
+    name: proto
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          # Full history so `buf breaking` can resolve the base ref/commit.
+          fetch-depth: 0
+      - name: Set up buf
+        uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: buf lint
+        run: buf lint
+      - name: buf breaking (vs base branch)
+        # On a pull request, compare against the target branch. On a push to a
+        # branch, compare against origin/main (skipped when this push *is* main,
+        # since there is no earlier baseline to diff in a simple setup).
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.ref }}"
+            git fetch --no-tags --depth=1 origin "$base"
+            buf breaking --against ".git#ref=origin/$base,subdir=."
+          elif [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            git fetch --no-tags --depth=1 origin main || exit 0
+            buf breaking --against ".git#ref=origin/main,subdir=."
+          else
+            echo "push to main: no earlier baseline to diff; skipping buf breaking"
+          fi
+
+  # ── unit tests under the race detector, across supported Go versions ──────
+  test:
+    name: test (go ${{ matrix.go }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ["1.24.x", "1.25.x"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: ${{ matrix.go }}
+          check-latest: true
+      - name: go test -race
+        run: go test -race ./...
+
+  # ── compile every package ─────────────────────────────────────────────────
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+      - name: go build
+        run: go build ./...
+
+  # ── docker-compose smoke: bring the full stack up KEYLESS and assert it is ──
+  # ready cross-service within 120 s (DOD-05). The model-gateway defaults to the
+  # built-in `stub` provider, so no API key is needed: a clean checkout with no
+  # local Go and no pre-built images comes up and is serving. Runs on the GitHub
+  # runner's preinstalled Docker; nothing is published beyond the orchestrator.
+  compose-smoke:
+    name: compose-smoke
+    runs-on: ubuntu-latest
+    # Pin the shared dev-CA seed for the WHOLE job so the compose stack and the
+    # harnessctl client below derive the BYTE-IDENTICAL dev CA and complete mutual
+    # TLS. `docker compose` reads this for the file's ${BOLTROPE_DEV_CA_SEED:-…}
+    # default, and the harnessctl step inherits it too. (Any value works as long as
+    # both sides share it; this mirrors the compose file's inline default.)
+    env:
+      BOLTROPE_DEV_CA_SEED: boltrope-dev-shared-ca/local-compose
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Set up Go
+        # Only needed to `go run ./cmd/harnessctl` for the hello-world task below.
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+
+      - name: Render + validate the compose file
+        # Fail fast on a malformed compose file before spending time on a build.
+        run: docker compose -f deploy/docker-compose.yml config >/dev/null
+
+      - name: Build images and start the stack (detached)
+        # Build is untimed; the 120 s readiness budget (DOD-05) is asserted in the
+        # next step against the already-built images. Postgres healthy -> migrate
+        # completes -> grant -> the four services start.
+        run: docker compose -f deploy/docker-compose.yml up --build -d
+
+      - name: Assert cross-service readiness within 120 s
+        # Poll `docker compose ps` until EVERY service is either healthy (the four
+        # long-lived services have /readyz healthchecks) or has exited 0 (the
+        # one-shot migrate/grant gates). Bounded at 120 s, then a final assertion
+        # that no service is unhealthy/crashed and the orchestrator /readyz is 200.
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 120))
+          compose() { docker compose -f deploy/docker-compose.yml "$@"; }
+          while :; do
+            # `ps` as JSON: one object per service with .Health and .State/.ExitCode.
+            statuses="$(compose ps --all --format json)"
+            # Pending = any service still starting/created or whose health is not yet
+            # "healthy" while it is still running. A one-shot that exited 0 is done.
+            pending="$(echo "$statuses" | jq -rs '
+              [ .[]
+                | select(
+                    ((.Health // "") != "healthy")
+                    and (.State == "running" or .State == "created" or .State == "restarting")
+                  )
+              ] | length')"
+            if [ "$pending" -eq 0 ]; then
+              echo "all services settled after $SECONDS s"
+              break
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::stack not ready within 120 s"
+              compose ps --all
+              compose logs --no-color --tail=200
+              exit 1
+            fi
+            sleep 3
+          done
+
+          # Hard assertions: no service is unhealthy, and no long-lived service died.
+          bad="$(compose ps --all --format json | jq -rs '
+            [ .[] | select((.Health // "") == "unhealthy"
+                           or (.State == "exited" and (.ExitCode // 0) != 0)) ] | length')"
+          if [ "$bad" -ne 0 ]; then
+            echo "::error::one or more services are unhealthy or exited non-zero"
+            compose ps --all
+            compose logs --no-color --tail=200
+            exit 1
+          fi
+
+          # The orchestrator publishes 8080; /readyz must be 200 (DB reachable + SVID).
+          code="$(curl -s -o /dev/null -w '%{http_code}' --retry 5 --retry-delay 2 \
+                    http://localhost:8080/readyz || true)"
+          test "$code" = "200" || { echo "::error::orchestrator /readyz = $code (want 200)"; exit 1; }
+          echo "orchestrator /readyz = 200 — stack is serving"
+
+      - name: Run a keyless hello-world task via harnessctl and assert a result frame
+        # DOD-09 steps 4–5: drive a stub-provider task end-to-end via the CLI and
+        # assert the loop ran to a terminal frame. BOLTROPE_DEV_INSECURE=1 selects
+        # harnessctl's shared-seed dev mTLS dial path: it presents spiffe://<td>/edge
+        # (admitted by the orchestrator's RBAC) and pins spiffe://<td>/orchestrator,
+        # deriving the same dev CA from the job-level BOLTROPE_DEV_CA_SEED as the
+        # stack — so mutual TLS completes against the compose edge. The stub provider
+        # needs no API key, so this is fully keyless. A successful run ends in a
+        # terminal [result] frame; under the server-default permission mode a stub
+        # tool call may instead pause at an [approval required] block — that is also
+        # a valid end-to-end outcome (it proves the full client → orchestrator →
+        # model-gateway → tool-runtime path), so we accept either. The whole thing is
+        # bounded by `timeout` so a stall fails loudly rather than hanging the job.
+        env:
+          BOLTROPE_DEV_INSECURE: "1"
+        run: |
+          set -uo pipefail
+          # No --tenant: under dev-insecure the orchestrator scopes the call to its
+          # fixed dev tenant (the authenticated principal). Passing a DIFFERENT
+          # --tenant would be rejected with PermissionDenied (the request tenant_id
+          # must match the principal), so the Quickstart omits it — mirror that here.
+          out="$(timeout 90 go run ./cmd/harnessctl --endpoint localhost:9000 \
+                   run 'Write a hello-world program and run its test.' 2>&1)"
+          status=$?
+          echo "$out"
+          if echo "$out" | grep -qE '^\[result\] subtype='; then
+            echo "harnessctl produced a terminal [result] frame"
+          elif echo "$out" | grep -q '\[approval required\]'; then
+            echo "harnessctl reached an [approval required] gate — end-to-end path verified"
+          else
+            echo "::error::harnessctl produced neither a [result] frame nor an [approval required] gate (exit=$status)"
+            exit 1
+          fi
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f deploy/docker-compose.yml down --volumes --remove-orphans
+
+  # ── livesmoke (opt-in, API-key gated): a REAL coding task end-to-end against ─
+  # a REAL provider (DOD-04). It runs ONLY when an API key secret is configured,
+  # so forks and the default PR run skip it cleanly (the test itself also skips
+  # when no key is present, so it never makes a network call without one).
+  livesmoke:
+    name: livesmoke (opt-in)
+    runs-on: ubuntu-latest
+    # Gate on a configured key so this job is a no-op unless a maintainer opts in
+    # by setting the secret. (The test additionally t.Skip()s without a key.)
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+      - name: go test -tags livesmoke ./test/eval/...
+        # The provider is resolved from these env vars; an unset key makes the test
+        # t.Skip() (no network call). Wire whichever provider you maintain a key for.
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+        run: go test -tags livesmoke ./test/eval/...

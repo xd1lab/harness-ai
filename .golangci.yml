@@ -1,0 +1,236 @@
+# golangci-lint configuration for the Boltrope harness.
+#
+# golangci-lint v2 schema (run with v2.12.x). The curated linter set follows
+# ADR-0006 (engineering conventions); the depguard + forbidigo rules below
+# mechanically enforce the two cross-cutting constraints from ADR-0015:
+#
+#   1. internal/platform/llm is a PURE shared contract — it imports nothing from
+#      gen/ or any provider SDK (DOD-08).
+#   2. No service imports another service's domain/app; domain/app/policy layers
+#      are transport-agnostic (no gen/, no grpc) — only adapters touch the wire.
+#   3. domain/app/policy code never calls time.Now / time.Since / rand.* /
+#      uuid.New[String] directly; it injects clock.Clock / a rand source /
+#      ids.IDGenerator instead (the determinism rule, NFR-TEST-01).
+#
+# Generated code under gen/ is excluded from linting entirely; the platform
+# system impls (clock.System, ids.System, llm.SystemClock) live under
+# internal/platform/** and are deliberately outside the forbidigo scope so the
+# one permitted real Clock/IDGenerator is not flagged.
+version: "2"
+
+run:
+  # Build all tags so integration-tagged files are also linted.
+  build-tags:
+    - integration
+
+linters:
+  # Start from the curated "standard" set (errcheck, govet, ineffassign,
+  # staticcheck, unused) and add the conventions-mandated extras.
+  default: standard
+  enable:
+    - revive
+    - gosec
+    - misspell
+    - gocritic
+    - bodyclose
+    - errorlint
+    - depguard
+    - forbidigo
+
+  settings:
+    gosec:
+      # G104 (errors unhandled) duplicates errcheck, which is the authority on
+      # unchecked errors and honors //nolint:errcheck directives that gosec's
+      # G104 does not. Disable G104 to avoid redundant, non-suppressible
+      # findings; errcheck still enforces the same property.
+      excludes:
+        - G104
+
+    misspell:
+      locale: US
+      # The frozen contract doc comments (ADR-0015 surface) use the British
+      # spellings "cancelled"/"cancelling" in prose describing context
+      # cancellation. They are valid English and the contracts are frozen, so we
+      # tolerate them repo-wide rather than edit the frozen text.
+      ignore-rules:
+        - cancelled
+        - cancelling
+
+    forbidigo:
+      # Analyze the expression text so qualified calls like time.Now match.
+      analyze-types: true
+      forbid:
+        # Determinism rule (ADR-0015 #1, NFR-TEST-01): inject clock.Clock.
+        - pattern: ^time\.Now$
+          msg: "do not call time.Now in domain/app/policy; inject clock.Clock and call Clock.Now (determinism rule, ADR-0015)"
+        - pattern: ^time\.Since$
+          msg: "do not call time.Since in domain/app/policy; inject clock.Clock and call Clock.Since (determinism rule, ADR-0015)"
+        # math/rand and crypto/rand call sites: inject a rand source through ports.
+        - pattern: ^rand\.
+          msg: "do not call rand.* in domain/app/policy; inject a rand source through ports (determinism rule, ADR-0015)"
+        # Fresh-id minting: inject ids.IDGenerator.
+        - pattern: ^uuid\.New$
+          msg: "do not call uuid.New in domain/app/policy; inject ids.IDGenerator (determinism rule, ADR-0015)"
+        - pattern: ^uuid\.NewString$
+          msg: "do not call uuid.NewString in domain/app/policy; inject ids.IDGenerator (determinism rule, ADR-0015)"
+
+    depguard:
+      rules:
+        # --------------------------------------------------------------------
+        # ADR-0015 #1 — internal/platform/llm is a PURE kernel: it must not
+        # import gen/, grpc, or any provider SDK (DOD-08).
+        # --------------------------------------------------------------------
+        llm-kernel-pure:
+          files:
+            - "**/internal/platform/llm/**"
+          deny:
+            - pkg: github.com/boltrope/boltrope/gen
+              desc: "platform/llm is the pure normalized kernel; it must not import generated wire types (ADR-0015, DOD-08) — map gen<->llm in adapters only"
+            - pkg: google.golang.org/grpc
+              desc: "platform/llm is transport-agnostic; gRPC belongs in adapters/platform-grpcx (ADR-0015, DOD-08)"
+            - pkg: github.com/anthropics/anthropic-sdk-go
+              desc: "platform/llm must not import any provider SDK; provider adapters own the SDK (ADR-0015, DOD-08)"
+            - pkg: google.golang.org/genai
+              desc: "platform/llm must not import any provider SDK; provider adapters own the SDK (ADR-0015, DOD-08)"
+            - pkg: github.com/openai/openai-go
+              desc: "platform/llm must not import any provider SDK; provider adapters own the SDK (ADR-0015, DOD-08)"
+
+        # --------------------------------------------------------------------
+        # ADR-0015 #2 — domain/app/policy layers are transport-agnostic: only
+        # adapters map to/from the wire. Deny gen/ and grpc in these layers.
+        # --------------------------------------------------------------------
+        domain-app-transport-agnostic:
+          files:
+            - "**/internal/*/domain/**"
+            - "**/internal/*/app/**"
+            - "**/internal/*/policy/**"
+          deny:
+            - pkg: github.com/boltrope/boltrope/gen
+              desc: "domain/app/policy are transport-agnostic; only adapter/** may import generated wire types (ADR-0015, DOD-08)"
+            - pkg: google.golang.org/grpc
+              desc: "domain/app/policy are transport-agnostic; gRPC lives in adapters (ADR-0015, DOD-08)"
+
+        # --------------------------------------------------------------------
+        # ADR-0015 #2 — cross-service import isolation. Services communicate
+        # ONLY via the generated gRPC stubs in gen/, never by importing another
+        # service's internal packages.
+        # --------------------------------------------------------------------
+        orchestrator-no-cross-service:
+          files:
+            - "**/internal/orchestrator/**"
+          deny:
+            - pkg: github.com/boltrope/boltrope/internal/toolruntime
+              desc: "orchestrator must not import tool-runtime internals; talk via gen/ stubs only (ADR-0015 cross-service isolation)"
+            - pkg: github.com/boltrope/boltrope/internal/modelgateway
+              desc: "orchestrator must not import model-gateway internals; talk via gen/ stubs only (ADR-0015 cross-service isolation)"
+
+        toolruntime-no-cross-service:
+          files:
+            - "**/internal/toolruntime/**"
+          deny:
+            - pkg: github.com/boltrope/boltrope/internal/orchestrator
+              desc: "tool-runtime must not import orchestrator internals; talk via gen/ stubs only (ADR-0015 cross-service isolation)"
+            - pkg: github.com/boltrope/boltrope/internal/modelgateway
+              desc: "tool-runtime must not import model-gateway internals; talk via gen/ stubs only (ADR-0015 cross-service isolation)"
+
+        modelgateway-no-cross-service:
+          files:
+            - "**/internal/modelgateway/**"
+          deny:
+            - pkg: github.com/boltrope/boltrope/internal/orchestrator
+              desc: "model-gateway must not import orchestrator internals; talk via gen/ stubs only (ADR-0015 cross-service isolation)"
+            - pkg: github.com/boltrope/boltrope/internal/toolruntime
+              desc: "model-gateway must not import tool-runtime internals; talk via gen/ stubs only (ADR-0015 cross-service isolation)"
+
+  exclusions:
+    # Be lax about issues in generated files (in addition to the gen/ path
+    # exclusion below). "lax" applies a broad set of generated-file heuristics.
+    generated: lax
+    # Do not lint committed generated protobuf code at all.
+    paths:
+      - gen
+    rules:
+      # Limit forbidigo to the determinism-sensitive layers ONLY. It must fire
+      # in domain/app/policy but NOT in adapters, infra, cmd, the platform
+      # system impls, or test files (those legitimately call time.Now / mint
+      # UUIDs / wire the real clock). golangci has no per-forbidigo-rule file
+      # scope, so we invert with path exclusions:
+      #
+      # 1) Silence forbidigo in every file whose path is NOT a domain/app/policy
+      #    package file. `path-except` excludes the linter when the path does
+      #    NOT match the regex, so only files under .../domain|app|policy/ keep
+      #    forbidigo active. This keeps the platform system impls
+      #    (internal/platform/{clock,ids,llm}) — which legitimately call
+      #    time.Now — outside the scope.
+      - linters:
+          - forbidigo
+        path-except: internal/[^/]+/(domain|app|policy)/
+      # 2) Even within those layers, never flag test files — tests may use
+      #    time.Now / uuid directly when exercising the real system impls.
+      - linters:
+          - forbidigo
+        path: _test\.go
+
+      # ----------------------------------------------------------------------
+      # Frozen-contract exemptions (Gate-4 input). The normalized kernel, the
+      # domain types, the consumer-defined ports, and the policy contract are
+      # FROZEN: their API shape (sentinel names, interface names, the stub
+      # package layout) is the source of truth and must not be edited to satisfy
+      # a stylistic linter. We therefore scope these specific revive findings
+      # away on the frozen files only — not repo-wide — so new code still gets
+      # the full revive treatment.
+      # ----------------------------------------------------------------------
+
+      # The EventLogPort sentinels are deliberately named <Condition>Error
+      # (ConflictError / FencedError / SessionNotActiveError) — a frozen part of
+      # the EventLogPort contract callers branch on. revive's error-naming and
+      # staticcheck's ST1012 both want ErrFoo; exempt both on this frozen file
+      # only.
+      - linters:
+          - revive
+        text: "error-naming:"
+        path: internal/orchestrator/app/ports\.go
+      - linters:
+          - staticcheck
+        text: "ST1012:"
+        path: internal/orchestrator/app/ports\.go
+
+      # Frozen interface names PolicyEngine / BlobStorePort "stutter" with their
+      # package per revive's exported rule, but the names are part of the frozen
+      # port contracts. Exempt the two frozen files only.
+      - linters:
+          - revive
+        text: "exported: type name will be used as policy.PolicyEngine"
+        path: internal/orchestrator/policy/policy\.go
+      - linters:
+          - revive
+        text: "exported: type name will be used as blob.BlobStorePort"
+        path: internal/platform/blob/blob\.go
+
+      # The orchestrator domain package is a frozen contract-type stub with no
+      # package-level doc comment yet. Exempt package-comments on the frozen
+      # domain files only.
+      - linters:
+          - revive
+        text: "package-comments:"
+        path: internal/orchestrator/domain/.+\.go
+
+# Formatters run via `golangci-lint fmt` (wired into `make fmt`). gofumpt is a
+# stricter superset of gofmt; goimports groups imports and adds the local
+# import block. Generated code under gen/ is never reformatted.
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    goimports:
+      # Group module-local imports into their own block.
+      local-prefixes:
+        - github.com/boltrope/boltrope
+    gofumpt:
+      # Apply gofumpt's extra-strict rules in addition to gofmt.
+      extra-rules: true
+  exclusions:
+    generated: lax
+    paths:
+      - gen

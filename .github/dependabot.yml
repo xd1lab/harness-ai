@@ -1,0 +1,35 @@
+# Dependabot configuration (ADR-0006 supply-chain posture).
+#
+# Keeps Go module dependencies and pinned GitHub Actions current. The
+# github-actions ecosystem bumps the commit SHA *and* the version comment in
+# our SHA-pinned workflows together, so pinning stays maintainable.
+version: 2
+updates:
+  # Go modules (root module: github.com/boltrope/boltrope).
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "build(deps)"
+    groups:
+      # Batch low-risk patch/minor bumps into a single PR to reduce churn.
+      go-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # GitHub Actions used by workflows under .github/workflows.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "ci(deps)"
+    groups:
+      actions-minor-patch:
+        update-types:
+          - minor
+          - patch

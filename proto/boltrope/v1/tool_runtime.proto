@@ -1,0 +1,209 @@
+// Boltrope tool-runtime wire contract.
+//
+// ToolRuntimeService owns the tool registry (native + MCP), validates tool inputs
+// against JSON Schema, and executes tools inside per-session sandboxes via the
+// Workspace/Runtime port. It is the system's trust boundary for model-influenced
+// code execution (architecture 2.2, 5.3). This proto is the orchestrator ->
+// tool-runtime boundary.
+//
+// Tool inputs/outputs reuse the canonical model in common.proto where applicable;
+// the Action -> Execute -> Observation contract surfaces as ExecuteToolRequest ->
+// (stream) -> a terminal ToolResult, where tool errors are reported as
+// Observation-style results (is_error=true), never as RPC faults (FR-TOOL-01).
+//
+// This is an internal orchestrator -> tool-runtime boundary spoken over gRPC; it
+// carries no REST/JSON facade. A facade is added only on the client-facing edge
+// (orchestrator.proto) later, via google.api.http annotations and a
+// buf.build/googleapis/googleapis dependency (architecture 4.1).
+syntax = "proto3";
+
+package boltrope.v1;
+
+import "boltrope/v1/common.proto";
+
+// ToolRuntimeService is the orchestrator -> tool-runtime boundary.
+service ToolRuntimeService {
+  // ExecuteTool runs one tool call inside the session's sandbox and server-streams
+  // zero or more ToolProgress events followed by exactly one terminal ToolResult
+  // (long-running tools stream progress + partial stdout). Cancellation propagates
+  // via context to a cgroup/PID-namespace kill (architecture 9.3). A Mutating tool
+  // is never auto-retried; the durable idempotency_key (architecture 4.4, 7.2)
+  // makes a replayed completed call return the prior result without re-executing.
+  rpc ExecuteTool(ExecuteToolRequest) returns (stream ExecuteToolEvent);
+
+  // ListTools returns the merged set of registered tools — native tools plus
+  // lazily-loaded MCP tools — each with a name, description, and JSON Schema
+  // (FR-EXT-01 AC-3). MCP tool descriptions/schemas are untrusted content; only
+  // human-approved tools appear here (architecture 8.11).
+  rpc ListTools(ListToolsRequest) returns (ListToolsResponse);
+}
+
+// SideEffect classifies a tool's effect on workspace/world state. It drives the
+// orchestrator's scheduler (ReadOnly tools run concurrently in a bounded pool;
+// Mutating tools are serialized) and the durable-dedup / no-auto-retry policy
+// (architecture 9.2, 4.4). Mirrors the tool-runtime domain ToolSpec.SideEffect.
+enum SideEffect {
+  // SIDE_EFFECT_UNSPECIFIED is the unset value. Unknown/unannotated tools (e.g.
+  // MCP tools without an explicit annotation) MUST be treated as
+  // SIDE_EFFECT_MUTATING — fail safe (architecture 9.2).
+  SIDE_EFFECT_UNSPECIFIED = 0;
+  // SIDE_EFFECT_READ_ONLY denotes a tool with no state mutation; it may be
+  // dispatched concurrently and retried without dedup.
+  SIDE_EFFECT_READ_ONLY = 1;
+  // SIDE_EFFECT_MUTATING denotes a state-mutating tool; it is serialized within a
+  // turn and never auto-retried (at-most-once with an explicit unknown outcome).
+  SIDE_EFFECT_MUTATING = 2;
+}
+
+// EgressClass classifies a tool's outbound-network reach. It is a THREE-class set
+// — none, internal, external — matching domain.EgressClass and FR-TOOL-02. All
+// model-influenced egress is deny-by-default through the per-session egress broker;
+// EGRESS_CLASS_EXTERNAL tools (e.g. webfetch, websearch) are additionally subject
+// to the taint/ask gate and are NOT parallelized as harmless reads (architecture
+// 8.4, 9.2). Native tools declare their class explicitly; MCP and otherwise
+// unannotated tools default to the fail-safe class EGRESS_CLASS_EXTERNAL. Mirrors
+// the tool-runtime domain ToolSpec.EgressClass.
+enum EgressClass {
+  // EGRESS_CLASS_UNSPECIFIED is the unset zero value. It is treated as the
+  // FAIL-SAFE class EGRESS_CLASS_EXTERNAL — maximally gated (routed through the
+  // egress broker and the taint/ask gate), NOT as EGRESS_CLASS_NONE — so an
+  // unannotated or untrusted tool can never silently bypass egress control. This
+  // deny-by-default reading matches domain.EgressClass's fail-safe-to-External
+  // rule and ADR-0013 (architecture 8.4).
+  EGRESS_CLASS_UNSPECIFIED = 0;
+  // EGRESS_CLASS_NONE denotes a tool that performs no network egress.
+  EGRESS_CLASS_NONE = 1;
+  // EGRESS_CLASS_INTERNAL denotes egress confined to internal/allowlisted hosts.
+  EGRESS_CLASS_INTERNAL = 2;
+  // EGRESS_CLASS_EXTERNAL denotes egress to external hosts; always gated by the
+  // egress broker and the taint/ask policy. It is also the fail-safe class that
+  // EGRESS_CLASS_UNSPECIFIED is treated as.
+  EGRESS_CLASS_EXTERNAL = 3;
+}
+
+// ToolSource records where a tool came from, so the orchestrator and operators
+// can distinguish trusted native tools from untrusted MCP-provided tools.
+enum ToolSource {
+  // TOOL_SOURCE_UNSPECIFIED is the unset value.
+  TOOL_SOURCE_UNSPECIFIED = 0;
+  // TOOL_SOURCE_NATIVE denotes a built-in native tool (read, edit, write, glob,
+  // grep, bash, webfetch, websearch).
+  TOOL_SOURCE_NATIVE = 1;
+  // TOOL_SOURCE_MCP denotes a tool provided by a connected MCP server; its name,
+  // description, and schema are untrusted content (architecture 8.11).
+  TOOL_SOURCE_MCP = 2;
+}
+
+// ToolSpec is the registry's declaration of one available tool: its name,
+// description, JSON Schema, and the classifications that govern scheduling and
+// egress policy. Mirrors the tool-runtime domain ToolSpec.
+message ToolSpec {
+  // name is the unique tool name the model uses to invoke the tool.
+  string name = 1;
+  // description tells the model what the tool does and when to call it.
+  string description = 2;
+  // json_schema is the tool's input schema as a raw JSON Schema document (a JSON
+  // object encoded as a string), validated before execution (FR-TOOL-01).
+  string json_schema = 3;
+  // side_effect is the tool's declared side-effect classification.
+  SideEffect side_effect = 4;
+  // egress_class is the tool's declared outbound-network classification.
+  EgressClass egress_class = 5;
+  // source records whether the tool is native or MCP-provided.
+  ToolSource source = 6;
+  // mcp_server is the identifier of the originating MCP server when source is
+  // TOOL_SOURCE_MCP; empty for native tools.
+  string mcp_server = 7;
+}
+
+// ExecuteToolRequest asks tool-runtime to run one tool call in a session's
+// sandbox. The call mirrors the model's requested invocation; tool-runtime
+// validates args_json against the registered JSON Schema before any execution.
+message ExecuteToolRequest {
+  // tenant_id is the tenant that owns the session; it scopes sandbox, dedup, and
+  // blob authorization and is verified against the caller's RPC-bound token.
+  string tenant_id = 1;
+  // session_id is the session whose per-session sandbox the tool runs in.
+  string session_id = 2;
+  // call is the tool invocation to execute (tool name + opaque call id + parsed
+  // args as a JSON object string).
+  ToolCall call = 3;
+  // idempotency_key is the durable dedup key, derived by the orchestrator as
+  // hash(session_id, seq_of_ToolCall) — NOT a fresh UUID — so any orchestrator
+  // replaying the log reconstructs the same key (architecture 4.4, 7.2). A
+  // Mutating call whose key is already marked completed returns the prior result
+  // without re-executing.
+  string idempotency_key = 4;
+  // timeout_ms is the tool's own execution timeout in milliseconds; on expiry the
+  // sandbox process group is killed at the cgroup/PID-namespace boundary. Zero
+  // applies the runtime default.
+  int64 timeout_ms = 5;
+}
+
+// ToolProgress (the interim progress/partial-stdout event streamed before the
+// terminal result) is a shared streaming primitive defined in common.proto, since
+// the orchestrator relays it to the client on the Run stream.
+
+// BlobRef points to large tool output offloaded to the tenant-scoped blob store
+// rather than carried inline. Authorization is by (tenant_id, session_id)
+// ownership, never by ref alone; cross-tenant content-addressed dedup is
+// forbidden (architecture 6.4, 8.5). Present on a TerminalToolResult only when
+// output exceeded the inline threshold.
+message BlobRef {
+  // ref is the per-tenant content key (e.g. a sha256 of the bytes); it is NOT a
+  // global capability and is meaningless without the owning tenant context.
+  string ref = 1;
+  // media_type is the IANA media type of the stored bytes.
+  string media_type = 2;
+  // size_bytes is the total size of the stored output in bytes.
+  int64 size_bytes = 3;
+}
+
+// TerminalToolResult is the single terminal outcome of ExecuteTool. It carries
+// the model-visible ToolResult; oversized content is offloaded to a blob and
+// summarized inline with truncated=true and a populated blob_ref (architecture
+// 6.4). Tool failures are reported here with result.is_error=true (an Observation),
+// never as a gRPC fault (FR-TOOL-01).
+message TerminalToolResult {
+  // result is the normalized tool result fed back to the model (content +
+  // is_error + matching call_id).
+  ToolResult result = 1;
+  // truncated reports whether result.content is a truncated/summarized stand-in
+  // for output offloaded to blob_ref.
+  bool truncated = 2;
+  // blob_ref points to the full output in the tenant-scoped blob store when the
+  // output exceeded the inline threshold; unset when the result is fully inline.
+  BlobRef blob_ref = 3;
+}
+
+// ExecuteToolEvent is one item in the ExecuteTool server stream: either interim
+// progress or the single terminal result. Exactly one variant is set; a
+// terminal_result is always the last item of the stream.
+message ExecuteToolEvent {
+  // event holds exactly one execution-event variant.
+  oneof event {
+    // progress is an interim progress/partial-stdout event.
+    ToolProgress progress = 1;
+    // terminal_result is the single terminal outcome; it ends the stream.
+    TerminalToolResult terminal_result = 2;
+  }
+}
+
+// ListToolsRequest asks for the merged native + MCP tool registry. It carries the
+// session/tenant context because lazily-loaded MCP tool availability is per
+// session (approval state, connected servers) (architecture 8.11, FR-EXT-01).
+message ListToolsRequest {
+  // tenant_id is the tenant whose registry view is requested.
+  string tenant_id = 1;
+  // session_id is the session whose registry view is requested. Tools requiring
+  // first-use approval that has not yet been granted for this session are omitted.
+  string session_id = 2;
+}
+
+// ListToolsResponse is the merged registry: native tools plus lazily-loaded,
+// human-approved MCP tools, each with a non-empty name, description, and valid
+// JSON Schema (FR-EXT-01 AC-3).
+message ListToolsResponse {
+  // tools is the merged, deduplicated set of available tool specifications.
+  repeated ToolSpec tools = 1;
+}

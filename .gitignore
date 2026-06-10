@@ -1,0 +1,40 @@
+# Binaries & build output
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/bin/
+/dist/
+/build/
+
+# Test & coverage artifacts
+*.test
+*.out
+coverage.*
+/coverage/
+
+# Go workspace & vendored deps
+/vendor/
+go.work
+go.work.sum
+
+# Environment & secrets (never commit real secrets)
+.env
+.env.*
+!.env.example
+*.local
+*.pem
+*.key
+
+# Editor / OS noise
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Logs & temp
+*.log
+/tmp/
+/.tmp/

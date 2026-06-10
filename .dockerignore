@@ -1,0 +1,44 @@
+# Keep the Docker build context small and reproducible. The builder needs the
+# full Go source tree + go.mod/go.sum, so we exclude only things that are never
+# compiled in: VCS metadata, docs, local secrets, editor noise, and build/test
+# artifacts. (Comments and blank lines are ignored by Docker.)
+
+# VCS
+.git
+.gitignore
+.github
+
+# Docs & decisions (not needed to build a binary)
+docs
+*.md
+!cmd/**/*.md
+
+# Local env & secrets — MUST never enter an image layer
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Build / test output
+/bin
+/dist
+/build
+/coverage
+coverage.*
+*.test
+*.out
+*.exe
+
+# Editor / OS noise
+.idea
+.vscode
+*.swp
+.DS_Store
+Thumbs.db
+
+# The compose file and deploy assets are not build inputs for the images.
+deploy
+docker-compose.yml
+Dockerfile
+.dockerignore
