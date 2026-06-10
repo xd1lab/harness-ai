@@ -1,0 +1,70 @@
+# syntax=docker/dockerfile:1
+#
+# Boltrope — RELEASE image build (GoReleaser only).
+# ============================================================================
+# Unlike the root ./Dockerfile (a build-from-source, multi-stage file used by
+# `docker compose build`, whose context is the whole repo), this file is built
+# by GoReleaser, whose docker build context contains ONLY the binary GoReleaser
+# already cross-compiled. So each stage here simply COPYs that pre-built static
+# binary into a minimal runtime base — no in-image `go build`, no source, and
+# (because there is no RUN-compile) arm64 images assemble without emulated
+# compilation. One stage per service, selected with `--target`, exactly like the
+# root Dockerfile, so .goreleaser.yaml's per-service docker entries are unchanged
+# apart from pointing `dockerfile:` here.
+#
+# The daemon binaries GoReleaser hands us are already built with `-tags spire`
+# and version-stamped via -ldflags (see .goreleaser.yaml builds), so these images
+# match the documented release posture without rebuilding anything.
+
+ARG ALPINE_VERSION=3.21
+ARG DISTROLESS_TAG=nonroot
+# Declared so GoReleaser's `--build-arg=VERSION=...` is not an unused-arg warning;
+# the copied binary is already version-stamped, so nothing here consumes it.
+ARG VERSION=dev
+
+# ── static busybox (healthcheck only) ───────────────────────────────────────
+# distroless has no shell/HTTP client, so the compose healthcheck invokes a
+# static busybox baked in at /busybox (e.g. `/busybox/busybox wget … /readyz`).
+# Mirrors the root Dockerfile so the published images keep working healthchecks.
+FROM busybox:uclibc AS busybox-src
+
+# ── shared distroless runtime ────────────────────────────────────────────────
+FROM gcr.io/distroless/static-debian12:${DISTROLESS_TAG} AS distroless-runtime
+COPY --from=busybox-src /bin/busybox /busybox/busybox
+
+# ── orchestratord ────────────────────────────────────────────────────────────
+FROM distroless-runtime AS orchestratord
+COPY boltrope-orchestratord /usr/local/bin/boltrope-orchestratord
+EXPOSE 9000 8080
+ENTRYPOINT ["/usr/local/bin/boltrope-orchestratord"]
+
+# ── modelgwd ─────────────────────────────────────────────────────────────────
+FROM distroless-runtime AS modelgwd
+COPY boltrope-modelgwd /usr/local/bin/boltrope-modelgwd
+EXPOSE 9000 8080
+ENTRYPOINT ["/usr/local/bin/boltrope-modelgwd"]
+
+# ── projectord ───────────────────────────────────────────────────────────────
+FROM distroless-runtime AS projectord
+COPY boltrope-projectord /usr/local/bin/boltrope-projectord
+EXPOSE 9000 8080
+ENTRYPOINT ["/usr/local/bin/boltrope-projectord"]
+
+# ── migrate (one-shot gate) ──────────────────────────────────────────────────
+FROM distroless-runtime AS migrate
+COPY boltrope-migrate /usr/local/bin/boltrope-migrate
+ENTRYPOINT ["/usr/local/bin/boltrope-migrate"]
+
+# ── toolruntimed (needs the docker CLI) ──────────────────────────────────────
+# The one non-distroless image: the tool-runtime shells out to `docker` to drive
+# per-session sandbox containers, so the docker CLI must be present. tini reaps
+# zombies / forwards SIGTERM; it runs as a non-root user. SECURITY: a mounted
+# host docker.sock is root-equivalent — dev/trusted-code only (see deploy/README.md).
+FROM alpine:${ALPINE_VERSION} AS toolruntimed
+RUN apk add --no-cache docker-cli ca-certificates tini \
+    && addgroup -S boltrope \
+    && adduser -S -G boltrope boltrope
+COPY boltrope-toolruntimed /usr/local/bin/boltrope-toolruntimed
+USER boltrope
+EXPOSE 9000 8080
+ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/boltrope-toolruntimed"]

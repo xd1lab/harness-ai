@@ -172,7 +172,7 @@ dockers:
     goos: linux
     goarch: amd64
     ids: [orchestratord]
-    dockerfile: Dockerfile
+    dockerfile: Dockerfile.release
     use: buildx
     image_templates:
       - "ghcr.io/xd1lab/boltrope-orchestratord:{{ .Version }}-amd64"
@@ -189,7 +189,7 @@ dockers:
     goos: linux
     goarch: arm64
     ids: [orchestratord]
-    dockerfile: Dockerfile
+    dockerfile: Dockerfile.release
     use: buildx
     image_templates:
       - "ghcr.io/xd1lab/boltrope-orchestratord:{{ .Version }}-arm64"
@@ -207,7 +207,7 @@ dockers:
     goos: linux
     goarch: amd64
     ids: [modelgwd]
-    dockerfile: Dockerfile
+    dockerfile: Dockerfile.release
     use: buildx
     image_templates:
       - "ghcr.io/xd1lab/boltrope-modelgwd:{{ .Version }}-amd64"
@@ -224,7 +224,7 @@ dockers:
     goos: linux
     goarch: arm64
     ids: [modelgwd]
-    dockerfile: Dockerfile
+    dockerfile: Dockerfile.release
     use: buildx
     image_templates:
       - "ghcr.io/xd1lab/boltrope-modelgwd:{{ .Version }}-arm64"
@@ -242,7 +242,7 @@ dockers:
     goos: linux
     goarch: amd64
     ids: [toolruntimed]
-    dockerfile: Dockerfile
+    dockerfile: Dockerfile.release
     use: buildx
     image_templates:
       - "ghcr.io/xd1lab/boltrope-toolruntimed:{{ .Version }}-amd64"
@@ -259,7 +259,7 @@ dockers:
     goos: linux
     goarch: arm64
     ids: [toolruntimed]
-    dockerfile: Dockerfile
+    dockerfile: Dockerfile.release
     use: buildx
     image_templates:
       - "ghcr.io/xd1lab/boltrope-toolruntimed:{{ .Version }}-arm64"
@@ -277,7 +277,7 @@ dockers:
     goos: linux
     goarch: amd64
     ids: [projectord]
-    dockerfile: Dockerfile
+    dockerfile: Dockerfile.release
     use: buildx
     image_templates:
       - "ghcr.io/xd1lab/boltrope-projectord:{{ .Version }}-amd64"
@@ -294,7 +294,7 @@ dockers:
     goos: linux
     goarch: arm64
     ids: [projectord]
-    dockerfile: Dockerfile
+    dockerfile: Dockerfile.release
     use: buildx
     image_templates:
       - "ghcr.io/xd1lab/boltrope-projectord:{{ .Version }}-arm64"
@@ -312,7 +312,7 @@ dockers:
     goos: linux
     goarch: amd64
     ids: [migrate]
-    dockerfile: Dockerfile
+    dockerfile: Dockerfile.release
     use: buildx
     image_templates:
       - "ghcr.io/xd1lab/boltrope-migrate:{{ .Version }}-amd64"
@@ -329,7 +329,7 @@ dockers:
     goos: linux
     goarch: arm64
     ids: [migrate]
-    dockerfile: Dockerfile
+    dockerfile: Dockerfile.release
     use: buildx
     image_templates:
       - "ghcr.io/xd1lab/boltrope-migrate:{{ .Version }}-arm64"
