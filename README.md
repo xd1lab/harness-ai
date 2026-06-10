@@ -142,7 +142,10 @@ docker pull ghcr.io/xd1lab/boltrope-projectord:latest
 docker pull ghcr.io/xd1lab/boltrope-migrate:latest      # one-shot schema migration
 ```
 
-**Binaries** — each GitHub release attaches `tar.gz` / `zip` archives named `boltrope_<version>_<os>_<arch>`, containing the four daemons + `boltrope-migrate` for `linux/{amd64,arm64}`, and the `harnessctl` client additionally for **macOS and Windows**. Verify the cosign-signed `checksums.txt` before use.
+**Binaries** — each GitHub release attaches two kinds of archive (cosign-signed via `checksums.txt`, verify before use):
+
+- `boltrope_<version>_linux_<arch>.tar.gz` — the **server bundle**: the four daemons + `boltrope-migrate`, for `linux/{amd64,arm64}`.
+- `harnessctl_<version>_<os>_<arch>` — the **client CLI** on its own, for `linux`, **macOS**, and **Windows** (`.tar.gz`, or `.zip` on Windows).
 
 **From source** (Go 1.25+):
 
@@ -152,7 +155,7 @@ go install github.com/xd1lab/harness-ai/cmd/harnessctl@latest   # the client CLI
 go build -tags spire ./cmd/...
 ```
 
-> Releases are cut by a maintainer pushing a `vX.Y.Z` tag. Until the first public release (and the `boltrope` owner [rename](#license)), build from source as in the Quickstart — the `ghcr.io/xd1lab/…` and `go install` paths resolve only once published.
+> Releases are cut by a maintainer pushing a `vX.Y.Z` tag. The `ghcr.io/xd1lab/…` images and the `go install` path resolve once a release is published (`v0.1.0` onward); before that, build from source as in the Quickstart.
 
 ---
 

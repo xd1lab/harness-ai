@@ -130,11 +130,25 @@ builds:
       - -X main.date={{ .CommitDate }}
 
 # ── Archives ────────────────────────────────────────────────────────────────
+# Two archives so each has a CONSISTENT binary count per platform — goreleaser
+# rejects an archive whose binary count differs across platforms
+# (https://goreleaser.com/errors/multiple-binaries-archive). The five daemons are
+# linux-only while harnessctl is cross-platform, so they cannot share one archive:
+#   * boltrope_*    — the linux server bundle (the five daemons), linux amd64+arm64.
+#   * harnessctl_*  — the cross-platform client CLI (linux/darwin/windows).
 archives:
-  - id: default
+  - id: servers
+    ids: [orchestratord, modelgwd, toolruntimed, projectord, migrate]
     formats: [tar.gz]
-    name_template: >-
-      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    name_template: "boltrope_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - NOTICE
+      - README.md
+  - id: cli
+    ids: [harnessctl]
+    formats: [tar.gz]
+    name_template: "harnessctl_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     format_overrides:
       - goos: windows
         formats: [zip]
