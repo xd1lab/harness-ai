@@ -118,7 +118,7 @@ func resolveOpenAI(t *testing.T) (app.ModelGatewayPort, string) {
 	if err != nil {
 		t.Fatalf("live: build openai provider: %v", err)
 	}
-	return p, envOr("OPENAI_SMOKE_MODEL", "gpt-4o-mini")
+	return p, envOr("OPENAI_SMOKE_MODEL", "gpt-5.4-mini")
 }
 
 // envOr returns the env var named key, or def when unset/empty.

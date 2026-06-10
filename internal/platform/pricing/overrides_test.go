@@ -159,10 +159,10 @@ func TestParseOverrides_EmptyModelID_Rejected(t *testing.T) {
 func TestOverridesCost_OverrideWins(t *testing.T) {
 	t.Parallel()
 
-	// Double the default claude-3-5-sonnet rates (per 1M: input $6, output $30,
+	// Double the default claude-sonnet-4-6 rates (per 1M: input $6, output $30,
 	// cache-read $0.60, cache-write $7.50).
 	ov, err := pricing.ParseOverrides([]byte(`{
-		"claude-3-5-sonnet-20241022": {
+		"claude-sonnet-4-6": {
 			"input_per_token": 0.000006,
 			"output_per_token": 0.00003,
 			"cache_read_per_token": 0.0000006,
@@ -182,7 +182,7 @@ func TestOverridesCost_OverrideWins(t *testing.T) {
 	// expected = 6.00 + 3.00 + 0.30 + 1.50 = 10.80 (double the default-table 5.40)
 	const wantUSD = 10.80
 
-	got, err := ov.Cost("claude-3-5-sonnet-20241022", u)
+	got, err := ov.Cost("claude-sonnet-4-6", u)
 	if err != nil {
 		t.Fatalf("Overrides.Cost: unexpected error: %v", err)
 	}
@@ -202,11 +202,11 @@ func TestOverridesCost_FallbackMatchesDefault(t *testing.T) {
 	}
 
 	u := llm.Usage{InputTokens: 12_345, OutputTokens: 6_789, CacheReadTokens: 1_000, CacheWriteTokens: 500}
-	want, err := pricing.Cost("claude-3-haiku-20240307", u)
+	want, err := pricing.Cost("claude-haiku-4-5", u)
 	if err != nil {
 		t.Fatalf("pricing.Cost: unexpected error: %v", err)
 	}
-	got, err := ov.Cost("claude-3-haiku-20240307", u)
+	got, err := ov.Cost("claude-haiku-4-5", u)
 	if err != nil {
 		t.Fatalf("Overrides.Cost: unexpected error: %v", err)
 	}
@@ -268,11 +268,11 @@ func TestOverridesCost_NilOverlay(t *testing.T) {
 
 	var ov pricing.Overrides
 	u := llm.Usage{InputTokens: 1_000}
-	want, err := pricing.Cost("gpt-4o-mini", u)
+	want, err := pricing.Cost("gpt-5.4-mini", u)
 	if err != nil {
 		t.Fatalf("pricing.Cost: unexpected error: %v", err)
 	}
-	got, err := ov.Cost("gpt-4o-mini", u)
+	got, err := ov.Cost("gpt-5.4-mini", u)
 	if err != nil {
 		t.Fatalf("Overrides.Cost on nil map: unexpected error: %v", err)
 	}

@@ -21,7 +21,7 @@ func liveModel() string {
 	if v := os.Getenv("OPENAI_MODEL"); v != "" {
 		return v
 	}
-	return "gpt-4o-mini"
+	return "gpt-5.4-mini"
 }
 
 func TestLive_ResponsesStream(t *testing.T) {

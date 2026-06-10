@@ -610,26 +610,15 @@ func TestRun_InvalidOutputSchemaFailsRun(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// CostFunc error tolerance.
+// CostFunc error semantics.
 // ---------------------------------------------------------------------------
-
-// TestRun_CostFuncErrorMeansZeroCost asserts a CostFunc failure (e.g. unknown
-// model pricing) degrades to zero cost and never aborts the run.
-func TestRun_CostFuncErrorMeansZeroCost(t *testing.T) {
-	h := newHarness(t)
-	lp := agent.NewLoop(agent.Deps{
-		EventLog: h.eventlog, Model: h.model, Tools: h.tools, Approvals: h.gate,
-		Hooks: h.hooks, Policy: h.pol, Clock: h.clk, IDs: h.ids, Sink: h.sink, Metrics: h.metrics,
-		CostFunc: func(string, llm.Usage) (float64, error) { return 99, errors.New("unknown model") },
-	}, defaultConfig())
-
-	h.model.AddStream(textStream("hi"), nil)
-
-	res, err := lp.Run(context.Background(), agent.RunInput{SessionID: "sess-costerr", UserMessage: userMsg("go")})
-	require.NoError(t, err)
-	assert.Equal(t, domain.Success, res.Reason)
-	assert.Equal(t, 0.0, res.CostUSD, "an erroring CostFunc must yield zero cost, not a partial value")
-}
+// Pinned in loop_budget_pricing_test.go: with a budget cap SET an unpriceable
+// turn fails the run closed (TestRun_BudgetCapUnknownPriceFailsClosed); with
+// the cap disabled the error degrades to zero cost
+// (TestRun_NoBudgetCapUnknownPriceIsBestEffort). The former
+// TestRun_CostFuncErrorMeansZeroCost pinned the pre-hardening behavior
+// (cap set + erroring CostFunc => success at $0), which silently disarmed the
+// cap — superseded, not just moved.
 
 // ---------------------------------------------------------------------------
 // Tool dispatch failures and stream shapes.

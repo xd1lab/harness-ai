@@ -73,9 +73,27 @@ func (l *Loop) runTurn(ctx context.Context, st *runState) (turnOutcome, domain.T
 		return turnAborted, domain.ErrorDuringExecution, nil
 	}
 
+	// Price the turn BEFORE recording it. With a budget cap set, an unknown
+	// price is fatal (fail-closed; see CostFunc): the turn is closed with a
+	// TurnAborted instead of landing as a normal assistant turn, so the cap is
+	// never enforced against an under-counted total.
+	cost, costErr := l.priceTurnUsage(res.assembled.Done.Usage)
+	if costErr != nil {
+		if err := l.append(ctx, st, domain.ActorSystem, domain.TurnAborted{
+			TurnID:     turnID,
+			Reason:     domain.ErrorDuringExecution,
+			UsageSoFar: res.assembled.Done.Usage,
+			CostUSD:    0, // unknown by definition — recorded as 0, never guessed
+		}); err != nil {
+			return 0, "", err
+		}
+		st.usage = addUsage(st.usage, res.assembled.Done.Usage)
+		l.metrics.RecordRunError(string(domain.ErrorDuringExecution))
+		return turnAborted, domain.ErrorDuringExecution, nil
+	}
+
 	// Append the single assembled AssistantMessage for the turn (assembled
 	// message + usage/cost/provider_raw; architecture §4.3).
-	cost := l.computeCost(res.assembled.Done.Usage)
 	st.usage = addUsage(st.usage, res.assembled.Done.Usage)
 	st.cost += cost
 	if err := l.append(ctx, st, domain.ActorAssistant, domain.AssistantMessage{

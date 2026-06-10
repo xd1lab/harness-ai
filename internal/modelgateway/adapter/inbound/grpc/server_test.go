@@ -177,7 +177,7 @@ func TestGenerate_StreamsMappedEvents(t *testing.T) {
 
 	env := newTestEnv(t, fp, nil)
 	stream, err := env.client.Generate(context.Background(), &genproto.GenerateRequest{
-		Params: &genproto.GenerationParams{Model: "claude-3-5-sonnet-20241022"},
+		Params: &genproto.GenerationParams{Model: "claude-sonnet-4-6"},
 	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -224,7 +224,7 @@ func TestGenerate_StreamsMappedEvents(t *testing.T) {
 // TestGenerate_ComputesCostOnDone asserts cost is computed from the Done usage
 // and the pricing table, reported once to the CostSink.
 func TestGenerate_ComputesCostOnDone(t *testing.T) {
-	const model = "claude-3-5-sonnet-20241022"
+	const model = "claude-sonnet-4-6"
 	fp := llmtest.NewFakeProvider()
 	fp.AddStream([]llm.StreamEvent{
 		{TextDelta: &llm.TextDelta{Text: "hi"}},
@@ -322,7 +322,7 @@ func TestGenerate_PauseIsNonTerminal(t *testing.T) {
 
 	env := newTestEnv(t, fp, nil)
 	stream, err := env.client.Generate(context.Background(), &genproto.GenerateRequest{
-		Params: &genproto.GenerationParams{Model: "claude-3-5-sonnet-20241022"},
+		Params: &genproto.GenerationParams{Model: "claude-sonnet-4-6"},
 	})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -351,7 +351,7 @@ func TestGenerate_RequestMappedToProvider(t *testing.T) {
 	temp := 0.7
 	stream, err := env.client.Generate(context.Background(), &genproto.GenerateRequest{
 		Params: &genproto.GenerationParams{
-			Model:  "claude-3-5-sonnet-20241022",
+			Model:  "claude-sonnet-4-6",
 			System: "you are a bot",
 			Messages: []*genproto.Message{
 				{
@@ -379,7 +379,7 @@ func TestGenerate_RequestMappedToProvider(t *testing.T) {
 		t.Fatalf("recorded %d requests, want 1", len(env.fp.RecordedRequests))
 	}
 	req := env.fp.RecordedRequests[0]
-	if req.Model != "claude-3-5-sonnet-20241022" {
+	if req.Model != "claude-sonnet-4-6" {
 		t.Errorf("Model = %q", req.Model)
 	}
 	if req.System != "you are a bot" {
@@ -418,7 +418,7 @@ func TestGenerate_SpecificToolChoice(t *testing.T) {
 	env := newTestEnv(t, fp, nil)
 	stream, err := env.client.Generate(context.Background(), &genproto.GenerateRequest{
 		Params: &genproto.GenerationParams{
-			Model:      "claude-3-5-sonnet-20241022",
+			Model:      "claude-sonnet-4-6",
 			ToolChoice: genproto.ToolChoice_TOOL_CHOICE_TOOL,
 			ToolName:   "write",
 		},
@@ -441,7 +441,7 @@ func TestCountTokens_Success(t *testing.T) {
 
 	env := newTestEnv(t, fp, nil)
 	resp, err := env.client.CountTokens(context.Background(), &genproto.CountTokensRequest{
-		Params: &genproto.GenerationParams{Model: "claude-3-5-sonnet-20241022"},
+		Params: &genproto.GenerationParams{Model: "claude-sonnet-4-6"},
 	})
 	if err != nil {
 		t.Fatalf("CountTokens: %v", err)
@@ -521,6 +521,8 @@ func TestGetCapabilities_ServerSideToolsAlwaysOff(t *testing.T) {
 	fp := llmtest.NewFakeProvider()
 	env := newTestEnv(t, fp, nil) // built-in table
 
+	// NOTE: this id must exist in the CAPABILITIES registry (not the pricing
+	// table) with tools enabled; the registry still keys the dated 3.5 id.
 	resp, err := env.client.GetCapabilities(context.Background(), &genproto.GetCapabilitiesRequest{
 		Model: "claude-3-5-sonnet-20241022",
 	})

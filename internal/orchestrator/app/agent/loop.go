@@ -460,7 +460,10 @@ func (l *Loop) append(ctx context.Context, st *runState, actor domain.Actor, ev 
 }
 
 // computeCost computes the USD cost for usage via the injected CostFunc,
-// treating a nil func or an error as zero cost (best-effort; budget cap only).
+// treating a nil func or an error as zero cost. It is the BEST-EFFORT path,
+// used only where the run is already ending or being recovered (the
+// stream-failure abort and resume adjudication) — for a live turn that decides
+// whether the run keeps spending, use [Loop.priceTurnUsage] instead.
 func (l *Loop) computeCost(u llm.Usage) float64 {
 	if l.deps.CostFunc == nil {
 		return 0
@@ -470,6 +473,27 @@ func (l *Loop) computeCost(u llm.Usage) float64 {
 		return 0
 	}
 	return c
+}
+
+// priceTurnUsage prices a live turn for budget enforcement. With the budget
+// cap ENABLED (MaxBudgetUSD > 0) a CostFunc failure is fatal for the run:
+// continuing would compare the cap against an under-counted total, silently
+// disarming it (see the [CostFunc] contract). With the cap disabled, cost is
+// best-effort observability and an unknown price degrades to zero. A nil
+// CostFunc always yields zero — wiring no pricing at all is an explicit
+// deployment decision, preserved as-is.
+func (l *Loop) priceTurnUsage(u llm.Usage) (float64, error) {
+	if l.deps.CostFunc == nil {
+		return 0, nil
+	}
+	c, err := l.deps.CostFunc(l.cfg.Model, u)
+	if err != nil {
+		if l.cfg.MaxBudgetUSD > 0 {
+			return 0, fmt.Errorf("agent: budget cap set but turn cost unknown: %w", err)
+		}
+		return 0, nil
+	}
+	return c, nil
 }
 
 // hasContent reports whether a message carries any content parts (so an empty

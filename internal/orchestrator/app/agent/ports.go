@@ -47,9 +47,15 @@ type MetricsRecorder interface {
 // [llm.Usage] read off the provider stream. It is injected (production wiring
 // passes [github.com/xd1lab/harness-ai/internal/platform/pricing.Cost]; tests
 // pass a deterministic function) so budget enforcement is testable without
-// coupling the loop to a pricing table. A nil CostFunc yields zero cost. An
-// error is treated as zero cost for that turn (cost is best-effort for the
-// budget cap; an unknown-model price never aborts the run).
+// coupling the loop to a pricing table. A nil CostFunc yields zero cost.
+//
+// Error semantics depend on whether a budget cap is set (FR-LOOP-02): with
+// MaxBudgetUSD > 0 a CostFunc error on a live turn ABORTS the run with
+// error_during_execution — a $0 fallback would disarm the cap and let the run
+// spend unbounded ("a budget that silently stopped counting"). Without a cap,
+// cost is best-effort observability and an error degrades to zero. Recovery
+// accounting (resume adjudication) and the already-aborting stream-failure
+// path always degrade to zero — they never re-bill and never spend further.
 type CostFunc func(model string, u llm.Usage) (float64, error)
 
 // noopSink is the zero-behavior [ClientSink] used when none is injected.

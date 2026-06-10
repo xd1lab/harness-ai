@@ -5,14 +5,21 @@
 //
 // # Rate maintenance
 //
-// Rates in this package are placeholder DEFAULTS based on publicly-listed
-// prices at the time of writing (June 2026).  Provider pricing changes
-// frequently, so deployments that use cost for billing or budget enforcement
-// SHOULD override them: point BOLTROPE_PRICING_FILE at a JSON document in the
-// [ParseOverrides] format and the daemons layer it over [DefaultTable] at
-// startup (override wins per model; unlisted models keep the defaults).  See
-// the doc comment on [ModelRates] for the citation format each built-in entry
-// should carry.
+// Rates in this package are seeded from the providers' publicly-listed prices,
+// verified against the cited source on the date noted per family (most
+// recently 2026-06-11).  Provider pricing changes frequently and the built-in
+// table cannot follow it in real time, so deployments that use cost for
+// billing or budget enforcement SHOULD pin their own rates: point
+// BOLTROPE_PRICING_FILE at a JSON document in the [ParseOverrides] format and
+// the daemons layer it over [DefaultTable] at startup (override wins per
+// model; unlisted models keep the defaults).  See the doc comment on
+// [ModelRates] for the citation format each built-in entry carries.
+//
+// Known simplifications of the built-in table (override if they matter to your
+// deployment): tiered long-context pricing is NOT modeled (entries use the
+// base/≤200k-token tier); Gemini's per-hour context-cache STORAGE fee is not a
+// per-token rate and is not modeled; providers without a published cache-write
+// premium carry CacheWritePerToken = InputPerToken.
 //
 // # Design
 //
@@ -69,123 +76,207 @@ func (e *UnknownModelError) Error() string {
 	return fmt.Sprintf("pricing: unknown model %q — add it to the pricing table or supply a config override", e.Model)
 }
 
-// DefaultTable is the package-level pricing table seeded with representative
-// models from the Anthropic, OpenAI, and Google Gemini families.
+// DefaultTable is the package-level pricing table seeded with the CURRENT
+// (actively served) models of the Anthropic, OpenAI, and Google Gemini
+// families, at the providers' listed rates as of the citation date on each
+// family header.  Retired models (e.g. the Claude 3 family, retired by the
+// provider in early 2026) are deliberately absent: an entry for a model the
+// provider no longer serves is dead weight that masks staleness.
 //
-// IMPORTANT — PLACEHOLDER RATES: every entry below uses placeholder rates
-// derived from publicly-available pricing pages as of approximately June 2026.
-// These MUST be reviewed — or overridden per deployment via BOLTROPE_PRICING_FILE
-// and [Overrides] — before being used for billing or budget enforcement.  A
-// commented citation (source + effective date) accompanies each entry.
+// Deployments that bill or budget-enforce against these numbers SHOULD pin
+// their own rates via BOLTROPE_PRICING_FILE (see the package doc): provider
+// price changes between releases of this module will not be reflected here.
 //
 // To add a model: append an entry whose key is the canonical model id string
 // used in [llm.Request.Model] and whose value is a [ModelRates] with rates
-// expressed in USD per single token (published "per 1M" ÷ 1_000_000).
+// expressed in USD per single token (published "per 1M" ÷ 1_000_000), and
+// carry a citation comment (source + effective date).
 var DefaultTable = map[string]ModelRates{
 	// -------------------------------------------------------------------------
-	// Anthropic — Claude 3 family
-	// Source: https://www.anthropic.com/pricing (placeholder, ~June 2026)
+	// Anthropic — current Claude models
+	// Source: https://www.anthropic.com/pricing (verified 2026-06; rates per the
+	// vendor's published table). Cache-read = 0.1 × input; cache-write (5-minute
+	// TTL) = 1.25 × input — Anthropic's standard prompt-caching multipliers.
+	// The 1-hour-TTL cache-write premium (2 × input) is NOT modeled; override if
+	// your deployment uses it.
 	// -------------------------------------------------------------------------
 
-	// claude-3-opus-20240229 — most capable Claude 3 model.
-	// Listed rates (per 1M): input $15, output $75, cache-read $1.50, cache-write $18.75.
-	"claude-3-opus-20240229": {
+	// claude-fable-5 — Anthropic's most capable model tier.
+	// Listed rates (per 1M): input $10, output $50.
+	"claude-fable-5": {
+		InputPerToken:      10.00 / 1_000_000,
+		OutputPerToken:     50.00 / 1_000_000,
+		CacheReadPerToken:  1.00 / 1_000_000,
+		CacheWritePerToken: 12.50 / 1_000_000,
+	},
+
+	// claude-opus-4-8 — current Opus. Listed rates (per 1M): input $5, output $25.
+	"claude-opus-4-8": {
+		InputPerToken:      5.00 / 1_000_000,
+		OutputPerToken:     25.00 / 1_000_000,
+		CacheReadPerToken:  0.50 / 1_000_000,
+		CacheWritePerToken: 6.25 / 1_000_000,
+	},
+
+	// claude-opus-4-7 — previous-generation Opus, same listed rates as 4.8.
+	"claude-opus-4-7": {
+		InputPerToken:      5.00 / 1_000_000,
+		OutputPerToken:     25.00 / 1_000_000,
+		CacheReadPerToken:  0.50 / 1_000_000,
+		CacheWritePerToken: 6.25 / 1_000_000,
+	},
+
+	// claude-opus-4-6 — older Opus, still served at the same listed rates.
+	"claude-opus-4-6": {
+		InputPerToken:      5.00 / 1_000_000,
+		OutputPerToken:     25.00 / 1_000_000,
+		CacheReadPerToken:  0.50 / 1_000_000,
+		CacheWritePerToken: 6.25 / 1_000_000,
+	},
+
+	// claude-opus-4-5 / claude-opus-4-1 — legacy Opus aliases still served.
+	// Opus 4.5 listed (per 1M): input $5, output $25. Opus 4.1: input $15, output $75.
+	"claude-opus-4-5": {
+		InputPerToken:      5.00 / 1_000_000,
+		OutputPerToken:     25.00 / 1_000_000,
+		CacheReadPerToken:  0.50 / 1_000_000,
+		CacheWritePerToken: 6.25 / 1_000_000,
+	},
+	"claude-opus-4-1": {
 		InputPerToken:      15.00 / 1_000_000,
 		OutputPerToken:     75.00 / 1_000_000,
 		CacheReadPerToken:  1.50 / 1_000_000,
 		CacheWritePerToken: 18.75 / 1_000_000,
 	},
 
-	// claude-3-5-sonnet-20241022 — Claude 3.5 Sonnet.
-	// Listed rates (per 1M): input $3, output $15, cache-read $0.30, cache-write $3.75.
-	"claude-3-5-sonnet-20241022": {
+	// claude-sonnet-4-6 — current Sonnet. Listed rates (per 1M): input $3, output $15.
+	"claude-sonnet-4-6": {
 		InputPerToken:      3.00 / 1_000_000,
 		OutputPerToken:     15.00 / 1_000_000,
 		CacheReadPerToken:  0.30 / 1_000_000,
 		CacheWritePerToken: 3.75 / 1_000_000,
 	},
 
-	// claude-3-haiku-20240307 — Claude 3 Haiku (fast, low-cost).
-	// Listed rates (per 1M): input $0.25, output $1.25, cache-read $0.03, cache-write $0.30.
-	"claude-3-haiku-20240307": {
-		InputPerToken:      0.25 / 1_000_000,
-		OutputPerToken:     1.25 / 1_000_000,
-		CacheReadPerToken:  0.03 / 1_000_000,
-		CacheWritePerToken: 0.30 / 1_000_000,
-	},
-
-	// -------------------------------------------------------------------------
-	// Anthropic — Claude 3.7 / 4 family (placeholder rates, ~June 2026)
-	// Source: https://www.anthropic.com/pricing (placeholder)
-	// -------------------------------------------------------------------------
-
-	// claude-3-7-sonnet-20250219 — Claude 3.7 Sonnet (extended thinking).
-	// Placeholder rates (per 1M): input $3, output $15, cache-read $0.30, cache-write $3.75.
-	"claude-3-7-sonnet-20250219": {
+	// claude-sonnet-4-5 — legacy Sonnet alias, same listed rates.
+	"claude-sonnet-4-5": {
 		InputPerToken:      3.00 / 1_000_000,
 		OutputPerToken:     15.00 / 1_000_000,
 		CacheReadPerToken:  0.30 / 1_000_000,
 		CacheWritePerToken: 3.75 / 1_000_000,
 	},
 
-	// -------------------------------------------------------------------------
-	// OpenAI family
-	// Source: https://platform.openai.com/pricing (placeholder, ~June 2026)
-	// Cache-read prices reflect OpenAI's automatic prompt caching discount.
-	// OpenAI does not currently expose a separate cache-write price; the write
-	// rate is set equal to the standard input rate (no premium).
-	// -------------------------------------------------------------------------
-
-	// gpt-4o — OpenAI GPT-4o.
-	// Placeholder rates (per 1M): input $2.50, output $10, cache-read $1.25, cache-write = input.
-	"gpt-4o": {
-		InputPerToken:      2.50 / 1_000_000,
-		OutputPerToken:     10.00 / 1_000_000,
-		CacheReadPerToken:  1.25 / 1_000_000,
-		CacheWritePerToken: 2.50 / 1_000_000, // no write premium for OpenAI
-	},
-
-	// gpt-4o-mini — OpenAI GPT-4o mini (low-cost).
-	// Placeholder rates (per 1M): input $0.15, output $0.60, cache-read $0.075, cache-write = input.
-	"gpt-4o-mini": {
-		InputPerToken:      0.15 / 1_000_000,
-		OutputPerToken:     0.60 / 1_000_000,
-		CacheReadPerToken:  0.075 / 1_000_000,
-		CacheWritePerToken: 0.15 / 1_000_000, // no write premium for OpenAI
-	},
-
-	// o1 — OpenAI o1 (reasoning model).
-	// Placeholder rates (per 1M): input $15, output $60, cache-read $7.50, cache-write = input.
-	"o1": {
-		InputPerToken:      15.00 / 1_000_000,
-		OutputPerToken:     60.00 / 1_000_000,
-		CacheReadPerToken:  7.50 / 1_000_000,
-		CacheWritePerToken: 15.00 / 1_000_000, // no write premium for OpenAI
-	},
-
-	// -------------------------------------------------------------------------
-	// Google Gemini family
-	// Source: https://ai.google.dev/pricing (placeholder, ~June 2026)
-	// Gemini does not currently expose explicit cache-write prices; the write
-	// rate is set equal to the standard input rate as a conservative placeholder.
-	// -------------------------------------------------------------------------
-
-	// gemini-2.0-flash — Gemini 2.0 Flash (fast, low-cost).
-	// Placeholder rates (per 1M): input $0.075, output $0.30, cache-read $0.01875, cache-write = input.
-	"gemini-2.0-flash": {
-		InputPerToken:      0.075 / 1_000_000,
-		OutputPerToken:     0.30 / 1_000_000,
-		CacheReadPerToken:  0.01875 / 1_000_000,
-		CacheWritePerToken: 0.075 / 1_000_000, // no write premium for Gemini
-	},
-
-	// gemini-1.5-pro — Gemini 1.5 Pro.
-	// Placeholder rates (per 1M, for ≤128k context): input $1.25, output $5, cache-read $0.3125, cache-write = input.
-	"gemini-1.5-pro": {
-		InputPerToken:      1.25 / 1_000_000,
+	// claude-haiku-4-5 — current Haiku (fast, low-cost); the dated id is the
+	// full snapshot name of the same model. Listed (per 1M): input $1, output $5.
+	"claude-haiku-4-5": {
+		InputPerToken:      1.00 / 1_000_000,
 		OutputPerToken:     5.00 / 1_000_000,
-		CacheReadPerToken:  0.3125 / 1_000_000,
-		CacheWritePerToken: 1.25 / 1_000_000, // no write premium for Gemini
+		CacheReadPerToken:  0.10 / 1_000_000,
+		CacheWritePerToken: 1.25 / 1_000_000,
+	},
+	"claude-haiku-4-5-20251001": {
+		InputPerToken:      1.00 / 1_000_000,
+		OutputPerToken:     5.00 / 1_000_000,
+		CacheReadPerToken:  0.10 / 1_000_000,
+		CacheWritePerToken: 1.25 / 1_000_000,
+	},
+
+	// -------------------------------------------------------------------------
+	// OpenAI — current GPT-5.x text models
+	// Source: https://developers.openai.com/api/docs/pricing (verified
+	// 2026-06-11). The page lists input / cached-input / output; OpenAI
+	// publishes no cache-write premium, so CacheWritePerToken = InputPerToken.
+	// -------------------------------------------------------------------------
+
+	// gpt-5.5 — flagship. Listed (per 1M): input $5, cached $0.50, output $30.
+	"gpt-5.5": {
+		InputPerToken:      5.00 / 1_000_000,
+		OutputPerToken:     30.00 / 1_000_000,
+		CacheReadPerToken:  0.50 / 1_000_000,
+		CacheWritePerToken: 5.00 / 1_000_000, // no write premium published
+	},
+
+	// gpt-5.4 — listed (per 1M): input $2.50, cached $0.25, output $15.
+	"gpt-5.4": {
+		InputPerToken:      2.50 / 1_000_000,
+		OutputPerToken:     15.00 / 1_000_000,
+		CacheReadPerToken:  0.25 / 1_000_000,
+		CacheWritePerToken: 2.50 / 1_000_000, // no write premium published
+	},
+
+	// gpt-5.4-mini — listed (per 1M): input $0.75, cached $0.075, output $4.50.
+	"gpt-5.4-mini": {
+		InputPerToken:      0.75 / 1_000_000,
+		OutputPerToken:     4.50 / 1_000_000,
+		CacheReadPerToken:  0.075 / 1_000_000,
+		CacheWritePerToken: 0.75 / 1_000_000, // no write premium published
+	},
+
+	// gpt-5.4-nano — listed (per 1M): input $0.20, cached $0.02, output $1.25.
+	"gpt-5.4-nano": {
+		InputPerToken:      0.20 / 1_000_000,
+		OutputPerToken:     1.25 / 1_000_000,
+		CacheReadPerToken:  0.02 / 1_000_000,
+		CacheWritePerToken: 0.20 / 1_000_000, // no write premium published
+	},
+
+	// -------------------------------------------------------------------------
+	// Google Gemini — current models
+	// Source: https://ai.google.dev/gemini-api/docs/pricing (verified
+	// 2026-06-11). Where the vendor tiers by prompt length, the ≤200k-token
+	// tier is used (the >200k tier is NOT modeled — override if you run long
+	// contexts). Cache-read is the listed per-token context-cache price; the
+	// separate per-hour cache STORAGE fee is not a per-token rate and is not
+	// modeled. Gemini publishes no cache-write premium, so
+	// CacheWritePerToken = InputPerToken. Audio-input rates are not modeled
+	// (text/image/video rate used).
+	// -------------------------------------------------------------------------
+
+	// gemini-3.5-flash — listed (per 1M): input $1.50, output $9, cache-read $0.15.
+	"gemini-3.5-flash": {
+		InputPerToken:      1.50 / 1_000_000,
+		OutputPerToken:     9.00 / 1_000_000,
+		CacheReadPerToken:  0.15 / 1_000_000,
+		CacheWritePerToken: 1.50 / 1_000_000, // no write premium published
+	},
+
+	// gemini-3.1-pro-preview — ≤200k tier (per 1M): input $2, output $12, cache-read $0.20.
+	"gemini-3.1-pro-preview": {
+		InputPerToken:      2.00 / 1_000_000,
+		OutputPerToken:     12.00 / 1_000_000,
+		CacheReadPerToken:  0.20 / 1_000_000,
+		CacheWritePerToken: 2.00 / 1_000_000, // no write premium published
+	},
+
+	// gemini-3.1-flash-lite — listed (per 1M): input $0.25, output $1.50, cache-read $0.025.
+	"gemini-3.1-flash-lite": {
+		InputPerToken:      0.25 / 1_000_000,
+		OutputPerToken:     1.50 / 1_000_000,
+		CacheReadPerToken:  0.025 / 1_000_000,
+		CacheWritePerToken: 0.25 / 1_000_000, // no write premium published
+	},
+
+	// gemini-2.5-pro — ≤200k tier (per 1M): input $1.25, output $10, cache-read $0.125.
+	"gemini-2.5-pro": {
+		InputPerToken:      1.25 / 1_000_000,
+		OutputPerToken:     10.00 / 1_000_000,
+		CacheReadPerToken:  0.125 / 1_000_000,
+		CacheWritePerToken: 1.25 / 1_000_000, // no write premium published
+	},
+
+	// gemini-2.5-flash — listed (per 1M): input $0.30, output $2.50, cache-read $0.03.
+	"gemini-2.5-flash": {
+		InputPerToken:      0.30 / 1_000_000,
+		OutputPerToken:     2.50 / 1_000_000,
+		CacheReadPerToken:  0.03 / 1_000_000,
+		CacheWritePerToken: 0.30 / 1_000_000, // no write premium published
+	},
+
+	// gemini-2.5-flash-lite — listed (per 1M): input $0.10, output $0.40, cache-read $0.01.
+	"gemini-2.5-flash-lite": {
+		InputPerToken:      0.10 / 1_000_000,
+		OutputPerToken:     0.40 / 1_000_000,
+		CacheReadPerToken:  0.01 / 1_000_000,
+		CacheWritePerToken: 0.10 / 1_000_000, // no write premium published
 	},
 }
 

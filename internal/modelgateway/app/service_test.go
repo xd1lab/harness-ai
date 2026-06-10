@@ -81,7 +81,7 @@ func drain(t *testing.T, r llm.StreamReader) []llm.StreamEvent {
 // the Done usage and the pricing table, reporting it to the CostSink exactly
 // once when the Done event passes through the stream.
 func TestStream_ComputesCostOnDone(t *testing.T) {
-	const model = "claude-3-5-sonnet-20241022"
+	const model = "claude-sonnet-4-6"
 	fp := llmtest.NewFakeProvider()
 	fp.AddStream([]llm.StreamEvent{
 		{TextDelta: &llm.TextDelta{Text: "hi"}},

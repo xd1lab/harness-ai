@@ -79,7 +79,7 @@ type orchSettings struct {
 func loadOrchSettings() orchSettings {
 	return orchSettings{
 		ToolRuntimeEndpoint: envOr("BOLTROPE_TOOLRUNTIME_ENDPOINT", "localhost:9002"),
-		DefaultModel:        envOr("BOLTROPE_DEFAULT_MODEL", "claude-3-5-sonnet-latest"),
+		DefaultModel:        envOr("BOLTROPE_DEFAULT_MODEL", "claude-sonnet-4-6"),
 		MaxContextTokens:    envInt("BOLTROPE_MAX_CONTEXT_TOKENS", 0),
 		SubAgentMaxDepth:    envInt("BOLTROPE_SUBAGENT_MAX_DEPTH", 2),
 		// Shared with the model-gateway so both daemons price a turn identically.

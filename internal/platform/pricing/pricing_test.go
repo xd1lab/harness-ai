@@ -12,13 +12,12 @@ import (
 // correct USD amount for a known model whose Usage includes both cache-read and
 // cache-write tokens in addition to standard input/output tokens.
 //
-// The expected value is derived from the placeholder rates documented in
-// pricing.go.  If rates are updated the golden value here must be updated to
-// match.
+// The expected value is derived from the rates documented in pricing.go.  If
+// rates are updated the golden value here must be updated to match.
 func TestCost_KnownModel_CacheReadWriteSplit(t *testing.T) {
 	t.Parallel()
 
-	// Use claude-3-5-sonnet-20241022 whose placeholder rates (per 1M tokens) are:
+	// Use claude-sonnet-4-6 whose listed rates (per 1M tokens) are:
 	//   input       = $3.00  →  $0.000003  per token
 	//   output      = $15.00 →  $0.000015  per token
 	//   cache-read  = $0.30  →  $0.0000003 per token
@@ -34,7 +33,7 @@ func TestCost_KnownModel_CacheReadWriteSplit(t *testing.T) {
 	// expected = 3.00 + 1.50 + 0.15 + 0.75 = 5.40
 	const wantUSD = 5.40
 
-	got, err := pricing.Cost("claude-3-5-sonnet-20241022", u)
+	got, err := pricing.Cost("claude-sonnet-4-6", u)
 	if err != nil {
 		t.Fatalf("Cost: unexpected error: %v", err)
 	}
@@ -70,7 +69,7 @@ func TestCost_UnknownModel_ReturnsTypedError(t *testing.T) {
 func TestCost_ZeroUsage_KnownModel(t *testing.T) {
 	t.Parallel()
 
-	got, err := pricing.Cost("gpt-4o", llm.Usage{})
+	got, err := pricing.Cost("gpt-5.4", llm.Usage{})
 	if err != nil {
 		t.Fatalf("Cost with zero usage: unexpected error: %v", err)
 	}
@@ -85,19 +84,29 @@ func TestCost_AllModelFamilies_NoError(t *testing.T) {
 	t.Parallel()
 
 	models := []string{
-		// Anthropic — Claude 3 family
-		"claude-3-opus-20240229",
-		"claude-3-5-sonnet-20241022",
-		"claude-3-haiku-20240307",
-		// Anthropic — Claude 3.7/4 family
-		"claude-3-7-sonnet-20250219",
-		// OpenAI
-		"gpt-4o",
-		"gpt-4o-mini",
-		"o1",
+		// Anthropic — current + legacy-active Claude models
+		"claude-fable-5",
+		"claude-opus-4-8",
+		"claude-opus-4-7",
+		"claude-opus-4-6",
+		"claude-opus-4-5",
+		"claude-opus-4-1",
+		"claude-sonnet-4-6",
+		"claude-sonnet-4-5",
+		"claude-haiku-4-5",
+		"claude-haiku-4-5-20251001",
+		// OpenAI — GPT-5.x
+		"gpt-5.5",
+		"gpt-5.4",
+		"gpt-5.4-mini",
+		"gpt-5.4-nano",
 		// Google Gemini
-		"gemini-2.0-flash",
-		"gemini-1.5-pro",
+		"gemini-3.5-flash",
+		"gemini-3.1-pro-preview",
+		"gemini-3.1-flash-lite",
+		"gemini-2.5-pro",
+		"gemini-2.5-flash",
+		"gemini-2.5-flash-lite",
 	}
 	u := llm.Usage{InputTokens: 1, OutputTokens: 1}
 	for _, m := range models {
