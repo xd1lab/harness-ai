@@ -34,13 +34,14 @@ func (s *Store) CreateTenant(ctx context.Context, tenantID, name string) error {
 }
 
 // CreateSession inserts a fresh (non-fork) session aggregate in the active state
-// at head_seq=0, lease_epoch=0, owned by the context's tenant. It is the
-// session-creation half of the orchestrator's CreateSession RPC (not part of
-// [app.EventLogPort], which only appends/loads/forks/subscribes an EXISTING
-// stream). systemPrompt is recorded on the session row's first SessionStarted
-// event by the caller; this helper only creates the aggregate. It returns the
-// created [domain.Session].
-func (s *Store) CreateSession(ctx context.Context, sessionID string) (domain.Session, error) {
+// at head_seq=0, lease_epoch=0, owned by the context's tenant, with the given
+// permission mode (sessions.mode; ADR-0019). It is the session-creation half of
+// the orchestrator's CreateSession RPC (not part of [app.EventLogPort], which
+// only appends/loads/forks/subscribes an EXISTING stream). The caller has already
+// verified mode (in particular, rejected a client-supplied [domain.ModeBypass]);
+// the empty zero value is normalized to [domain.ModeDefault] so the NOT NULL /
+// CHECK column constraint always holds. It returns the created [domain.Session].
+func (s *Store) CreateSession(ctx context.Context, sessionID string, mode domain.PermissionMode) (domain.Session, error) {
 	tenantID, err := infradb.TenantFromContext(ctx)
 	if err != nil {
 		return domain.Session{}, err
@@ -51,16 +52,20 @@ func (s *Store) CreateSession(ctx context.Context, sessionID string) (domain.Ses
 	}
 	defer cleanup()
 
-	var sess domain.Session
+	var (
+		sess    domain.Session
+		modeStr string
+	)
 	err = tx.QueryRow(ctx, `
-		INSERT INTO sessions (id, tenant_id, status, head_seq, lease_epoch)
-		VALUES ($1, $2, 'active', 0, 0)
-		RETURNING id, tenant_id, status, head_seq, lease_epoch, created_at, updated_at`,
-		sessionID, tenantID,
-	).Scan(&sess.ID, &sess.TenantID, &sess.Status, &sess.HeadSeq, &sess.LeaseEpoch, &sess.CreatedAt, &sess.UpdatedAt)
+		INSERT INTO sessions (id, tenant_id, status, head_seq, lease_epoch, mode)
+		VALUES ($1, $2, 'active', 0, 0, $3)
+		RETURNING id, tenant_id, status, head_seq, lease_epoch, mode, created_at, updated_at`,
+		sessionID, tenantID, string(mode.OrDefault()),
+	).Scan(&sess.ID, &sess.TenantID, &sess.Status, &sess.HeadSeq, &sess.LeaseEpoch, &modeStr, &sess.CreatedAt, &sess.UpdatedAt)
 	if err != nil {
 		return domain.Session{}, fmt.Errorf("eventstore: creating session: %w", err)
 	}
+	sess.Mode = domain.PermissionMode(modeStr)
 	if err := tx.Commit(ctx); err != nil {
 		return domain.Session{}, fmt.Errorf("eventstore: commit create-session: %w", err)
 	}

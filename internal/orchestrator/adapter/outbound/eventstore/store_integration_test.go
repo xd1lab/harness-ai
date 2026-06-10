@@ -214,10 +214,10 @@ func TestRLS_PredicateRemoved(t *testing.T) {
 	if err := h.store.CreateTenant(ctxB, tenantB, "B"); err != nil {
 		t.Fatalf("create tenant B: %v", err)
 	}
-	if _, err := h.store.CreateSession(ctxA, sessionA); err != nil {
+	if _, err := h.store.CreateSession(ctxA, sessionA, domain.ModeDefault); err != nil {
 		t.Fatalf("create session A: %v", err)
 	}
-	if _, err := h.store.CreateSession(ctxB, sessionB); err != nil {
+	if _, err := h.store.CreateSession(ctxB, sessionB, domain.ModeDefault); err != nil {
 		t.Fatalf("create session B: %v", err)
 	}
 	// 10 events for A, 10 for B.
@@ -581,4 +581,65 @@ func snapshot(mu *sync.Mutex, s *[]int64) []int64 {
 	mu.Lock()
 	defer mu.Unlock()
 	return append([]int64(nil), (*s)...)
+}
+
+// TestStore_SessionMode_PersistsLoadsAndForkInherits verifies the session
+// permission mode round-trips through the REAL schema (sessions.mode; ADR-0019,
+// migration 0004): CreateSession persists the requested mode, LoadSession reads
+// it back, a fork inherits the parent's mode, and the default path stores
+// 'default'. This exercises the actual SQL + CHECK constraint the unit-level fake
+// cannot.
+func TestStore_SessionMode_PersistsLoadsAndForkInherits(t *testing.T) {
+	h := newHarness(t)
+	tenantID := newUUID(t)
+	sessionID := newUUID(t)
+	ctx := tenantCtx(tenantID)
+
+	if err := h.store.CreateTenant(ctx, tenantID, "mode-tenant"); err != nil {
+		t.Fatalf("CreateTenant: %v", err)
+	}
+
+	// CreateSession persists the requested (non-default) mode and returns it.
+	created, err := h.store.CreateSession(ctx, sessionID, domain.ModePlan)
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if created.Mode != domain.ModePlan {
+		t.Fatalf("CreateSession returned mode %q, want %q", created.Mode, domain.ModePlan)
+	}
+
+	// LoadSession reads the persisted mode back.
+	loaded, err := h.store.LoadSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if loaded.Mode != domain.ModePlan {
+		t.Fatalf("LoadSession mode = %q, want %q", loaded.Mode, domain.ModePlan)
+	}
+
+	// A fork inherits the parent's mode. Append one event so there is a head to
+	// fork at (head 0 -> 1).
+	if _, err := appendOne(ctx, h.store, sessionID, 0, 0, newUUID(t), "m-0"); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	child, err := h.store.Fork(ctx, sessionID, 1, newUUID(t))
+	if err != nil {
+		t.Fatalf("Fork: %v", err)
+	}
+	if child.Mode != domain.ModePlan {
+		t.Fatalf("forked child mode = %q, want %q (fork must inherit parent mode)", child.Mode, domain.ModePlan)
+	}
+
+	// The default-mode path stores and reads 'default'.
+	defSession := newUUID(t)
+	if _, err := h.store.CreateSession(ctx, defSession, domain.ModeDefault); err != nil {
+		t.Fatalf("CreateSession default: %v", err)
+	}
+	def, err := h.store.LoadSession(ctx, defSession)
+	if err != nil {
+		t.Fatalf("LoadSession default: %v", err)
+	}
+	if def.Mode != domain.ModeDefault {
+		t.Fatalf("default-mode session loaded mode = %q, want %q", def.Mode, domain.ModeDefault)
+	}
 }

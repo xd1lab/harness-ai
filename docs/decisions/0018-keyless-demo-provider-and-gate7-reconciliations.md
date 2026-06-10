@@ -64,6 +64,12 @@ secure default `ModeDefault`. Plumbing a session-scoped mode through the event l
 `ModeDefault` (the most restrictive mode) is the safe interim and is documented as a NOTE
 at the `Run` handler.
 
+> **Resolved by [ADR-0019](0019-session-scoped-permission-mode.md) (2026-06-10).** The
+> mode is now persisted on the session aggregate as the additive `sessions.mode` column
+> (migration 0004), stamped at `CreateSession` from the verified request and read by `Run`
+> into the policy pipeline; forks inherit it and `GetSession` surfaces it. `bypass` remains
+> operator-only/server-side.
+
 ## Consequences
 
 - `docker compose up` followed by `harnessctl run "..."` succeeds keyless out of the

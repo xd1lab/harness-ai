@@ -23,7 +23,7 @@ func toGenSession(s domain.Session, usage llm.Usage, costUSD float64, numTurns i
 		SessionId:       s.ID,
 		TenantId:        s.TenantID,
 		Status:          toGenStatus(s.Status),
-		Mode:            genproto.PermissionMode_PERMISSION_MODE_UNSPECIFIED,
+		Mode:            toGenMode(s.Mode),
 		HeadSeq:         s.HeadSeq,
 		TotalUsage:      toGenUsage(usage),
 		TotalCostUsd:    costUSD,
@@ -61,21 +61,59 @@ func toGenUsage(u llm.Usage) *genproto.Usage {
 
 // ---- Permission mode --------------------------------------------------------
 
-// fromGenMode maps the wire [genproto.PermissionMode] to the policy [policy.Mode].
-// PERMISSION_MODE_UNSPECIFIED and PERMISSION_MODE_DEFAULT both map to
-// [policy.ModeDefault]. A client-supplied PERMISSION_MODE_BYPASS is rejected by
-// the caller before this mapping (it is operator-only, server-side); here it
-// maps to [policy.ModeBypass] for completeness.
-func fromGenMode(m genproto.PermissionMode) policy.Mode {
+// fromGenModeDomain maps the wire [genproto.PermissionMode] to the persisted
+// session-level [domain.PermissionMode] (ADR-0019), used at CreateSession to stamp
+// the session's standing mode (a client-supplied bypass is rejected before this is
+// reached). It is an EXPLICIT mapping, not a cast: the domain spelling
+// ("acceptEdits") differs from policy.Mode's ("accept_edits"). UNSPECIFIED/DEFAULT
+// both resolve to the secure [domain.ModeDefault].
+func fromGenModeDomain(m genproto.PermissionMode) domain.PermissionMode {
 	switch m {
 	case genproto.PermissionMode_PERMISSION_MODE_ACCEPT_EDITS:
-		return policy.ModeAcceptEdits
+		return domain.ModeAcceptEdits
 	case genproto.PermissionMode_PERMISSION_MODE_PLAN:
-		return policy.ModePlan
+		return domain.ModePlan
 	case genproto.PermissionMode_PERMISSION_MODE_BYPASS:
+		return domain.ModeBypass
+	default:
+		return domain.ModeDefault
+	}
+}
+
+// toPolicyMode maps the persisted session-level [domain.PermissionMode] to the
+// live [policy.Mode] the loop runs under (ADR-0019). EXPLICIT mapping (not a cast):
+// the two vocabularies agree on default/plan/bypass but differ on accept-edits
+// (domain "acceptEdits" vs policy "accept_edits"). An unset/unknown mode resolves
+// to the secure [policy.ModeDefault].
+func toPolicyMode(m domain.PermissionMode) policy.Mode {
+	switch m {
+	case domain.ModeAcceptEdits:
+		return policy.ModeAcceptEdits
+	case domain.ModePlan:
+		return policy.ModePlan
+	case domain.ModeBypass:
 		return policy.ModeBypass
 	default:
 		return policy.ModeDefault
+	}
+}
+
+// toGenMode maps the persisted session-level [domain.PermissionMode] back to the
+// wire [genproto.PermissionMode] for GetSession. The empty zero value (a session
+// created before the mode column existed, or a fake that does not set it) maps to
+// UNSPECIFIED, which a client reads as "the server default applies".
+func toGenMode(m domain.PermissionMode) genproto.PermissionMode {
+	switch m {
+	case domain.ModeDefault:
+		return genproto.PermissionMode_PERMISSION_MODE_DEFAULT
+	case domain.ModeAcceptEdits:
+		return genproto.PermissionMode_PERMISSION_MODE_ACCEPT_EDITS
+	case domain.ModePlan:
+		return genproto.PermissionMode_PERMISSION_MODE_PLAN
+	case domain.ModeBypass:
+		return genproto.PermissionMode_PERMISSION_MODE_BYPASS
+	default:
+		return genproto.PermissionMode_PERMISSION_MODE_UNSPECIFIED
 	}
 }
 

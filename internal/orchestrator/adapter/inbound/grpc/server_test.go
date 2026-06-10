@@ -22,6 +22,7 @@ import (
 	"github.com/boltrope/boltrope/internal/orchestrator/app"
 	"github.com/boltrope/boltrope/internal/orchestrator/domain"
 	"github.com/boltrope/boltrope/internal/orchestrator/infra/db"
+	"github.com/boltrope/boltrope/internal/orchestrator/policy"
 	"github.com/boltrope/boltrope/internal/platform/ids/idstest"
 	"github.com/boltrope/boltrope/internal/platform/llm"
 )
@@ -34,15 +35,17 @@ import (
 // ---------------------------------------------------------------------------
 
 type tailingEventLog struct {
-	mu        sync.Mutex
-	events    map[string][]domain.EventEnvelope
-	heads     map[string]int64
-	tenants   map[string]string // sessionID -> owning tenant
-	subs      map[string][]chan domain.EventEnvelope
-	forkErr   error
-	appendCB  func(domain.EventEnvelope) // optional hook fired after each append
-	created   []string                   // session ids passed to CreateSession, in order
-	createErr error                      // optional error returned by CreateSession
+	mu           sync.Mutex
+	events       map[string][]domain.EventEnvelope
+	heads        map[string]int64
+	tenants      map[string]string                // sessionID -> owning tenant
+	modes        map[string]domain.PermissionMode // sessionID -> persisted permission mode
+	subs         map[string][]chan domain.EventEnvelope
+	forkErr      error
+	appendCB     func(domain.EventEnvelope) // optional hook fired after each append
+	created      []string                   // session ids passed to CreateSession, in order
+	createdModes []domain.PermissionMode    // mode passed to CreateSession, parallel to created
+	createErr    error                      // optional error returned by CreateSession
 }
 
 // Compile-time assertions: the fake satisfies both the frozen port AND the
@@ -58,15 +61,24 @@ func newTailingEventLog() *tailingEventLog {
 		events:  make(map[string][]domain.EventEnvelope),
 		heads:   make(map[string]int64),
 		tenants: make(map[string]string),
+		modes:   make(map[string]domain.PermissionMode),
 		subs:    make(map[string][]chan domain.EventEnvelope),
 	}
 }
 
-// seed creates a session owned by tenant with a SessionStarted at seq 1.
+// seed creates a session owned by tenant with a SessionStarted at seq 1, in the
+// default permission mode.
 func (l *tailingEventLog) seed(sessionID, tenant string) {
+	l.seedMode(sessionID, tenant, domain.ModeDefault)
+}
+
+// seedMode is seed with an explicit standing permission mode (so a Run test can
+// assert the session's mode flows into the RunSpec).
+func (l *tailingEventLog) seedMode(sessionID, tenant string, mode domain.PermissionMode) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.tenants[sessionID] = tenant
+	l.modes[sessionID] = mode
 	l.heads[sessionID] = 1
 	l.events[sessionID] = []domain.EventEnvelope{{
 		Type: domain.EventSessionStarted, Seq: 1, SessionID: sessionID,
@@ -78,7 +90,7 @@ func (l *tailingEventLog) seed(sessionID, tenant string) {
 // the RLS-context tenant, mirroring the real store's session-creation half. It
 // returns the created session so the Server's CreateSession can proceed to append
 // the first SessionStarted.
-func (l *tailingEventLog) CreateSession(ctx context.Context, sessionID string) (domain.Session, error) {
+func (l *tailingEventLog) CreateSession(ctx context.Context, sessionID string, mode domain.PermissionMode) (domain.Session, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.createErr != nil {
@@ -86,12 +98,14 @@ func (l *tailingEventLog) CreateSession(ctx context.Context, sessionID string) (
 	}
 	tenant, _ := db.TenantFromContext(ctx)
 	l.tenants[sessionID] = tenant
+	l.modes[sessionID] = mode.OrDefault()
 	l.heads[sessionID] = 0
 	if _, ok := l.events[sessionID]; !ok {
 		l.events[sessionID] = nil
 	}
 	l.created = append(l.created, sessionID)
-	return domain.Session{ID: sessionID, TenantID: tenant, Status: domain.StatusActive, HeadSeq: 0}, nil
+	l.createdModes = append(l.createdModes, mode)
+	return domain.Session{ID: sessionID, TenantID: tenant, Status: domain.StatusActive, HeadSeq: 0, Mode: mode.OrDefault()}, nil
 }
 
 func (l *tailingEventLog) Append(ctx context.Context, sessionID string, _, _ int64, requestID string, events ...app.AppendInput) ([]domain.EventEnvelope, error) {
@@ -151,7 +165,7 @@ func (l *tailingEventLog) LoadSession(_ context.Context, sessionID string) (doma
 	if !ok {
 		return domain.Session{}, errors.New("not found")
 	}
-	return domain.Session{ID: sessionID, TenantID: tenant, HeadSeq: l.heads[sessionID], Status: domain.StatusActive}, nil
+	return domain.Session{ID: sessionID, TenantID: tenant, HeadSeq: l.heads[sessionID], Status: domain.StatusActive, Mode: l.modes[sessionID]}, nil
 }
 
 func (l *tailingEventLog) Subscribe(ctx context.Context, sessionID string, fromSeq int64) (<-chan domain.EventEnvelope, error) {
@@ -190,8 +204,9 @@ func (l *tailingEventLog) Fork(_ context.Context, parentID string, atSeq int64, 
 	}
 	tenant := l.tenants[parentID]
 	l.tenants[newSessionID] = tenant
+	l.modes[newSessionID] = l.modes[parentID]
 	l.heads[newSessionID] = atSeq
-	return domain.Session{ID: newSessionID, ParentID: parentID, ForkedFromSeq: atSeq, HeadSeq: atSeq, TenantID: tenant, Status: domain.StatusActive}, nil
+	return domain.Session{ID: newSessionID, ParentID: parentID, ForkedFromSeq: atSeq, HeadSeq: atSeq, TenantID: tenant, Status: domain.StatusActive, Mode: l.modes[parentID]}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -661,6 +676,57 @@ func TestCreateSession_RejectsClientBypassMode(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+}
+
+// TestCreateSession_PersistsRequestedMode asserts a (verified, non-bypass)
+// permission mode on the request is persisted on the session aggregate at
+// creation and surfaced back by GetSession (ADR-0019).
+func TestCreateSession_PersistsRequestedMode(t *testing.T) {
+	log := newTailingEventLog()
+	gate := newNotifyingGate()
+	runner := &fakeRunner{log: log, fn: func(_ context.Context, _ RunSpec, _ *tailingEventLog) (RunOutcome, error) { return RunOutcome{}, nil }}
+	conn := startServer(t, AuthConfig{DevInsecure: true, DevPrincipal: Principal{TenantID: "tenant-A"}}, log, gate, runner)
+	client := genproto.NewOrchestratorServiceClient(conn)
+
+	created, err := client.CreateSession(context.Background(), &genproto.CreateSessionRequest{
+		TenantId: "tenant-A", Mode: genproto.PermissionMode_PERMISSION_MODE_ACCEPT_EDITS,
+	})
+	require.NoError(t, err)
+
+	log.mu.Lock()
+	gotModes := append([]domain.PermissionMode(nil), log.createdModes...)
+	log.mu.Unlock()
+	require.Equal(t, []domain.PermissionMode{domain.ModeAcceptEdits}, gotModes, "the requested mode is persisted at CreateSession")
+
+	got, err := client.GetSession(context.Background(), &genproto.GetSessionRequest{TenantId: "tenant-A", SessionId: created.GetSessionId()})
+	require.NoError(t, err)
+	assert.Equal(t, genproto.PermissionMode_PERMISSION_MODE_ACCEPT_EDITS, got.GetSession().GetMode(), "GetSession surfaces the session's stored mode")
+}
+
+// TestRun_UsesSessionMode asserts the session's stored permission mode flows into
+// the RunSpec the loop runs under (ADR-0019) — not a hardcoded default.
+func TestRun_UsesSessionMode(t *testing.T) {
+	log := newTailingEventLog()
+	log.seedMode("sess-plan", "tenant-A", domain.ModePlan)
+
+	modeCh := make(chan policy.Mode, 1)
+	runner := &fakeRunner{log: log, fn: func(ctx context.Context, spec RunSpec, l *tailingEventLog) (RunOutcome, error) {
+		modeCh <- spec.Mode
+		appendAssistantText(ctx, l, spec.SessionID, "t1", "ok")
+		return RunOutcome{Reason: domain.Success, FinalText: "ok", NumTurns: 1}, nil
+	}}
+
+	h := devHarness(t, "tenant-A", runner, log)
+	stream, err := h.client.Run(context.Background(), &genproto.RunRequest{TenantId: "tenant-A", SessionId: "sess-plan"})
+	require.NoError(t, err)
+	_ = collectRunEvents(t, stream)
+
+	select {
+	case gotMode := <-modeCh:
+		assert.Equal(t, policy.ModePlan, gotMode, "the session's stored mode must drive the run's policy mode")
+	default:
+		t.Fatal("runner was not invoked")
+	}
 }
 
 func TestRun_PerTenantConcurrencyCap(t *testing.T) {

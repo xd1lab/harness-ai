@@ -15,6 +15,9 @@
 //	                                      match the authenticated principal)
 //	--token     / BOLTROPE_CTL_TOKEN      bearer token sent as "authorization" metadata
 //	--insecure  / BOLTROPE_CTL_INSECURE   plaintext transport, no TLS (local-only)
+//	--permission-mode / BOLTROPE_CTL_PERMISSION_MODE  mode for a NEWLY created
+//	                                      session: default|acceptEdits|plan
+//	                                      (bypass is operator-only — server rejects it)
 //
 // The CLI chooses transport security in this order:
 //
@@ -189,6 +192,12 @@ type cliConfig struct {
 	// AfterSeq is the resumable cursor for Run (FR-API-01).  Zero streams from
 	// the beginning of the session.
 	AfterSeq int64
+	// PermissionMode is the session's standing permission mode applied when the CLI
+	// CREATES a session (the `session` subcommand, or `run` without --session):
+	// default|acceptEdits|plan. It is a session-creation setting (ADR-0019), so it
+	// has no effect when --session targets an existing session. `bypass` is
+	// operator-only and the orchestrator rejects a client-supplied bypass.
+	PermissionMode string
 }
 
 // parseCLIFlags parses the global flags from args into a cliConfig.  Unknown
@@ -211,6 +220,7 @@ func parseCLIFlags(args []string) (*cliConfig, error) {
 	serverID := fs.String("server-id", "", "full SPIFFE id of the orchestrator to pin in the dev mTLS path (default spiffe://<trust-domain>/orchestrator)")
 	session := fs.String("session", "", "session id (created if absent for run commands)")
 	afterSeq := fs.Int64("after-seq", 0, "resumable cursor: replay events with seq > N")
+	permissionMode := fs.String("permission-mode", "", "permission mode for a NEWLY created session: default|acceptEdits|plan (bypass is operator-only and rejected by the server)")
 
 	// ContinueOnError: parse stops on first unknown flag by default.  We want to
 	// ignore unknowns, so we filter args to known flags before parsing. The known
@@ -245,6 +255,9 @@ func parseCLIFlags(args []string) (*cliConfig, error) {
 	if *session == "" {
 		*session = os.Getenv("BOLTROPE_CTL_SESSION")
 	}
+	if *permissionMode == "" {
+		*permissionMode = os.Getenv("BOLTROPE_CTL_PERMISSION_MODE")
+	}
 
 	// Validate required fields. --tenant is OPTIONAL: when omitted the CLI sends an
 	// empty tenant_id and the orchestrator scopes the call to the AUTHENTICATED
@@ -256,14 +269,15 @@ func parseCLIFlags(args []string) (*cliConfig, error) {
 	}
 
 	return &cliConfig{
-		Endpoint:    *endpoint,
-		Tenant:      *tenant,
-		Token:       *token,
-		Insecure:    *insecureF,
-		TrustDomain: *trustDomain,
-		ServerID:    *serverID,
-		SessionID:   *session,
-		AfterSeq:    *afterSeq,
+		Endpoint:       *endpoint,
+		Tenant:         *tenant,
+		Token:          *token,
+		Insecure:       *insecureF,
+		TrustDomain:    *trustDomain,
+		ServerID:       *serverID,
+		SessionID:      *session,
+		AfterSeq:       *afterSeq,
+		PermissionMode: *permissionMode,
 	}, nil
 }
 
@@ -352,6 +366,30 @@ func pinnedServerID(cfg *cliConfig, td spiffeid.TrustDomain) (spiffeid.ID, error
 	return id, nil
 }
 
+// parsePermissionMode maps the --permission-mode string to the wire
+// [boltropev1.PermissionMode], applied when the CLI creates a session (ADR-0019).
+// An empty string yields UNSPECIFIED (the server applies its secure default).
+// "bypass" is accepted by the parser but the orchestrator REJECTS a
+// client-supplied bypass (operator-only, server-side) — the resulting
+// InvalidArgument is surfaced verbatim so the constraint is explicit.
+func parsePermissionMode(s string) (boltropev1.PermissionMode, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "":
+		return boltropev1.PermissionMode_PERMISSION_MODE_UNSPECIFIED, nil
+	case "default":
+		return boltropev1.PermissionMode_PERMISSION_MODE_DEFAULT, nil
+	case "acceptedits", "accept-edits", "accept_edits":
+		return boltropev1.PermissionMode_PERMISSION_MODE_ACCEPT_EDITS, nil
+	case "plan":
+		return boltropev1.PermissionMode_PERMISSION_MODE_PLAN, nil
+	case "bypass":
+		return boltropev1.PermissionMode_PERMISSION_MODE_BYPASS, nil
+	default:
+		return boltropev1.PermissionMode_PERMISSION_MODE_UNSPECIFIED,
+			fmt.Errorf("harnessctl: invalid --permission-mode %q (want: default|acceptEdits|plan|bypass)", s)
+	}
+}
+
 // withToken returns a context that carries token as an "authorization" metadata
 // header when token is non-empty.
 func withToken(ctx context.Context, token string) context.Context {
@@ -363,8 +401,13 @@ func withToken(ctx context.Context, token string) context.Context {
 
 // createSessionCommand calls CreateSession and prints the new session id.
 func createSessionCommand(ctx context.Context, client boltropev1.OrchestratorServiceClient, cfg *cliConfig, w io.Writer) error {
+	mode, err := parsePermissionMode(cfg.PermissionMode)
+	if err != nil {
+		return err
+	}
 	resp, err := client.CreateSession(ctx, &boltropev1.CreateSessionRequest{
 		TenantId: cfg.Tenant,
+		Mode:     mode,
 	})
 	if err != nil {
 		return fmt.Errorf("CreateSession: %w", err)
@@ -377,10 +420,16 @@ func createSessionCommand(ctx context.Context, client boltropev1.OrchestratorSer
 // empty) and streams RunEvents until the terminal Result, printing each frame
 // to w.
 func runCommand(ctx context.Context, client boltropev1.OrchestratorServiceClient, cfg *cliConfig, message string, w io.Writer) error {
+	mode, err := parsePermissionMode(cfg.PermissionMode)
+	if err != nil {
+		return err
+	}
+
 	sessionID := cfg.SessionID
 	if sessionID == "" {
 		resp, err := client.CreateSession(ctx, &boltropev1.CreateSessionRequest{
 			TenantId: cfg.Tenant,
+			Mode:     mode,
 		})
 		if err != nil {
 			return fmt.Errorf("CreateSession: %w", err)
@@ -562,14 +611,15 @@ func forkCommand(ctx context.Context, client boltropev1.OrchestratorServiceClien
 // the boundary bug where `--endpoint host run …` mistook the endpoint VALUE for
 // the subcommand because splitArgs did not know --endpoint consumes the next token.
 var globalFlagValueArity = map[string]bool{
-	"endpoint":     true,
-	"tenant":       true,
-	"token":        true,
-	"insecure":     false, // boolean: present/absent, consumes no value token
-	"trust-domain": true,
-	"server-id":    true,
-	"session":      true,
-	"after-seq":    true,
+	"endpoint":        true,
+	"tenant":          true,
+	"token":           true,
+	"insecure":        false, // boolean: present/absent, consumes no value token
+	"trust-domain":    true,
+	"server-id":       true,
+	"session":         true,
+	"after-seq":       true,
+	"permission-mode": true,
 }
 
 // splitArgs separates the leading global flags from the subcommand token and its

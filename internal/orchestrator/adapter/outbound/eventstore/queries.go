@@ -77,15 +77,16 @@ func loadSessionTx(ctx context.Context, tx pgx.Tx, sessionID string) (domain.Ses
 		leaseOwner    *string
 		leaseExpires  *time.Time
 		lastEventAt   *time.Time
+		modeStr       string
 	)
 	err := tx.QueryRow(ctx, `
 		SELECT id, tenant_id, parent_id, forked_from_seq, status, head_seq,
-		       lease_owner, lease_epoch, lease_expires_at, last_event_at, created_at, updated_at
+		       lease_owner, lease_epoch, lease_expires_at, last_event_at, created_at, updated_at, mode
 		  FROM sessions WHERE id = $1`,
 		sessionID,
 	).Scan(
 		&sess.ID, &sess.TenantID, &parentID, &forkedFromSeq, &sess.Status, &sess.HeadSeq,
-		&leaseOwner, &sess.LeaseEpoch, &leaseExpires, &lastEventAt, &sess.CreatedAt, &sess.UpdatedAt,
+		&leaseOwner, &sess.LeaseEpoch, &leaseExpires, &lastEventAt, &sess.CreatedAt, &sess.UpdatedAt, &modeStr,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Session{}, fmt.Errorf("eventstore: session %s not found or not visible: %w", sessionID, app.SessionNotActiveError)
@@ -93,6 +94,7 @@ func loadSessionTx(ctx context.Context, tx pgx.Tx, sessionID string) (domain.Ses
 	if err != nil {
 		return domain.Session{}, fmt.Errorf("eventstore: loading session: %w", err)
 	}
+	sess.Mode = domain.PermissionMode(modeStr)
 	if parentID != nil {
 		sess.ParentID = *parentID
 	}
@@ -153,18 +155,22 @@ func (s *Store) Fork(ctx context.Context, parentID string, atSeq int64, newSessi
 	var child domain.Session
 	var parentIDOut, leaseOwner *string
 	var forkedFromSeq, leaseExpires, lastEventAt any
+	var childModeStr string
+	// The child inherits the parent's permission mode (ADR-0019): a fork continues
+	// the same session configuration, so its standing mode is the parent's.
 	err = tx.QueryRow(ctx, `
-		INSERT INTO sessions (id, tenant_id, parent_id, forked_from_seq, status, head_seq, lease_epoch)
-		VALUES ($1, $2, $3, $4, 'active', $4, 0)
-		RETURNING id, tenant_id, parent_id, forked_from_seq, status, head_seq, lease_owner, lease_epoch, lease_expires_at, last_event_at, created_at, updated_at`,
-		newSessionID, tenantID, parentID, atSeq,
+		INSERT INTO sessions (id, tenant_id, parent_id, forked_from_seq, status, head_seq, lease_epoch, mode)
+		VALUES ($1, $2, $3, $4, 'active', $4, 0, $5)
+		RETURNING id, tenant_id, parent_id, forked_from_seq, status, head_seq, lease_owner, lease_epoch, lease_expires_at, last_event_at, created_at, updated_at, mode`,
+		newSessionID, tenantID, parentID, atSeq, string(parent.Mode.OrDefault()),
 	).Scan(
 		&child.ID, &child.TenantID, &parentIDOut, &forkedFromSeq, &child.Status, &child.HeadSeq,
-		&leaseOwner, &child.LeaseEpoch, &leaseExpires, &lastEventAt, &child.CreatedAt, &child.UpdatedAt,
+		&leaseOwner, &child.LeaseEpoch, &leaseExpires, &lastEventAt, &child.CreatedAt, &child.UpdatedAt, &childModeStr,
 	)
 	if err != nil {
 		return domain.Session{}, fmt.Errorf("eventstore: inserting fork child: %w", err)
 	}
+	child.Mode = domain.PermissionMode(childModeStr)
 	if parentIDOut != nil {
 		child.ParentID = *parentIDOut
 	}

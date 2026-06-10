@@ -31,10 +31,12 @@ type EventStore interface {
 	app.EventLogPort
 
 	// CreateSession inserts a fresh session aggregate (status=active, head_seq=0)
-	// owned by the context's tenant and returns it. It is the creation half of the
-	// CreateSession RPC; the caller appends the stream's first SessionStarted
-	// afterwards to bump head_seq 0->1.
-	CreateSession(ctx context.Context, sessionID string) (domain.Session, error)
+	// owned by the context's tenant with the given permission mode (sessions.mode;
+	// ADR-0019) and returns it. It is the creation half of the CreateSession RPC;
+	// the caller appends the stream's first SessionStarted afterwards to bump
+	// head_seq 0->1. mode has already been verified by the caller (client-supplied
+	// bypass is rejected before this).
+	CreateSession(ctx context.Context, sessionID string, mode domain.PermissionMode) (domain.Session, error)
 }
 
 // RunSpec is the input the [Server] hands a [Runner] to drive one Run. It is the
@@ -223,6 +225,10 @@ func (s *Server) CreateSession(ctx context.Context, req *genproto.CreateSessionR
 	}
 
 	sessionID := s.ids.NewSessionID().String()
+	// The session's standing permission mode is taken from the (verified, non-
+	// bypass) request and persisted on the session aggregate (ADR-0019). An
+	// UNSPECIFIED/DEFAULT request resolves to the most-restrictive ModeDefault.
+	mode := fromGenModeDomain(req.GetMode())
 	// Create the session aggregate row FIRST (status=active, head_seq=0) so the
 	// subsequent Append has an active stream to write to — otherwise Append's
 	// status='active' guard rejects with SessionNotActive. The session's tenant_id
@@ -230,7 +236,7 @@ func (s *Server) CreateSession(ctx context.Context, req *genproto.CreateSessionR
 	// RLS context (db.WithTenant(ctx, principal.TenantID)) and the store reads it
 	// back to scope the row — so the persisted tenant is the authenticated one,
 	// never the untrusted request body.
-	if _, err := s.log.CreateSession(ctx, sessionID); err != nil {
+	if _, err := s.log.CreateSession(ctx, sessionID, mode); err != nil {
 		return nil, mapCreateSessionError(err)
 	}
 	// Open the stream with a SessionStarted as its first event so LoadSession and
@@ -324,7 +330,8 @@ func (s *Server) Run(req *genproto.RunRequest, stream genproto.OrchestratorServi
 	if err != nil {
 		return err
 	}
-	if _, err := s.authorizeSession(ctx, tenant, req.GetSessionId()); err != nil {
+	sess, err := s.authorizeSession(ctx, tenant, req.GetSessionId())
+	if err != nil {
 		return err
 	}
 
@@ -340,17 +347,16 @@ func (s *Server) Run(req *genproto.RunRequest, stream genproto.OrchestratorServi
 		sessionID: req.GetSessionId(),
 		afterSeq:  req.GetAfterSeq(),
 	}
-	// NOTE: per-run permission mode is not yet plumbed end-to-end. RunRequest
-	// carries no mode field (frozen proto); CreateSessionRequest.mode is accepted
-	// but not yet persisted on the session, so every run uses the secure default
-	// (ModeDefault: ask for risk-tiered tools). Wiring a session-scoped mode
-	// through the event log is a tracked follow-up; until then this is the safe,
-	// most-restrictive default.
+	// The run inherits the session's standing permission mode (sessions.mode, set
+	// at CreateSession from the verified request; ADR-0019). toPolicyMode maps the
+	// persisted domain mode to the live policy mode (an explicit mapping — the two
+	// spellings differ for accept-edits); an unset/zero mode resolves to the
+	// secure, most-restrictive ModeDefault.
 	return r.run(ctx, RunSpec{
 		SessionID:   req.GetSessionId(),
 		TenantID:    tenant,
 		UserMessage: fromGenMessage(req.GetMessage()),
-		Mode:        fromGenMode(genproto.PermissionMode_PERMISSION_MODE_UNSPECIFIED),
+		Mode:        toPolicyMode(sess.Mode),
 		Sink:        r,
 	})
 }

@@ -413,6 +413,7 @@ CREATE TABLE sessions (
     parent_id       UUID REFERENCES sessions(id),         -- set for forks
     forked_from_seq BIGINT,                                -- frozen parent seq the fork branched at
     status          TEXT NOT NULL DEFAULT 'active',        -- active | finished | failed
+    mode            TEXT NOT NULL DEFAULT 'default',       -- permission mode (ADR-0019; migration 0004)
     head_seq        BIGINT NOT NULL DEFAULT 0,             -- optimistic version (last seq)
     lease_owner     TEXT,                                  -- current writer identity (SPIFFE ID + instance)
     lease_epoch     BIGINT NOT NULL DEFAULT 0,             -- monotonic fencing token
@@ -420,7 +421,8 @@ CREATE TABLE sessions (
     last_event_at   TIMESTAMPTZ,                           -- stuck-session detector input
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT fork_seq_le_parent CHECK (forked_from_seq IS NULL OR forked_from_seq >= 0)
+    CONSTRAINT fork_seq_le_parent CHECK (forked_from_seq IS NULL OR forked_from_seq >= 0),
+    CONSTRAINT sessions_mode_chk CHECK (mode IN ('default', 'acceptEdits', 'plan', 'bypass'))
 );
 CREATE INDEX ON sessions (tenant_id);
 

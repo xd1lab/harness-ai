@@ -29,6 +29,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
+	"github.com/boltrope/boltrope/internal/orchestrator/domain"
 	infradb "github.com/boltrope/boltrope/internal/orchestrator/infra/db"
 )
 
@@ -185,7 +186,7 @@ func (h *harness) seedTenantAndSession(t *testing.T) (string, string) {
 	if err := h.store.CreateTenant(ctx, tenantID, "test-tenant"); err != nil {
 		t.Fatalf("CreateTenant: %v", err)
 	}
-	if _, err := h.store.CreateSession(ctx, sessionID); err != nil {
+	if _, err := h.store.CreateSession(ctx, sessionID, domain.ModeDefault); err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
 	return tenantID, sessionID

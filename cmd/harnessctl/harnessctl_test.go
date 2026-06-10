@@ -32,6 +32,9 @@ type fakeOrchestrator struct {
 
 	// createSessionID is returned by CreateSession.
 	createSessionID string
+	// lastCreateMode captures the permission mode of the most recent CreateSession
+	// request, so a test can assert the CLI wired --permission-mode through.
+	lastCreateMode boltropev1.PermissionMode
 
 	// runEvents are sent in order on the Run stream before it closes.
 	runEvents []*boltropev1.RunEvent
@@ -49,7 +52,7 @@ func (f *fakeOrchestrator) CreateSession(_ context.Context, req *boltropev1.Crea
 	if id == "" {
 		id = "sess-fake-001"
 	}
-	_ = req
+	f.lastCreateMode = req.GetMode()
 	return &boltropev1.CreateSessionResponse{SessionId: id}, nil
 }
 
@@ -518,6 +521,50 @@ func TestCreateSessionCommand_PrintsSessionID(t *testing.T) {
 	err := createSessionCommand(context.Background(), client, cfg, &out)
 	require.NoError(t, err)
 	assert.Contains(t, out.String(), "sess-new-123")
+}
+
+// TestParsePermissionMode covers the --permission-mode string -> wire enum
+// mapping, including the snake/camel aliases and the invalid-input error.
+func TestParsePermissionMode(t *testing.T) {
+	cases := []struct {
+		in      string
+		want    boltropev1.PermissionMode
+		wantErr bool
+	}{
+		{"", boltropev1.PermissionMode_PERMISSION_MODE_UNSPECIFIED, false},
+		{"default", boltropev1.PermissionMode_PERMISSION_MODE_DEFAULT, false},
+		{"acceptEdits", boltropev1.PermissionMode_PERMISSION_MODE_ACCEPT_EDITS, false},
+		{"accept-edits", boltropev1.PermissionMode_PERMISSION_MODE_ACCEPT_EDITS, false},
+		{"PLAN", boltropev1.PermissionMode_PERMISSION_MODE_PLAN, false},
+		{"bypass", boltropev1.PermissionMode_PERMISSION_MODE_BYPASS, false},
+		{"nonsense", boltropev1.PermissionMode_PERMISSION_MODE_UNSPECIFIED, true},
+	}
+	for _, c := range cases {
+		got, err := parsePermissionMode(c.in)
+		if c.wantErr {
+			assert.Error(t, err, "input %q", c.in)
+			continue
+		}
+		assert.NoError(t, err, "input %q", c.in)
+		assert.Equal(t, c.want, got, "input %q", c.in)
+	}
+}
+
+// TestCreateSessionCommand_SendsPermissionMode asserts the CLI threads
+// --permission-mode through to the CreateSession request (ADR-0019).
+func TestCreateSessionCommand_SendsPermissionMode(t *testing.T) {
+	fake := &fakeOrchestrator{createSessionID: "sess-mode-1"}
+	conn := newFakeServer(t, fake)
+	client := boltropev1.NewOrchestratorServiceClient(conn)
+
+	var out bytes.Buffer
+	cfg := &cliConfig{Tenant: "acme", PermissionMode: "plan"}
+	require.NoError(t, createSessionCommand(context.Background(), client, cfg, &out))
+	assert.Equal(t, boltropev1.PermissionMode_PERMISSION_MODE_PLAN, fake.lastCreateMode)
+
+	// An invalid mode is rejected client-side before any RPC.
+	bad := &cliConfig{Tenant: "acme", PermissionMode: "nope"}
+	assert.Error(t, createSessionCommand(context.Background(), client, bad, &out))
 }
 
 // ---- compile-time flag-parsing surface test ----------------------------

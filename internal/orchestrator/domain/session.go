@@ -19,6 +19,20 @@ const (
 	StatusFailed SessionStatus = "failed"
 )
 
+// OrDefault returns the [PermissionMode] (defined with the other persisted mode
+// vocabulary in event.go), mapping the empty zero value to [ModeDefault] so
+// callers never have to special-case an unset mode — an existing pre-migration
+// session row, or an in-memory fake that does not populate it, reads as the
+// secure default (ADR-0019). NOTE: the domain mode strings are NOT identical to
+// policy.Mode's (domain uses "acceptEdits", policy uses "accept_edits"), so the
+// orchestrator edge converts between the two by explicit mapping, never a cast.
+func (m PermissionMode) OrDefault() PermissionMode {
+	if m == "" {
+		return ModeDefault
+	}
+	return m
+}
+
 // Session is the event-sourcing aggregate root: the stream identity and the small
 // amount of mutable control state kept alongside the append-only log. It mirrors
 // the sessions table (ADR-0011 §6.2). The conversation itself is NOT stored here —
@@ -50,6 +64,11 @@ type Session struct {
 	// Status is the lifecycle state; appends are accepted only when [StatusActive]
 	// (ADR-0011 §6.3).
 	Status SessionStatus
+	// Mode is the session's standing permission operating mode (sessions.mode;
+	// ADR-0019), set at creation from the verified request and inherited by forks.
+	// The zero value means [ModeDefault]. The orchestrator's Run path reads it into
+	// the policy pipeline for the run.
+	Mode PermissionMode
 	// HeadSeq is the optimistic version: the seq of the last appended event (0 for
 	// a fresh session before its first event) (sessions.head_seq; ADR-0011 §6.3).
 	HeadSeq int64

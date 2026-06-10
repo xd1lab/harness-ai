@@ -67,7 +67,7 @@ func TestPgxPool_AppendLoad_Integration(t *testing.T) {
 	if err := store.CreateTenant(ctx2, tenantID, "pgxpool-test-tenant"); err != nil {
 		t.Fatalf("CreateTenant: %v", err)
 	}
-	if _, err := store.CreateSession(ctx2, sessionID); err != nil {
+	if _, err := store.CreateSession(ctx2, sessionID, domain.ModeDefault); err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
 
