@@ -18,6 +18,12 @@ func errObs(format string, args ...any) domain.Observation {
 	return domain.Observation{Content: fmt.Sprintf(format, args...), IsError: true}
 }
 
+// okObs is the success-observation helper for tools that build their own
+// content string (rather than wrapping an [app.ExecResult] via execObservation).
+func okObs(content string) domain.Observation {
+	return domain.Observation{Content: content}
+}
+
 // stringArg extracts a required string argument by key from the validated args
 // map. It reports ok=false when the key is absent or not a string so callers can
 // emit an error observation; this is defensive depth behind the schema validation

@@ -313,6 +313,104 @@ func TestExecute_ExternalToolAllowedByEgress(t *testing.T) {
 	}
 }
 
+// targetingTool wraps a FakeTool with an EgressTarget so the service gate can
+// adjudicate a destination that is NOT present in the tool's arguments (the
+// websearch shape: its backend host is configured, not an argument).
+type targetingTool struct {
+	*truntimetest.FakeTool
+	host string
+	ok   bool
+}
+
+func (t targetingTool) EgressTarget(map[string]any) (string, bool) { return t.host, t.ok }
+
+// TestExecute_EgressGateUsesToolDeclaredTarget asserts that when a tool's
+// target host is not derivable from its args, the gate consults the tool's
+// EgressTarget — so a websearch-shaped tool passes the gate when its backend
+// host is allowlisted (and the fetch still runs).
+func TestExecute_EgressGateUsesToolDeclaredTarget(t *testing.T) {
+	f := newFixture(t)
+	base := truntimetest.NewFakeTool(domain.ToolSpec{
+		Name:        "websearch",
+		Description: "searches",
+		JSONSchema: json.RawMessage(`{
+			"type": "object",
+			"required": ["query"],
+			"properties": {"query": {"type": "string"}},
+			"additionalProperties": false
+		}`),
+		SideEffect:  domain.SideEffectMutating,
+		EgressClass: domain.EgressClassExternal,
+	})
+	base.AddObservation(domain.Observation{Content: "results"}, nil)
+	mustRegister(t, f.reg, targetingTool{FakeTool: base, host: "search.example.com", ok: true})
+
+	if err := f.egress.SetPolicy(context.Background(), app.EgressPolicy{
+		SessionID:    "sess1",
+		AllowedHosts: []string{"search.example.com"},
+	}); err != nil {
+		t.Fatalf("SetPolicy: %v", err)
+	}
+
+	res, err := f.svc.Execute(context.Background(), Request{
+		TenantID:       "tenantA",
+		SessionID:      "sess1",
+		CallID:         "call1",
+		ToolName:       "websearch",
+		Args:           map[string]any{"query": "weather"}, // no host/url in args
+		IdempotencyKey: "key1",
+	}, &recordingEmitter{})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Observation.IsError {
+		t.Fatalf("tool-declared allowlisted target should pass the gate, got %+v", res.Observation)
+	}
+	if len(base.ExecCalls) != 1 {
+		t.Errorf("tool Execute called %d times, want 1", len(base.ExecCalls))
+	}
+}
+
+// TestExecute_EgressGateDeniesToolDeclaredTarget asserts the gate denies when
+// the tool's declared target host is NOT on the allowlist (deny-by-default
+// still governs the configured-backend path).
+func TestExecute_EgressGateDeniesToolDeclaredTarget(t *testing.T) {
+	f := newFixture(t)
+	base := truntimetest.NewFakeTool(domain.ToolSpec{
+		Name:        "websearch",
+		Description: "searches",
+		JSONSchema: json.RawMessage(`{
+			"type": "object",
+			"required": ["query"],
+			"properties": {"query": {"type": "string"}},
+			"additionalProperties": false
+		}`),
+		SideEffect:  domain.SideEffectMutating,
+		EgressClass: domain.EgressClassExternal,
+	})
+	base.AddObservation(domain.Observation{Content: "should not run"}, nil)
+	mustRegister(t, f.reg, targetingTool{FakeTool: base, host: "search.example.com", ok: true})
+
+	// No policy → deny-by-default, even for the tool-declared host.
+	res, err := f.svc.Execute(context.Background(), Request{
+		TenantID:       "tenantA",
+		SessionID:      "sess1",
+		CallID:         "call1",
+		ToolName:       "websearch",
+		Args:           map[string]any{"query": "secrets"},
+		IdempotencyKey: "key1",
+	}, &recordingEmitter{})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !res.Observation.IsError {
+		t.Fatalf("non-allowlisted tool-declared target must be denied, got %+v", res.Observation)
+	}
+	if len(base.ExecCalls) != 0 {
+		t.Errorf("denied tool Execute called %d times, want 0", len(base.ExecCalls))
+	}
+}
+
 // TestExecute_LargeOutputOffloadedToBlob asserts output exceeding the inline
 // threshold is offloaded to the blob store with Truncated=true and a populated
 // BlobRef, and the full bytes are retrievable under the caller's tenant

@@ -58,9 +58,17 @@ spec:
               value: docker
             - name: BOLTROPE_TOOLRT_IMAGE
               value: {{ $sandbox.image | quote }}
-            {{- with .Values.toolRuntime.egressAllowlist }}
+            {{- with .Values.toolRuntime.egress.allowlist }}
             - name: BOLTROPE_TOOLRT_EGRESS_ALLOWLIST
               value: {{ join "," . | quote }}
+            {{- end }}
+            {{- with .Values.toolRuntime.egress.searchURL }}
+            - name: BOLTROPE_TOOLRT_SEARCH_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if .Values.toolRuntime.egress.allowPrivate }}
+            - name: BOLTROPE_TOOLRT_EGRESS_ALLOW_PRIVATE
+              value: "1"
             {{- end }}
             {{- if eq $sandbox.mode "dind" }}
             - name: DOCKER_HOST

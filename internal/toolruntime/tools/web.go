@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"strings"
 
@@ -10,20 +11,8 @@ import (
 	"github.com/xd1lab/harness-ai/internal/toolruntime/domain"
 )
 
-// hostFromURL extracts the host (without port) from a raw URL for an egress
-// allowlist check. It returns ok=false for a URL it cannot parse to a host, so
-// the caller fails closed (denies) on ambiguity (architecture §8.4).
-func hostFromURL(raw string) (host string, ok bool) {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil {
-		return "", false
-	}
-	h := u.Hostname()
-	if h == "" {
-		return "", false
-	}
-	return h, true
-}
+// maxSearchResults bounds how many search hits websearch renders to the model.
+const maxSearchResults = 8
 
 // ---------------------------------------------------------------------------
 // webfetch
@@ -31,28 +20,26 @@ func hostFromURL(raw string) (host string, ok bool) {
 
 // WebFetchTool fetches the contents of a URL. It is external communication
 // ([domain.EgressClassExternal]) — a read of an attacker-controlled URL is a
-// write to the attacker (ADR-0013) — so it is gated by the per-session
-// [app.EgressBroker] (deny-by-default) and the fetch itself runs inside the
-// session workspace so it is confined to the sandbox network namespace
-// (architecture §8.4). It is classified Mutating so the orchestrator never
-// schedules it in the harmless read-only parallel pool (architecture §9.2).
+// write to the attacker (ADR-0013) — so the fetch runs through the
+// [app.WebFetcher] egress data path, which mediates the host (and every
+// redirect hop) against the per-session deny-by-default allowlist and refuses
+// non-public destinations (ADR-0021). It is classified Mutating so the
+// orchestrator never schedules it in the harmless read-only parallel pool
+// (architecture §9.2).
 type WebFetchTool struct {
-	ws     app.SessionWorkspaces
-	broker app.EgressBroker
+	fetcher app.WebFetcher
 }
 
-// NewWebFetchTool returns a [WebFetchTool] backed by the per-session workspace
-// resolver ws (for the confined fetch) and the egress broker (for the
-// deny-by-default host check).
-func NewWebFetchTool(ws app.SessionWorkspaces, broker app.EgressBroker) *WebFetchTool {
-	return &WebFetchTool{ws: ws, broker: broker}
+// NewWebFetchTool returns a [WebFetchTool] backed by the egress data path.
+func NewWebFetchTool(fetcher app.WebFetcher) *WebFetchTool {
+	return &WebFetchTool{fetcher: fetcher}
 }
 
 // Spec returns the webfetch tool's declaration.
 func (t *WebFetchTool) Spec() domain.ToolSpec {
 	return domain.ToolSpec{
 		Name:        "webfetch",
-		Description: "Fetch the contents of a URL over HTTP(S). Subject to the per-session network egress allowlist.",
+		Description: "Fetch the contents of an http(s) URL. Subject to the per-session network egress allowlist.",
 		JSONSchema: json.RawMessage(`{
 			"type": "object",
 			"required": ["url"],
@@ -66,68 +53,76 @@ func (t *WebFetchTool) Spec() domain.ToolSpec {
 	}
 }
 
-// Execute resolves the URL's host, checks it against the session's egress
-// allowlist via the broker (fail-closed on a denied or unparseable host), and on
-// allow performs the fetch inside the workspace sandbox. A denied host returns an
-// error observation with an egress-denied message (FR-TOOL-06 AC-1).
+// EgressTarget reports the URL's host for the execute service's egress gate.
+// It mirrors the fetcher's own parse so the service-level gate adjudicates the
+// real destination; the fetcher independently re-gates the actual fetch.
+func (t *WebFetchTool) EgressTarget(args map[string]any) (string, bool) {
+	raw, ok := stringArg(args, "url")
+	if !ok {
+		return "", false
+	}
+	return hostFromURL(raw)
+}
+
+// Execute fetches the URL through the egress data path. A denied host,
+// unparseable URL, or non-public address comes back from the fetcher as an
+// error carrying the canonical "egress denied" wording, which is surfaced to
+// the model as an error observation (FR-TOOL-06 AC-1); a completed fetch (even
+// non-2xx) is rendered for the model.
 func (t *WebFetchTool) Execute(ctx context.Context, sessionID string, args map[string]any) (domain.Observation, error) {
 	rawURL, ok := stringArg(args, "url")
 	if !ok || rawURL == "" {
 		return errObs("webfetch: required string field %q is missing", "url"), nil
 	}
-	host, ok := hostFromURL(rawURL)
-	if !ok {
-		// Fail closed: a URL we cannot resolve to a host is denied.
-		return errObs("webfetch: egress denied: cannot determine host from URL %q", rawURL), nil
-	}
-	allowed, err := t.broker.Allow(ctx, sessionID, host)
+	res, err := t.fetcher.Fetch(ctx, sessionID, rawURL)
 	if err != nil {
-		// Broker error → fail closed (deny) per the egress contract.
-		return errObs("webfetch: egress denied for host %q: %v", host, err), nil
+		return errObs("webfetch: %s", egressMessage(err)), nil
 	}
-	if !allowed {
-		return errObs("webfetch: egress denied: host %q is not on the session allowlist", host), nil
+	var b strings.Builder
+	fmt.Fprintf(&b, "HTTP %d %s\n", res.Status, res.FinalURL)
+	if res.ContentType != "" {
+		fmt.Fprintf(&b, "Content-Type: %s\n", res.ContentType)
 	}
-	ws, err := t.ws.Workspace(ctx, sessionID)
-	if err != nil {
-		return errObs("webfetch: %v", err), nil
+	b.WriteString("\n")
+	b.Write(res.Body)
+	if res.Truncated {
+		b.WriteString("\n…[truncated at fetch size cap]")
 	}
-	res, err := ws.Exec(ctx, app.ExecRequest{
-		Cmd: []string{"curl", "-sSL", "--", rawURL},
-	})
-	if err != nil {
-		return errObs("webfetch: %v", err), nil
-	}
-	return execObservation(res), nil
+	return okObs(b.String()), nil
 }
 
 // ---------------------------------------------------------------------------
 // websearch
 // ---------------------------------------------------------------------------
 
-// WebSearchTool performs a web search for a query. Like webfetch it is external
-// communication ([domain.EgressClassExternal]) routed through the per-session
-// [app.EgressBroker] and confined to the workspace sandbox, and is classified
+// WebSearchTool performs a web search by querying a configured
+// SearXNG-compatible JSON endpoint through the [app.WebFetcher] egress data
+// path. Like webfetch it is external communication ([domain.EgressClassExternal])
+// — the search backend host must be on the session's egress allowlist — and
 // Mutating so it is never parallelized as a read (architecture §8.4, §9.2).
 type WebSearchTool struct {
-	ws         app.SessionWorkspaces
-	broker     app.EgressBroker
-	searchHost string
+	fetcher   app.WebFetcher
+	searchURL string
 }
 
-// DefaultSearchHost is the host the websearch tool routes queries through; it
-// must be present on a session's egress allowlist for websearch to be permitted.
+// DefaultSearchHost is the host websearch's default backend URL resolves to; it
+// must be present on a session's egress allowlist for websearch to be
+// permitted. Production deployments point BOLTROPE_TOOLRT_SEARCH_URL at a real
+// SearXNG-compatible JSON endpoint and allowlist its host.
 const DefaultSearchHost = "search.boltrope.local"
 
-// NewWebSearchTool returns a [WebSearchTool] backed by the per-session
-// workspace resolver ws and the egress broker. searchHost is the host the
-// search backend is reached at (used for the egress allowlist check); empty
-// uses [DefaultSearchHost].
-func NewWebSearchTool(ws app.SessionWorkspaces, broker app.EgressBroker, searchHost string) *WebSearchTool {
-	if searchHost == "" {
-		searchHost = DefaultSearchHost
+// defaultSearchURL is the backend websearch queries when none is configured.
+const defaultSearchURL = "https://search.boltrope.local/search"
+
+// NewWebSearchTool returns a [WebSearchTool] backed by the egress data path.
+// searchURL is the SearXNG-compatible JSON search endpoint (it receives
+// ?q=<query>&format=json); empty uses [defaultSearchURL]. The endpoint's host
+// must be on the session's egress allowlist.
+func NewWebSearchTool(fetcher app.WebFetcher, searchURL string) *WebSearchTool {
+	if searchURL == "" {
+		searchURL = defaultSearchURL
 	}
-	return &WebSearchTool{ws: ws, broker: broker, searchHost: searchHost}
+	return &WebSearchTool{fetcher: fetcher, searchURL: searchURL}
 }
 
 // Spec returns the websearch tool's declaration.
@@ -148,30 +143,107 @@ func (t *WebSearchTool) Spec() domain.ToolSpec {
 	}
 }
 
-// Execute checks the search backend host against the session's egress allowlist
-// (fail-closed) and, on allow, runs the query inside the workspace sandbox. A
-// denied host returns an egress-denied error observation.
+// EgressTarget reports the configured search backend's host for the execute
+// service's egress gate — websearch's target is NOT in its arguments, so
+// without this the gate would fail closed on "no host in args".
+func (t *WebSearchTool) EgressTarget(map[string]any) (string, bool) {
+	return hostFromURL(t.searchURL)
+}
+
+// Execute queries the configured search backend through the egress data path
+// and renders the top results. A denied backend host comes back from the
+// fetcher with the canonical egress-denied wording.
 func (t *WebSearchTool) Execute(ctx context.Context, sessionID string, args map[string]any) (domain.Observation, error) {
 	query, ok := stringArg(args, "query")
 	if !ok || query == "" {
 		return errObs("websearch: required string field %q is missing", "query"), nil
 	}
-	allowed, err := t.broker.Allow(ctx, sessionID, t.searchHost)
-	if err != nil {
-		return errObs("websearch: egress denied for host %q: %v", t.searchHost, err), nil
-	}
-	if !allowed {
-		return errObs("websearch: egress denied: search host %q is not on the session allowlist", t.searchHost), nil
-	}
-	ws, err := t.ws.Workspace(ctx, sessionID)
+	reqURL, err := buildSearchURL(t.searchURL, query)
 	if err != nil {
 		return errObs("websearch: %v", err), nil
 	}
-	res, err := ws.Exec(ctx, app.ExecRequest{
-		Cmd: []string{"boltrope-websearch", "--", query},
-	})
+	res, err := t.fetcher.Fetch(ctx, sessionID, reqURL)
+	if err != nil {
+		return errObs("websearch: %s", egressMessage(err)), nil
+	}
+	if res.Status < 200 || res.Status >= 300 {
+		return errObs("websearch: search backend returned HTTP %d", res.Status), nil
+	}
+	rendered, err := renderSearchResults(res.Body)
 	if err != nil {
 		return errObs("websearch: %v", err), nil
 	}
-	return execObservation(res), nil
+	return okObs(rendered), nil
+}
+
+// buildSearchURL appends the SearXNG JSON query parameters to the configured
+// endpoint, preserving any path/params it already carries.
+func buildSearchURL(endpoint, query string) (string, error) {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return "", fmt.Errorf("invalid search endpoint %q: %w", endpoint, err)
+	}
+	q := u.Query()
+	q.Set("q", query)
+	q.Set("format", "json")
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
+
+// searchResponse is the subset of the SearXNG JSON response websearch renders.
+type searchResponse struct {
+	Results []struct {
+		Title   string `json:"title"`
+		URL     string `json:"url"`
+		Content string `json:"content"`
+	} `json:"results"`
+}
+
+// renderSearchResults formats the top results as a compact, model-readable
+// list. An empty result set is a non-error "no results" message.
+func renderSearchResults(body []byte) (string, error) {
+	var parsed searchResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return "", fmt.Errorf("search backend returned unparseable JSON: %w", err)
+	}
+	if len(parsed.Results) == 0 {
+		return "No results.", nil
+	}
+	var b strings.Builder
+	for i, r := range parsed.Results {
+		if i >= maxSearchResults {
+			break
+		}
+		fmt.Fprintf(&b, "%d. %s\n   %s\n", i+1, strings.TrimSpace(r.Title), strings.TrimSpace(r.URL))
+		if c := strings.TrimSpace(r.Content); c != "" {
+			fmt.Fprintf(&b, "   %s\n", c)
+		}
+	}
+	return strings.TrimRight(b.String(), "\n"), nil
+}
+
+// hostFromURL extracts the host (without port) from a raw URL for an egress
+// allowlist check. It returns ok=false for a URL it cannot parse to a host so
+// the caller fails closed (architecture §8.4).
+func hostFromURL(raw string) (host string, ok bool) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return "", false
+	}
+	h := u.Hostname()
+	if h == "" {
+		return "", false
+	}
+	return h, true
+}
+
+// egressMessage returns the error text without the package-internal
+// "egressclient:"/"webfetch:" prefixes doubling up — it keeps the canonical
+// "egress denied…" phrase intact for the model-facing observation.
+func egressMessage(err error) string {
+	msg := err.Error()
+	if i := strings.Index(msg, "egress denied"); i >= 0 {
+		return msg[i:]
+	}
+	return msg
 }

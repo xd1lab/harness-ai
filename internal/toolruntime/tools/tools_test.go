@@ -8,6 +8,7 @@ package tools_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -79,7 +80,6 @@ func TestClassifications(t *testing.T) {
 	t.Parallel()
 
 	ws := truntimetest.NewFakeWorkspace()
-	broker := truntimetest.NewFakeEgressBroker()
 
 	type want struct {
 		side   domain.SideEffect
@@ -96,7 +96,7 @@ func TestClassifications(t *testing.T) {
 		"websearch": {domain.SideEffectMutating, domain.EgressClassExternal},
 	}
 
-	got := tools.Native(wsFor(ws), broker)
+	got := tools.Native(wsFor(ws), newFakeFetcher(), "")
 	if len(got) != len(cases) {
 		t.Fatalf("Native returned %d tools; want %d", len(got), len(cases))
 	}
@@ -391,114 +391,173 @@ func TestGrepToolNoMatchIsNotError(t *testing.T) {
 	}
 }
 
-// --- web tools: egress gating (FR-TOOL-06) ---
+// --- web tools: egress data path (FR-TOOL-06; ADR-0021) ---
+//
+// The broker mediation now lives INSIDE the WebFetcher (exercised exhaustively
+// in the egressclient package tests). At the tool layer the fetcher is faked:
+// these tests assert the tool's behavior — denial surfaced as an error
+// observation with the canonical wording, success rendered for the model, the
+// egress TARGET each tool declares to the service gate, and that a denied fetch
+// produced no output for the model.
 
-func TestWebFetchDeniedByDefault(t *testing.T) {
+// fakeFetcher is a scripted app.WebFetcher: it returns a preset result/error
+// and records the URLs it was asked to fetch.
+type fakeFetcher struct {
+	result  app.FetchResult
+	err     error
+	fetched []string
+}
+
+func newFakeFetcher() *fakeFetcher { return &fakeFetcher{result: app.FetchResult{Status: 200}} }
+
+func (f *fakeFetcher) Fetch(_ context.Context, _, rawURL string) (app.FetchResult, error) {
+	f.fetched = append(f.fetched, rawURL)
+	if f.err != nil {
+		return app.FetchResult{}, f.err
+	}
+	return f.result, nil
+}
+
+func TestWebFetchDeniedSurfacesEgressError(t *testing.T) {
 	t.Parallel()
 
-	ws := truntimetest.NewFakeWorkspace()
-	broker := truntimetest.NewFakeEgressBroker() // no policy → deny all
-	tool := tools.NewWebFetchTool(wsFor(ws), broker)
+	f := &fakeFetcher{err: fmt.Errorf(`egressclient: egress denied: host %q is not on the session allowlist`, "evil.example")}
+	tool := tools.NewWebFetchTool(f)
 
 	obs, err := tool.Execute(context.Background(), testSession, map[string]any{"url": "https://evil.example/x"})
 	if err != nil {
 		t.Fatalf("Execute returned a Go error; want error-as-observation: %v", err)
 	}
 	if !obs.IsError {
-		t.Fatalf("deny-by-default: IsError = false; want true")
+		t.Fatalf("denied fetch: IsError = false; want true")
 	}
 	if !strings.Contains(strings.ToLower(obs.Content), "egress denied") {
 		t.Errorf("expected egress-denied message; got %q", obs.Content)
 	}
-	// The fetch must NOT have run in the workspace.
-	if len(ws.ExecLog) != 0 {
-		t.Errorf("denied webfetch must not Exec; ran %d commands", len(ws.ExecLog))
+	// The canonical wording must be preserved verbatim (no double prefix).
+	if !strings.Contains(obs.Content, `egress denied: host "evil.example" is not on the session allowlist`) {
+		t.Errorf("canonical denial wording lost: %q", obs.Content)
 	}
 }
 
-func TestWebFetchAllowedHostExecutes(t *testing.T) {
+func TestWebFetchSuccessRendersBodyAndStatus(t *testing.T) {
 	t.Parallel()
 
-	ws := truntimetest.NewFakeWorkspace()
-	ws.AddExecResult(app.ExecResult{Stdout: []byte("<html/>")}, nil)
-	broker := truntimetest.NewFakeEgressBroker()
-	if err := broker.SetPolicy(context.Background(), app.EgressPolicy{
-		SessionID:    testSession,
-		AllowedHosts: []string{"ok.example"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	tool := tools.NewWebFetchTool(wsFor(ws), broker)
+	f := &fakeFetcher{result: app.FetchResult{
+		Status:      200,
+		FinalURL:    "https://ok.example/page",
+		ContentType: "text/html",
+		Body:        []byte("<html/>"),
+	}}
+	tool := tools.NewWebFetchTool(f)
 
 	obs, err := tool.Execute(context.Background(), testSession, map[string]any{"url": "https://ok.example/page"})
 	if err != nil || obs.IsError {
 		t.Fatalf("allowed webfetch failed: err=%v obs=%q", err, obs.Content)
 	}
-	if obs.Content != "<html/>" {
-		t.Errorf("webfetch content = %q; want %q", obs.Content, "<html/>")
+	if !strings.Contains(obs.Content, "<html/>") {
+		t.Errorf("webfetch content missing body: %q", obs.Content)
 	}
-	if len(ws.ExecLog) != 1 {
-		t.Errorf("allowed webfetch should run one Exec; ran %d", len(ws.ExecLog))
+	if !strings.Contains(obs.Content, "HTTP 200") {
+		t.Errorf("webfetch content missing status line: %q", obs.Content)
+	}
+	if len(f.fetched) != 1 || f.fetched[0] != "https://ok.example/page" {
+		t.Errorf("fetcher asked for %v; want one fetch of the URL", f.fetched)
 	}
 }
 
-func TestWebFetchUnparseableHostFailsClosed(t *testing.T) {
+func TestWebFetchMissingURLNeverFetches(t *testing.T) {
 	t.Parallel()
 
-	ws := truntimetest.NewFakeWorkspace()
-	broker := truntimetest.NewFakeEgressBroker()
-	if err := broker.SetPolicy(context.Background(), app.EgressPolicy{
-		SessionID:    testSession,
-		AllowedHosts: []string{"ok.example"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	tool := tools.NewWebFetchTool(wsFor(ws), broker)
+	f := newFakeFetcher()
+	tool := tools.NewWebFetchTool(f)
 
-	obs, _ := tool.Execute(context.Background(), testSession, map[string]any{"url": "not a url"})
+	obs, _ := tool.Execute(context.Background(), testSession, map[string]any{})
 	if !obs.IsError {
-		t.Errorf("unparseable URL: IsError = false; want true (fail closed)")
+		t.Errorf("missing url: IsError = false; want true")
 	}
-	if len(ws.ExecLog) != 0 {
-		t.Errorf("fail-closed webfetch must not Exec; ran %d", len(ws.ExecLog))
+	if len(f.fetched) != 0 {
+		t.Errorf("missing-url webfetch still called the fetcher: %v", f.fetched)
 	}
 }
 
-func TestWebSearchDeniedByDefault(t *testing.T) {
+func TestWebFetchEgressTargetIsURLHost(t *testing.T) {
 	t.Parallel()
 
-	ws := truntimetest.NewFakeWorkspace()
-	broker := truntimetest.NewFakeEgressBroker()
-	tool := tools.NewWebSearchTool(wsFor(ws), broker, "")
+	tool := tools.NewWebFetchTool(newFakeFetcher())
+	host, ok := tool.EgressTarget(map[string]any{"url": "https://api.example.com/v1"})
+	if !ok || host != "api.example.com" {
+		t.Errorf("EgressTarget = (%q, %v); want (api.example.com, true)", host, ok)
+	}
+	if _, ok := tool.EgressTarget(map[string]any{"url": "not a url"}); ok {
+		t.Error("EgressTarget(unparseable) ok = true; want false (fail closed)")
+	}
+}
+
+func TestWebSearchDeniedSurfacesEgressError(t *testing.T) {
+	t.Parallel()
+
+	f := &fakeFetcher{err: fmt.Errorf(`egressclient: egress denied: host %q is not on the session allowlist`, tools.DefaultSearchHost)}
+	tool := tools.NewWebSearchTool(f, "")
 
 	obs, _ := tool.Execute(context.Background(), testSession, map[string]any{"query": "secrets"})
 	if !obs.IsError {
-		t.Fatalf("websearch deny-by-default: IsError = false; want true")
+		t.Fatalf("denied websearch: IsError = false; want true")
 	}
-	if len(ws.ExecLog) != 0 {
-		t.Errorf("denied websearch must not Exec; ran %d", len(ws.ExecLog))
+	if !strings.Contains(strings.ToLower(obs.Content), "egress denied") {
+		t.Errorf("expected egress-denied message; got %q", obs.Content)
 	}
 }
 
-func TestWebSearchAllowedExecutes(t *testing.T) {
+func TestWebSearchRendersResults(t *testing.T) {
 	t.Parallel()
 
-	ws := truntimetest.NewFakeWorkspace()
-	ws.AddExecResult(app.ExecResult{Stdout: []byte("results")}, nil)
-	broker := truntimetest.NewFakeEgressBroker()
-	if err := broker.SetPolicy(context.Background(), app.EgressPolicy{
-		SessionID:    testSession,
-		AllowedHosts: []string{tools.DefaultSearchHost},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	tool := tools.NewWebSearchTool(wsFor(ws), broker, "")
+	body := `{"results":[
+		{"title":"First","url":"https://a.example/1","content":"snippet one"},
+		{"title":"Second","url":"https://b.example/2","content":"snippet two"}
+	]}`
+	f := &fakeFetcher{result: app.FetchResult{Status: 200, Body: []byte(body)}}
+	tool := tools.NewWebSearchTool(f, "https://search.example/search")
 
 	obs, err := tool.Execute(context.Background(), testSession, map[string]any{"query": "weather"})
 	if err != nil || obs.IsError {
 		t.Fatalf("allowed websearch failed: err=%v obs=%q", err, obs.Content)
 	}
-	if obs.Content != "results" {
-		t.Errorf("websearch content = %q; want %q", obs.Content, "results")
+	for _, want := range []string{"First", "https://a.example/1", "snippet one", "Second"} {
+		if !strings.Contains(obs.Content, want) {
+			t.Errorf("rendered results missing %q: %q", want, obs.Content)
+		}
+	}
+	// The query must be sent to the configured backend as a SearXNG JSON query.
+	if len(f.fetched) != 1 || !strings.Contains(f.fetched[0], "format=json") || !strings.Contains(f.fetched[0], "q=weather") {
+		t.Errorf("search request = %v; want the configured endpoint with q + format=json", f.fetched)
+	}
+}
+
+func TestWebSearchEgressTargetIsBackendHost(t *testing.T) {
+	t.Parallel()
+
+	tool := tools.NewWebSearchTool(newFakeFetcher(), "https://search.example/search")
+	host, ok := tool.EgressTarget(map[string]any{"query": "anything"})
+	if !ok || host != "search.example" {
+		t.Errorf("EgressTarget = (%q, %v); want (search.example, true)", host, ok)
+	}
+
+	// The default backend's host is the documented DefaultSearchHost.
+	def := tools.NewWebSearchTool(newFakeFetcher(), "")
+	if host, _ := def.EgressTarget(nil); host != tools.DefaultSearchHost {
+		t.Errorf("default EgressTarget host = %q; want %q", host, tools.DefaultSearchHost)
+	}
+}
+
+func TestWebSearchNon2xxIsError(t *testing.T) {
+	t.Parallel()
+
+	f := &fakeFetcher{result: app.FetchResult{Status: 502, Body: []byte("bad gateway")}}
+	tool := tools.NewWebSearchTool(f, "https://search.example/search")
+
+	obs, _ := tool.Execute(context.Background(), testSession, map[string]any{"query": "x"})
+	if !obs.IsError {
+		t.Errorf("non-2xx search backend: IsError = false; want true")
 	}
 }

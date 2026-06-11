@@ -298,6 +298,21 @@ services:
       # on the host (`docker pull debian:stable-slim`) for a fast first tool call.
       BOLTROPE_TOOLRT_IMAGE: ${BOLTROPE_TOOLRT_IMAGE:-debian:stable-slim}
       BOLTROPE_TOOLRT_DOCKER_BIN: docker
+      # Egress DATA PATH (ADR-0021): webfetch/websearch fetch at this trust
+      # boundary, mediated per-request by the deny-by-default broker. They reach
+      # a host ONLY if it is on the allowlist below — empty ⇒ deny-all (the safe
+      # default; webfetch/websearch return "egress denied" until configured).
+      # Comma-separated hosts ("*.suffix" wildcards supported), e.g.
+      #   BOLTROPE_TOOLRT_EGRESS_ALLOWLIST=en.wikipedia.org,*.githubusercontent.com
+      BOLTROPE_TOOLRT_EGRESS_ALLOWLIST: ${BOLTROPE_TOOLRT_EGRESS_ALLOWLIST:-}
+      # websearch backend: a SearXNG-compatible JSON endpoint. Point it at your
+      # own SearXNG (set the URL + add its host to the allowlist + allow private
+      # addresses if it is on this private network). Empty ⇒ websearch denies.
+      BOLTROPE_TOOLRT_SEARCH_URL: ${BOLTROPE_TOOLRT_SEARCH_URL:-}
+      # Permit the data path to reach allowlisted hosts that resolve to
+      # private/loopback addresses (e.g. a SearXNG on this compose network).
+      # Default off (SSRF-safe). Set to 1 only when your targets are internal.
+      BOLTROPE_TOOLRT_EGRESS_ALLOW_PRIVATE: ${BOLTROPE_TOOLRT_EGRESS_ALLOW_PRIVATE:-}
     volumes:
       # docker-out-of-docker: the tool-runtime drives the HOST docker daemon to
       # create sibling sandbox containers. SECURITY: this is root-equivalent on

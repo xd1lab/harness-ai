@@ -211,6 +211,53 @@ type EgressBroker interface {
 	SetPolicy(ctx context.Context, policy EgressPolicy) error
 }
 
+// FetchResult is the outcome of a [WebFetcher] fetch: the final HTTP status and
+// URL (after any allowlist-re-gated redirects), the response body (bounded by
+// the fetcher's size cap), and whether the cap truncated it.
+type FetchResult struct {
+	// Status is the final response's HTTP status code.
+	Status int
+	// FinalURL is the URL the response was served from (after redirects).
+	FinalURL string
+	// ContentType is the response Content-Type header (may be empty).
+	ContentType string
+	// Body is the response body, truncated at the fetcher's size cap.
+	Body []byte
+	// Truncated reports whether Body was cut at the size cap.
+	Truncated bool
+}
+
+// WebFetcher is the egress DATA PATH for the tool-runtime's own outbound web
+// tools (webfetch, websearch): an HTTP client that performs the fetch at the
+// trust boundary, mediated per request — including every redirect hop — by the
+// [EgressBroker] (NFR-SEC-04/FR-TOOL-06 as amended; ADR-0021). The sandbox
+// itself stays --network none: in-sandbox egress remains severed, not proxied.
+// Implementations MUST fail closed (an ambiguous URL, a denied host, or a
+// non-public destination address is an error, never a fetch) and be safe for
+// concurrent use.
+type WebFetcher interface {
+	// Fetch performs a hardened HTTP(S) GET of rawURL on behalf of sessionID.
+	// A denial (scheme, allowlist, address class) is returned as an error whose
+	// text carries the canonical "egress denied" message for the model-facing
+	// observation (FR-TOOL-06 AC-1); a completed fetch returns the result even
+	// for non-2xx statuses (the tool decides how to surface those).
+	Fetch(ctx context.Context, sessionID, rawURL string) (FetchResult, error)
+}
+
+// EgressTargeter is an optional interface a [github.com/xd1lab/harness-ai/internal/toolruntime/domain.Tool]
+// implements when its outbound target host is NOT derivable from its arguments
+// (e.g. websearch reaches a configured search backend, not an argument URL).
+// The execute service's egress gate consults it so the gate can adjudicate the
+// real destination instead of failing closed on "no host in args" (architecture
+// §8.4); the data-path fetch is still independently re-gated by the
+// [WebFetcher].
+type EgressTargeter interface {
+	// EgressTarget reports the host the tool would contact for the given
+	// (already schema-validated) arguments. ok=false means the tool cannot name
+	// a target — the gate then fails closed.
+	EgressTarget(args map[string]any) (host string, ok bool)
+}
+
 // ----------------------------------------------------------------------------
 // MCPClientPort — client to confined third-party MCP servers (ADR-0013; architecture
 // §5.3 mcp, §8.11).

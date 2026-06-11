@@ -225,7 +225,7 @@ func (s *Service) Execute(ctx context.Context, req Request, em Emitter) (Result,
 	// denied fresh call records a DEFINITE failed terminal (not a stuck "started"),
 	// so recovery never adjudicates it as an unknown that might double-execute.
 	if spec.IsExternal() {
-		if obs, blocked := s.egressGate(ctx, req, spec); blocked {
+		if obs, blocked := s.egressGate(ctx, req, tool); blocked {
 			s.recordTerminal(ctx, rec, obs, app.ExecFailed)
 			return Result{Observation: obs}, nil
 		}
@@ -285,8 +285,9 @@ func (s *Service) Execute(ctx context.Context, req Request, em Emitter) (Result,
 // egressGate checks an External-class tool's target host against the session's
 // deny-by-default allowlist. It returns blocked=true with an error observation
 // when the host is denied, unparseable, or the broker errors (fail-closed).
-func (s *Service) egressGate(ctx context.Context, req Request, spec domain.ToolSpec) (domain.Observation, bool) {
-	host, ok := hostFromArgs(req.Args)
+func (s *Service) egressGate(ctx context.Context, req Request, tool domain.Tool) (domain.Observation, bool) {
+	spec := tool.Spec()
+	host, ok := egressTarget(tool, req.Args)
 	if !ok {
 		// An External tool whose target host cannot be determined fails closed.
 		return errResult("tool %q: egress denied: cannot determine target host", spec.Name), true
@@ -299,6 +300,28 @@ func (s *Service) egressGate(ctx context.Context, req Request, spec domain.ToolS
 		return errResult("tool %q: egress denied: host %q is not on the session allowlist", spec.Name, host), true
 	}
 	return domain.Observation{}, false
+}
+
+// egressTarget resolves the host an External-class tool will contact: the
+// tool's own [app.EgressTargeter] declaration when it implements one (the
+// websearch shape — its backend is configured, not an argument), otherwise a
+// host parsed from the call's arguments. The registry wraps every tool in a
+// validation decorator, so this peels Unwrap-able decorators to find the
+// EgressTargeter on the inner tool before falling back. Either way an
+// indeterminate host returns ok=false so the gate fails closed (architecture
+// §8.4).
+func egressTarget(tool domain.Tool, args map[string]any) (string, bool) {
+	for {
+		if t, ok := tool.(app.EgressTargeter); ok {
+			return t.EgressTarget(args)
+		}
+		u, ok := tool.(interface{ Unwrap() domain.Tool })
+		if !ok {
+			break
+		}
+		tool = u.Unwrap()
+	}
+	return hostFromArgs(args)
 }
 
 // offload moves oversized output to the blob store. When len(content) exceeds the

@@ -188,9 +188,21 @@ toolRuntime:
       # -- gid of the node's docker group (`stat -c '%g' /var/run/docker.sock`)
       # so the non-root toolruntime user can use the socket.
       dockerGID: ""
-  # -- Egress allowlist POLICY for the broker (deny-by-default when empty).
-  # v1 containment is the sandbox's --network none; see ADR-0003.
-  egressAllowlist: []
+  # Egress DATA PATH for webfetch/websearch (ADR-0021): the fetch happens in
+  # the tool-runtime, mediated per-request by the deny-by-default broker. A
+  # host is reachable ONLY if listed here (empty ⇒ deny-all). The in-sandbox
+  # bash stays --network none regardless.
+  egress:
+    # -- Hosts the web tools may reach ("*.suffix" wildcards supported).
+    allowlist: []
+    #  - en.wikipedia.org
+    #  - "*.githubusercontent.com"
+    # -- SearXNG-compatible JSON endpoint websearch queries (its host must be
+    # in allowlist). Empty ⇒ websearch denies.
+    searchURL: ""
+    # -- Permit reaching allowlisted hosts that resolve to private/loopback
+    # addresses (e.g. an in-cluster SearXNG). Default false (SSRF-safe).
+    allowPrivate: false
   resources:
     requests: {cpu: 100m, memory: 128Mi}
     limits: {cpu: "1", memory: 512Mi}

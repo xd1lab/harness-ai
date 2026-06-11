@@ -29,6 +29,7 @@ import (
 	trgrpc "github.com/xd1lab/harness-ai/internal/toolruntime/adapter/inbound/grpc"
 	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/outbound/dedup"
 	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/outbound/egress"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/outbound/egressclient"
 	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/outbound/mcp"
 	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/outbound/runtime"
 	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/outbound/sessionstatus"
@@ -58,16 +59,29 @@ type toolSettings struct {
 	// BOLTROPE_TOOLRT_EGRESS_ALLOWLIST (comma-separated hosts; "*.suffix" wildcards
 	// per egress.Broker matching rules).
 	EgressAllowlist []string
+	// SearchURL is the SearXNG-compatible JSON search endpoint websearch queries
+	// through the egress data path (ADR-0021). Its host must be on the egress
+	// allowlist. Sourced from BOLTROPE_TOOLRT_SEARCH_URL; empty uses the built-in
+	// default host (websearch then denies unless that host is allowlisted).
+	SearchURL string
+	// EgressAllowPrivate permits the egress data path to reach allowlisted hosts
+	// that resolve to loopback/private/link-local addresses. Default false (the
+	// SSRF-safe posture: even an allowlisted host is refused if it resolves to a
+	// non-public address). A deployment whose search backend or fetch targets
+	// live on a private cluster network sets BOLTROPE_TOOLRT_EGRESS_ALLOW_PRIVATE=1.
+	EgressAllowPrivate bool
 }
 
 // loadToolSettings reads the tool-runtime-specific environment.
 func loadToolSettings() toolSettings {
 	return toolSettings{
-		DockerBin:       os.Getenv("BOLTROPE_TOOLRT_DOCKER_BIN"),
-		Image:           os.Getenv("BOLTROPE_TOOLRT_IMAGE"),
-		TrustDomain:     envOr("BOLTROPE_TRUST_DOMAIN", "boltrope.local"),
-		MCPCommand:      os.Getenv("BOLTROPE_TOOLRT_MCP_COMMAND"),
-		EgressAllowlist: parseAllowlist(os.Getenv("BOLTROPE_TOOLRT_EGRESS_ALLOWLIST")),
+		DockerBin:          os.Getenv("BOLTROPE_TOOLRT_DOCKER_BIN"),
+		Image:              os.Getenv("BOLTROPE_TOOLRT_IMAGE"),
+		TrustDomain:        envOr("BOLTROPE_TRUST_DOMAIN", "boltrope.local"),
+		MCPCommand:         os.Getenv("BOLTROPE_TOOLRT_MCP_COMMAND"),
+		EgressAllowlist:    parseAllowlist(os.Getenv("BOLTROPE_TOOLRT_EGRESS_ALLOWLIST")),
+		SearchURL:          os.Getenv("BOLTROPE_TOOLRT_SEARCH_URL"),
+		EgressAllowPrivate: truthy(os.Getenv("BOLTROPE_TOOLRT_EGRESS_ALLOW_PRIVATE")),
 	}
 }
 
@@ -93,6 +107,15 @@ func envOr(key, def string) string {
 	return def
 }
 
+// truthy reports whether an env value means "on" (1/true/yes, case-insensitive).
+func truthy(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
 // buildRegistry builds the tool registry, registers the native tool set bound to
 // the routing workspace + egress broker, and (when configured) attaches a lazy
 // MCP source. It returns the populated registry. The registry validates each
@@ -109,8 +132,12 @@ func buildRegistry(ts toolSettings) (*registry.Registry, error) {
 		return nil, err
 	}
 	ws := newSessionWorkspaces(rt, ts.EgressAllowlist)
+	fetcher, err := buildFetcher(ts, broker)
+	if err != nil {
+		return nil, err
+	}
 	reg := newRegistry(ts)
-	if err := registerNative(reg, ws, broker); err != nil {
+	if err := registerNative(reg, ws, fetcher, ts.SearchURL); err != nil {
 		return nil, err
 	}
 	return reg, nil
@@ -179,11 +206,24 @@ func newRegistry(ts toolSettings) *registry.Registry {
 	return registry.New(mcpSource{client: client})
 }
 
-// registerNative registers every native tool (bound to the per-session
-// workspace router ws + broker) into reg, returning the first registration
-// error.
-func registerNative(reg *registry.Registry, ws app.SessionWorkspaces, broker app.EgressBroker) error {
-	for _, tool := range tools.Native(ws, broker) {
+// buildFetcher constructs the egress DATA PATH (ADR-0021): the hardened
+// in-process [app.WebFetcher] webfetch/websearch use, mediated per request by
+// the same deny-by-default broker. AllowPrivate is opt-in for deployments
+// whose fetch/search targets live on a private network.
+func buildFetcher(ts toolSettings, broker app.EgressBroker) (app.WebFetcher, error) {
+	f, err := egressclient.New(broker, egressclient.Config{AllowPrivate: ts.EgressAllowPrivate})
+	if err != nil {
+		return nil, fmt.Errorf("toolruntimed: build egress fetcher: %w", err)
+	}
+	return f, nil
+}
+
+// registerNative registers every native tool into reg: the filesystem/command
+// tools bind to the per-session workspace router ws; the External web tools use
+// the egress data-path fetcher (websearch against ts.SearchURL). Returns the
+// first registration error.
+func registerNative(reg *registry.Registry, ws app.SessionWorkspaces, fetcher app.WebFetcher, searchURL string) error {
+	for _, tool := range tools.Native(ws, fetcher, searchURL) {
 		if err := reg.Register(context.Background(), tool); err != nil {
 			return fmt.Errorf("toolruntimed: register native tool %q: %w", tool.Spec().Name, err)
 		}
@@ -216,8 +256,14 @@ func buildToolRuntime(cfg *config.Config, ts toolSettings) (*execute.Service, *r
 	}
 
 	ws := newSessionWorkspaces(rt, ts.EgressAllowlist)
+	fetcher, err := buildFetcher(ts, broker)
+	if err != nil {
+		_ = closeStatus()
+		return nil, nil, nil, nil, err
+	}
 	reg := newRegistry(ts)
-	if err := registerNative(reg, ws, broker); err != nil {
+	if err := registerNative(reg, ws, fetcher, ts.SearchURL); err != nil {
+		_ = closeStatus()
 		return nil, nil, nil, nil, err
 	}
 

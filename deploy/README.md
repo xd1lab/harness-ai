@@ -231,6 +231,32 @@ sandbox.
 - **`-race` images.** The release/compose images are `CGO_ENABLED=0` static
   binaries, so the race detector (which needs cgo) is not available *in the
   images*; run `go test -race` on the host instead.
+- **Web tools deny by default.** `webfetch`/`websearch` reach the network
+  through the egress data path ([ADR-0021](../docs/decisions/0021-egress-data-path.md)),
+  but only to allowlisted hosts — so out of the box (empty allowlist) they
+  return "egress denied". To enable web access, set
+  `BOLTROPE_TOOLRT_EGRESS_ALLOWLIST` (and, for `websearch`,
+  `BOLTROPE_TOOLRT_SEARCH_URL` to a SearXNG-compatible JSON endpoint whose host
+  you also allowlist). The in-sandbox `bash` stays `--network none` regardless.
+
+### Enabling web access (egress)
+
+The tool-runtime fetches at its own trust boundary, mediated per request (and
+per redirect) by the deny-by-default broker, with DNS-pinned dialing and
+public-address-only egress (SSRF defense). To turn it on in the compose stack,
+set in `.env`:
+
+```bash
+# Hosts webfetch/websearch may reach ("*.suffix" wildcards allowed):
+BOLTROPE_TOOLRT_EGRESS_ALLOWLIST=en.wikipedia.org,*.githubusercontent.com
+# websearch backend (a SearXNG JSON endpoint) — also allowlist its host:
+BOLTROPE_TOOLRT_SEARCH_URL=https://searx.example.org/search
+# If a target resolves to a private/loopback address (e.g. a SearXNG on this
+# compose network), opt out of the public-address-only guard:
+BOLTROPE_TOOLRT_EGRESS_ALLOW_PRIVATE=1
+```
+
+In the Helm chart the same knobs are `toolRuntime.egress.{allowlist,searchURL,allowPrivate}`.
 
 ---
 

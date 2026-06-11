@@ -226,6 +226,13 @@ type validatingTool struct {
 // Spec returns the underlying tool's spec unchanged.
 func (v *validatingTool) Spec() domain.ToolSpec { return v.inner.Spec() }
 
+// Unwrap exposes the wrapped tool so callers can discover optional interfaces
+// the inner tool implements (e.g. the execute service's egress gate looks for
+// [github.com/xd1lab/harness-ai/internal/toolruntime/app.EgressTargeter]
+// through this decorator). It does not bypass validation: Execute still runs
+// the schema check.
+func (v *validatingTool) Unwrap() domain.Tool { return v.inner }
+
 // Execute validates args against the schema and, on success, delegates to the
 // wrapped tool. On a validation failure it returns an error Observation with the
 // human-readable validation message and does not invoke the wrapped tool.
