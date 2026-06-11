@@ -23,6 +23,7 @@ Boltrope turns a stateless LLM completion API into a **stateful, tool-using, sel
 - [Quickstart](#quickstart) · [Use a real model](#use-a-real-model)
 - [Install — binaries & container images](#install)
 - [REST API (SSE)](#rest-api-sse) — drive it from Python/curl, no SDK
+- [Examples](#examples) · [How Boltrope compares](docs/comparison.md)
 - [Feature overview](#feature-overview)
 - [Configuring a provider](#configuring-a-provider)
 - [Architecture](#architecture)
@@ -192,6 +193,20 @@ Routes: `POST /v1/sessions` · `GET /v1/sessions/{id}` · `POST /v1/sessions/{id
 
 ---
 
+## Examples
+
+Runnable walkthroughs in [examples/](examples/) — the first three run end-to-end
+against the keyless dev stack (no API key, no client tooling):
+
+- **[curl/](examples/curl/)** — drive a full session with nothing but `curl`: create, run, stream SSE, resume on `Last-Event-ID`.
+- **[durable-resume/](examples/durable-resume/)** — inspect the per-session Postgres event log, then watch a session **survive an orchestrator restart** (the projection is rebuilt from the durable log, headSeq intact).
+- **[python/](examples/python/)** — a ~100-line `requests`-only client with interactive approvals.
+- **[web-research/](examples/web-research/)** — enable `webfetch`/`websearch` through the deny-by-default egress data path (needs a real model + an allowlisted host).
+
+New here and weighing the options? [**How Boltrope compares**](docs/comparison.md) is an honest look at Boltrope next to deepagents and hive — including where they're the better choice.
+
+---
+
 ## Feature overview
 
 Everything below is implemented in v1 unless explicitly marked _roadmap_.
@@ -353,6 +368,18 @@ Contributions are welcome. Boltrope is built **spec-first and test-first** — s
 - **Questions & ideas** — open a [GitHub Discussion](https://github.com/xd1lab/harness-ai/discussions).
 - **Bugs & feature requests** — use the [issue templates](https://github.com/xd1lab/harness-ai/issues/new/choose).
 - **Security vulnerabilities** — do **not** open a public issue; report privately per [SECURITY.md](SECURITY.md).
+
+### Design partners wanted
+
+Boltrope is young and built by a small team, so it is shaped deliberately around
+one kind of user: teams that **self-host**, need **DB-enforced tenant
+isolation** and an **auditable event log**, and can't afford to re-bill a
+crashed run. If that's you — a platform or security team standing up an internal
+agent service — we want your requirements driving the roadmap. Open a
+[design-partner discussion](https://github.com/xd1lab/harness-ai/discussions/categories/design-partners)
+with your use case and constraints. Honest about fit: if you're prototyping
+quickly or want a UI/integration catalog, [other harnesses](docs/comparison.md)
+will serve you better today, and we'll say so.
 
 ---
 

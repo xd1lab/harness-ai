@@ -3,6 +3,9 @@ contact_links:
   - name: Question / discussion
     url: https://github.com/xd1lab/harness-ai/discussions
     about: Ask questions and discuss ideas here.
+  - name: Become a design partner
+    url: https://github.com/xd1lab/harness-ai/discussions/categories/design-partners
+    about: Self-hosting an audit-heavy or multi-tenant agent platform? Tell us your requirements and shape the roadmap.
   - name: Report a security vulnerability (private)
     url: https://github.com/xd1lab/harness-ai/security/advisories/new
     about: Report security issues privately — do not open a public issue.

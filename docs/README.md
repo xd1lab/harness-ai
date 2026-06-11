@@ -12,6 +12,8 @@ use this index to go deeper.
 | If you want to… | Read |
 |---|---|
 | Understand the system and run it | [../README.md](../README.md) |
+| Try a runnable walkthrough | [../examples/](../examples/) |
+| See how Boltrope compares to other harnesses | [comparison.md](comparison.md) |
 | Get a one-page architecture orientation | [../ARCHITECTURE.md](../ARCHITECTURE.md) |
 | Know exactly what v1 must do | [spec/00-system-specification.md](spec/00-system-specification.md) |
 | Understand how it is built | [architecture/00-architecture.md](architecture/00-architecture.md) |
