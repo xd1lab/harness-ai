@@ -19,6 +19,60 @@ import (
 
 const testSession = "sess-1"
 
+// wsFor adapts a single fake workspace into the per-session resolver the tools
+// bind to; most unit tests exercise a single session against one fake.
+// Per-session ROUTING is asserted separately in
+// TestToolsRouteToCallingSessionsWorkspace.
+func wsFor(ws app.Workspace) app.SessionWorkspaces {
+	return truntimetest.StaticWorkspaces{WS: ws}
+}
+
+// TestToolsRouteToCallingSessionsWorkspace is the X-03 regression test at the
+// tool layer: a tool executed for session S must operate on S's OWN workspace —
+// the sessionID the [domain.Tool] contract carries drives the routing, never a
+// fixed workspace binding shared by all sessions.
+func TestToolsRouteToCallingSessionsWorkspace(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	router := truntimetest.NewFakeSessionWorkspaces()
+	write := tools.NewWriteTool(router)
+	read := tools.NewReadTool(router)
+	bash := tools.NewBashTool(router)
+
+	// Session A writes a file.
+	obs, err := write.Execute(ctx, "sess-a", map[string]any{"path": "/workspace/hello.txt", "content": "A's data"})
+	if err != nil || obs.IsError {
+		t.Fatalf("write in sess-a failed: err=%v obs=%q", err, obs.Content)
+	}
+
+	// Session A reads it back from its own workspace.
+	obs, err = read.Execute(ctx, "sess-a", map[string]any{"path": "/workspace/hello.txt"})
+	if err != nil || obs.IsError || obs.Content != "A's data" {
+		t.Fatalf("read in sess-a = (err=%v, isErr=%v, %q); want A's data", err, obs.IsError, obs.Content)
+	}
+
+	// Session B must NOT see session A's file (cross-session isolation).
+	obs, err = read.Execute(ctx, "sess-b", map[string]any{"path": "/workspace/hello.txt"})
+	if err != nil {
+		t.Fatalf("read in sess-b returned a Go error; want error-as-observation: %v", err)
+	}
+	if !obs.IsError {
+		t.Fatalf("session B read session A's file: %q — cross-session workspace leak", obs.Content)
+	}
+
+	// bash executes inside the CALLING session's workspace only.
+	if obs, err = bash.Execute(ctx, "sess-a", map[string]any{"command": "hostname"}); err != nil || obs.IsError {
+		t.Fatalf("bash in sess-a failed: err=%v obs=%q", err, obs.Content)
+	}
+	if got := len(router.Get("sess-a").ExecLog); got != 1 {
+		t.Errorf("sess-a workspace ExecLog = %d commands; want 1", got)
+	}
+	if got := len(router.Get("sess-b").ExecLog); got != 0 {
+		t.Errorf("sess-b workspace ExecLog = %d commands; want 0 (bash ran in the wrong session's sandbox)", got)
+	}
+}
+
 // TestClassifications is the FR-TOOL-02 AC-1 table: each core tool's declared
 // SideEffect and EgressClass must match the spec.
 func TestClassifications(t *testing.T) {
@@ -42,7 +96,7 @@ func TestClassifications(t *testing.T) {
 		"websearch": {domain.SideEffectMutating, domain.EgressClassExternal},
 	}
 
-	got := tools.Native(ws, broker)
+	got := tools.Native(wsFor(ws), broker)
 	if len(got) != len(cases) {
 		t.Fatalf("Native returned %d tools; want %d", len(got), len(cases))
 	}
@@ -75,7 +129,7 @@ func TestReadTool(t *testing.T) {
 	if err := ws.Write(context.Background(), "/a.txt", []byte("hello")); err != nil {
 		t.Fatal(err)
 	}
-	tool := tools.NewReadTool(ws)
+	tool := tools.NewReadTool(wsFor(ws))
 
 	obs, err := tool.Execute(context.Background(), testSession, map[string]any{"path": "/a.txt"})
 	if err != nil {
@@ -92,7 +146,7 @@ func TestReadTool(t *testing.T) {
 func TestReadToolMissingFieldIsErrorObs(t *testing.T) {
 	t.Parallel()
 
-	tool := tools.NewReadTool(truntimetest.NewFakeWorkspace())
+	tool := tools.NewReadTool(wsFor(truntimetest.NewFakeWorkspace()))
 	obs, err := tool.Execute(context.Background(), testSession, map[string]any{})
 	if err != nil {
 		t.Fatalf("Execute returned a Go error; want error-as-observation: %v", err)
@@ -105,7 +159,7 @@ func TestReadToolMissingFieldIsErrorObs(t *testing.T) {
 func TestReadToolMissingFileIsErrorObs(t *testing.T) {
 	t.Parallel()
 
-	tool := tools.NewReadTool(truntimetest.NewFakeWorkspace())
+	tool := tools.NewReadTool(wsFor(truntimetest.NewFakeWorkspace()))
 	obs, err := tool.Execute(context.Background(), testSession, map[string]any{"path": "/nope"})
 	if err != nil {
 		t.Fatalf("Execute returned a Go error: %v", err)
@@ -119,7 +173,7 @@ func TestWriteTool(t *testing.T) {
 	t.Parallel()
 
 	ws := truntimetest.NewFakeWorkspace()
-	tool := tools.NewWriteTool(ws)
+	tool := tools.NewWriteTool(wsFor(ws))
 
 	obs, err := tool.Execute(context.Background(), testSession, map[string]any{"path": "/out.txt", "content": "data"})
 	if err != nil {
@@ -140,7 +194,7 @@ func TestWriteTool(t *testing.T) {
 func TestWriteToolMissingContentIsErrorObs(t *testing.T) {
 	t.Parallel()
 
-	tool := tools.NewWriteTool(truntimetest.NewFakeWorkspace())
+	tool := tools.NewWriteTool(wsFor(truntimetest.NewFakeWorkspace()))
 	obs, _ := tool.Execute(context.Background(), testSession, map[string]any{"path": "/x"})
 	if !obs.IsError {
 		t.Errorf("missing content: IsError = false; want true")
@@ -154,7 +208,7 @@ func TestEditToolReplacesUnique(t *testing.T) {
 	if err := ws.Write(context.Background(), "/f.txt", []byte("foo bar baz")); err != nil {
 		t.Fatal(err)
 	}
-	tool := tools.NewEditTool(ws)
+	tool := tools.NewEditTool(wsFor(ws))
 
 	obs, err := tool.Execute(context.Background(), testSession, map[string]any{
 		"path": "/f.txt", "old_string": "bar", "new_string": "QUX",
@@ -178,7 +232,7 @@ func TestEditToolNonUniqueWithoutReplaceAllIsError(t *testing.T) {
 	if err := ws.Write(context.Background(), "/f.txt", []byte("a a a")); err != nil {
 		t.Fatal(err)
 	}
-	tool := tools.NewEditTool(ws)
+	tool := tools.NewEditTool(wsFor(ws))
 
 	obs, _ := tool.Execute(context.Background(), testSession, map[string]any{
 		"path": "/f.txt", "old_string": "a", "new_string": "b",
@@ -200,7 +254,7 @@ func TestEditToolReplaceAll(t *testing.T) {
 	if err := ws.Write(context.Background(), "/f.txt", []byte("a a a")); err != nil {
 		t.Fatal(err)
 	}
-	tool := tools.NewEditTool(ws)
+	tool := tools.NewEditTool(wsFor(ws))
 
 	obs, err := tool.Execute(context.Background(), testSession, map[string]any{
 		"path": "/f.txt", "old_string": "a", "new_string": "b", "replace_all": true,
@@ -221,7 +275,7 @@ func TestEditToolOldStringNotFoundIsError(t *testing.T) {
 	if err := ws.Write(context.Background(), "/f.txt", []byte("hello")); err != nil {
 		t.Fatal(err)
 	}
-	tool := tools.NewEditTool(ws)
+	tool := tools.NewEditTool(wsFor(ws))
 	obs, _ := tool.Execute(context.Background(), testSession, map[string]any{
 		"path": "/f.txt", "old_string": "zzz", "new_string": "b",
 	})
@@ -235,7 +289,7 @@ func TestBashToolRunsExec(t *testing.T) {
 
 	ws := truntimetest.NewFakeWorkspace()
 	ws.AddExecResult(app.ExecResult{ExitCode: 0, Stdout: []byte("output")}, nil)
-	tool := tools.NewBashTool(ws)
+	tool := tools.NewBashTool(wsFor(ws))
 
 	obs, err := tool.Execute(context.Background(), testSession, map[string]any{"command": "echo output"})
 	if err != nil {
@@ -261,7 +315,7 @@ func TestBashToolNonZeroExitIsErrorObs(t *testing.T) {
 
 	ws := truntimetest.NewFakeWorkspace()
 	ws.AddExecResult(app.ExecResult{ExitCode: 2, Stderr: []byte("boom")}, nil)
-	tool := tools.NewBashTool(ws)
+	tool := tools.NewBashTool(wsFor(ws))
 
 	obs, _ := tool.Execute(context.Background(), testSession, map[string]any{"command": "false"})
 	if !obs.IsError {
@@ -277,7 +331,7 @@ func TestBashToolKilledIsErrorObs(t *testing.T) {
 
 	ws := truntimetest.NewFakeWorkspace()
 	ws.AddExecResult(app.ExecResult{Killed: true}, nil)
-	tool := tools.NewBashTool(ws)
+	tool := tools.NewBashTool(wsFor(ws))
 
 	obs, _ := tool.Execute(context.Background(), testSession, map[string]any{"command": "sleep 999"})
 	if !obs.IsError {
@@ -290,7 +344,7 @@ func TestGlobToolRunsExec(t *testing.T) {
 
 	ws := truntimetest.NewFakeWorkspace()
 	ws.AddExecResult(app.ExecResult{Stdout: []byte("./a.go\n./b.go")}, nil)
-	tool := tools.NewGlobTool(ws)
+	tool := tools.NewGlobTool(wsFor(ws))
 
 	obs, err := tool.Execute(context.Background(), testSession, map[string]any{"pattern": "**/*.go"})
 	if err != nil || obs.IsError {
@@ -309,7 +363,7 @@ func TestGrepToolRunsExec(t *testing.T) {
 
 	ws := truntimetest.NewFakeWorkspace()
 	ws.AddExecResult(app.ExecResult{Stdout: []byte("a.go:1:match")}, nil)
-	tool := tools.NewGrepTool(ws)
+	tool := tools.NewGrepTool(wsFor(ws))
 
 	obs, err := tool.Execute(context.Background(), testSession, map[string]any{"pattern": "match"})
 	if err != nil || obs.IsError {
@@ -326,7 +380,7 @@ func TestGrepToolNoMatchIsNotError(t *testing.T) {
 	ws := truntimetest.NewFakeWorkspace()
 	// grep exits 1 with no output when nothing matches.
 	ws.AddExecResult(app.ExecResult{ExitCode: 1}, nil)
-	tool := tools.NewGrepTool(ws)
+	tool := tools.NewGrepTool(wsFor(ws))
 
 	obs, err := tool.Execute(context.Background(), testSession, map[string]any{"pattern": "nope"})
 	if err != nil {
@@ -344,7 +398,7 @@ func TestWebFetchDeniedByDefault(t *testing.T) {
 
 	ws := truntimetest.NewFakeWorkspace()
 	broker := truntimetest.NewFakeEgressBroker() // no policy → deny all
-	tool := tools.NewWebFetchTool(ws, broker)
+	tool := tools.NewWebFetchTool(wsFor(ws), broker)
 
 	obs, err := tool.Execute(context.Background(), testSession, map[string]any{"url": "https://evil.example/x"})
 	if err != nil {
@@ -374,7 +428,7 @@ func TestWebFetchAllowedHostExecutes(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	tool := tools.NewWebFetchTool(ws, broker)
+	tool := tools.NewWebFetchTool(wsFor(ws), broker)
 
 	obs, err := tool.Execute(context.Background(), testSession, map[string]any{"url": "https://ok.example/page"})
 	if err != nil || obs.IsError {
@@ -399,7 +453,7 @@ func TestWebFetchUnparseableHostFailsClosed(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	tool := tools.NewWebFetchTool(ws, broker)
+	tool := tools.NewWebFetchTool(wsFor(ws), broker)
 
 	obs, _ := tool.Execute(context.Background(), testSession, map[string]any{"url": "not a url"})
 	if !obs.IsError {
@@ -415,7 +469,7 @@ func TestWebSearchDeniedByDefault(t *testing.T) {
 
 	ws := truntimetest.NewFakeWorkspace()
 	broker := truntimetest.NewFakeEgressBroker()
-	tool := tools.NewWebSearchTool(ws, broker, "")
+	tool := tools.NewWebSearchTool(wsFor(ws), broker, "")
 
 	obs, _ := tool.Execute(context.Background(), testSession, map[string]any{"query": "secrets"})
 	if !obs.IsError {
@@ -438,7 +492,7 @@ func TestWebSearchAllowedExecutes(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	tool := tools.NewWebSearchTool(ws, broker, "")
+	tool := tools.NewWebSearchTool(wsFor(ws), broker, "")
 
 	obs, err := tool.Execute(context.Background(), testSession, map[string]any{"query": "weather"})
 	if err != nil || obs.IsError {

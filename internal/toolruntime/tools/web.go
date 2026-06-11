@@ -37,13 +37,14 @@ func hostFromURL(raw string) (host string, ok bool) {
 // (architecture §8.4). It is classified Mutating so the orchestrator never
 // schedules it in the harmless read-only parallel pool (architecture §9.2).
 type WebFetchTool struct {
-	ws     app.Workspace
+	ws     app.SessionWorkspaces
 	broker app.EgressBroker
 }
 
-// NewWebFetchTool returns a [WebFetchTool] backed by the workspace ws (for the
-// confined fetch) and the egress broker (for the deny-by-default host check).
-func NewWebFetchTool(ws app.Workspace, broker app.EgressBroker) *WebFetchTool {
+// NewWebFetchTool returns a [WebFetchTool] backed by the per-session workspace
+// resolver ws (for the confined fetch) and the egress broker (for the
+// deny-by-default host check).
+func NewWebFetchTool(ws app.SessionWorkspaces, broker app.EgressBroker) *WebFetchTool {
 	return &WebFetchTool{ws: ws, broker: broker}
 }
 
@@ -87,7 +88,11 @@ func (t *WebFetchTool) Execute(ctx context.Context, sessionID string, args map[s
 	if !allowed {
 		return errObs("webfetch: egress denied: host %q is not on the session allowlist", host), nil
 	}
-	res, err := t.ws.Exec(ctx, app.ExecRequest{
+	ws, err := t.ws.Workspace(ctx, sessionID)
+	if err != nil {
+		return errObs("webfetch: %v", err), nil
+	}
+	res, err := ws.Exec(ctx, app.ExecRequest{
 		Cmd: []string{"curl", "-sSL", "--", rawURL},
 	})
 	if err != nil {
@@ -105,7 +110,7 @@ func (t *WebFetchTool) Execute(ctx context.Context, sessionID string, args map[s
 // [app.EgressBroker] and confined to the workspace sandbox, and is classified
 // Mutating so it is never parallelized as a read (architecture §8.4, §9.2).
 type WebSearchTool struct {
-	ws         app.Workspace
+	ws         app.SessionWorkspaces
 	broker     app.EgressBroker
 	searchHost string
 }
@@ -114,10 +119,11 @@ type WebSearchTool struct {
 // must be present on a session's egress allowlist for websearch to be permitted.
 const DefaultSearchHost = "search.boltrope.local"
 
-// NewWebSearchTool returns a [WebSearchTool] backed by the workspace ws and the
-// egress broker. searchHost is the host the search backend is reached at (used
-// for the egress allowlist check); empty uses [DefaultSearchHost].
-func NewWebSearchTool(ws app.Workspace, broker app.EgressBroker, searchHost string) *WebSearchTool {
+// NewWebSearchTool returns a [WebSearchTool] backed by the per-session
+// workspace resolver ws and the egress broker. searchHost is the host the
+// search backend is reached at (used for the egress allowlist check); empty
+// uses [DefaultSearchHost].
+func NewWebSearchTool(ws app.SessionWorkspaces, broker app.EgressBroker, searchHost string) *WebSearchTool {
 	if searchHost == "" {
 		searchHost = DefaultSearchHost
 	}
@@ -157,7 +163,11 @@ func (t *WebSearchTool) Execute(ctx context.Context, sessionID string, args map[
 	if !allowed {
 		return errObs("websearch: egress denied: search host %q is not on the session allowlist", t.searchHost), nil
 	}
-	res, err := t.ws.Exec(ctx, app.ExecRequest{
+	ws, err := t.ws.Workspace(ctx, sessionID)
+	if err != nil {
+		return errObs("websearch: %v", err), nil
+	}
+	res, err := ws.Exec(ctx, app.ExecRequest{
 		Cmd: []string{"boltrope-websearch", "--", query},
 	})
 	if err != nil {

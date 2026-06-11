@@ -231,12 +231,13 @@ func (s *Service) Execute(ctx context.Context, req Request, em Emitter) (Result,
 		}
 	}
 
-	// (2) Best-effort readiness touch of the per-session sandbox. The session
-	// workspace is provisioned by sandboxmgr and the native tools are pre-bound to
-	// it; an in-sandbox tool's cancellation maps to a real process-group kill
-	// because the bound Workspace.Exec honors execCtx (architecture §9.3). A tool
-	// that needs no sandbox (e.g. a pure MCP proxy) runs regardless, so a missing
-	// live workspace here is not fatal — hence the error is intentionally ignored.
+	// (2) Best-effort readiness touch of the per-session sandbox. The native
+	// tools resolve the CALLING session's own workspace per execution (via
+	// [SessionWorkspaces], provisioning it on first use); an in-sandbox tool's
+	// cancellation maps to a real process-group kill because the resolved
+	// Workspace.Exec honors execCtx (architecture §9.3). A tool that needs no
+	// sandbox (e.g. a pure MCP proxy) runs regardless, so a missing live
+	// workspace here is not fatal — hence the error is intentionally ignored.
 	_, _ = s.runtime.Get(ctx, req.SessionID)
 
 	// (5) Execute. Optionally apply a per-call timeout that, on expiry, cancels

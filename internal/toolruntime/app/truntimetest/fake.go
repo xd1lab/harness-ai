@@ -23,12 +23,14 @@ import (
 // ---------------------------------------------------------------------------
 
 var (
-	_ app.ToolRegistry  = (*FakeToolRegistry)(nil)
-	_ app.RuntimePort   = (*FakeRuntimePort)(nil)
-	_ app.Workspace     = (*FakeWorkspace)(nil)
-	_ app.EgressBroker  = (*FakeEgressBroker)(nil)
-	_ app.MCPClientPort = (*FakeMCPClient)(nil)
-	_ app.DedupStore    = (*FakeDedupStore)(nil)
+	_ app.ToolRegistry      = (*FakeToolRegistry)(nil)
+	_ app.RuntimePort       = (*FakeRuntimePort)(nil)
+	_ app.Workspace         = (*FakeWorkspace)(nil)
+	_ app.EgressBroker      = (*FakeEgressBroker)(nil)
+	_ app.MCPClientPort     = (*FakeMCPClient)(nil)
+	_ app.DedupStore        = (*FakeDedupStore)(nil)
+	_ app.SessionWorkspaces = StaticWorkspaces{}
+	_ app.SessionWorkspaces = (*FakeSessionWorkspaces)(nil)
 )
 
 // ---------------------------------------------------------------------------
@@ -204,6 +206,60 @@ func (w *FakeWorkspace) NetworkPolicy(_ context.Context) (app.EgressPolicy, erro
 	p := w.Policy
 	w.mu.Unlock()
 	return p, nil
+}
+
+// ---------------------------------------------------------------------------
+// SessionWorkspaces fakes
+// ---------------------------------------------------------------------------
+
+// StaticWorkspaces is an [app.SessionWorkspaces] that returns the same
+// workspace for EVERY session — a unit-test convenience for exercising one
+// tool against one fake workspace. Production routing is per-session; use
+// [FakeSessionWorkspaces] to assert routing behavior.
+type StaticWorkspaces struct {
+	// WS is the workspace returned for every session id.
+	WS app.Workspace
+}
+
+// Workspace returns the static workspace regardless of session id.
+func (s StaticWorkspaces) Workspace(_ context.Context, _ string) (app.Workspace, error) {
+	return s.WS, nil
+}
+
+// FakeSessionWorkspaces is an [app.SessionWorkspaces] that lazily provisions
+// one independent [FakeWorkspace] per session id — the in-memory analog of
+// the production per-session sandbox router. An empty session id fails closed.
+type FakeSessionWorkspaces struct {
+	mu sync.Mutex
+	m  map[string]*FakeWorkspace
+}
+
+// NewFakeSessionWorkspaces returns an empty FakeSessionWorkspaces.
+func NewFakeSessionWorkspaces() *FakeSessionWorkspaces {
+	return &FakeSessionWorkspaces{m: make(map[string]*FakeWorkspace)}
+}
+
+// Workspace returns sessionID's own FakeWorkspace, creating it on first use.
+func (f *FakeSessionWorkspaces) Workspace(_ context.Context, sessionID string) (app.Workspace, error) {
+	if sessionID == "" {
+		return nil, fmt.Errorf("truntimetest: empty session id (refusing shared-workspace fallback)")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ws, ok := f.m[sessionID]
+	if !ok {
+		ws = NewFakeWorkspace()
+		f.m[sessionID] = ws
+	}
+	return ws, nil
+}
+
+// Get returns the session's FakeWorkspace for inspection, creating it on first
+// use so assertions on a never-touched session observe an empty workspace.
+func (f *FakeSessionWorkspaces) Get(sessionID string) *FakeWorkspace {
+	ws, _ := f.Workspace(context.Background(), sessionID)
+	fw, _ := ws.(*FakeWorkspace)
+	return fw
 }
 
 // ---------------------------------------------------------------------------

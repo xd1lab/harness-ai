@@ -33,8 +33,10 @@
 //   - Its deny-by-default posture remains in force even under
 //     [policy.ModeBypass] (architecture §8.13); bypass collapses the
 //     allow/deny/ask pipeline, never this infra allowlist.
-//   - It fails closed (deny) on any ambiguity — an absent session policy, an
-//     empty allowlist, or a nil allowlist all mean deny-all.
+//   - It fails closed (deny) on any ambiguity — an empty or nil allowlist means
+//     deny-all. A session with no explicit policy falls back to the
+//     operator-configured DEFAULT allowlist ([WithDefaultAllowedHosts]); with no
+//     default configured that fallback is itself deny-all.
 //   - AllowedHosts entries support one-level wildcard prefix ("*.example.com")
 //     that matches exactly one subdomain label. Deeper nesting and apex matches
 //     are never granted by a wildcard entry; callers must add those explicitly.
@@ -87,27 +89,49 @@ type Decision struct {
 // Broker is the concrete [app.EgressBroker] implementation.
 // Construct it with [New].
 type Broker struct {
-	mu        sync.RWMutex
-	policies  map[string]app.EgressPolicy // keyed by SessionID
-	decisions map[string][]Decision       // keyed by SessionID
+	mu           sync.RWMutex
+	policies     map[string]app.EgressPolicy // keyed by SessionID
+	decisions    map[string][]Decision       // keyed by SessionID
+	defaultHosts []string                    // operator default for sessions with no policy
 }
 
-// New returns a new deny-by-default [Broker] with no policies installed.
-// An empty broker denies all hosts for all sessions.
-func New() *Broker {
-	return &Broker{
+// Option configures a [Broker] at construction.
+type Option func(*Broker)
+
+// WithDefaultAllowedHosts installs the operator-configured DEFAULT allowlist:
+// it governs every session that has no explicit per-session policy installed
+// via [Broker.SetPolicy]. Sessions arrive implicitly with each tool call, so
+// the operator's allowlist cannot be pre-installed per session at startup —
+// this default is how operator config reaches every session. An empty or nil
+// hosts slice preserves deny-all (the safe default). Like SetPolicy it is
+// operator-driven configuration, never model-driven (architecture §8.4).
+func WithDefaultAllowedHosts(hosts []string) Option {
+	return func(b *Broker) { b.defaultHosts = hosts }
+}
+
+// New returns a new deny-by-default [Broker] with no per-session policies
+// installed. With no options an empty broker denies all hosts for all sessions.
+func New(opts ...Option) *Broker {
+	b := &Broker{
 		policies:  make(map[string]app.EgressPolicy),
 		decisions: make(map[string][]Decision),
 	}
+	for _, o := range opts {
+		o(b)
+	}
+	return b
 }
 
 // Allow reports whether sessionID may make an outbound connection to host
 // under the session's current [app.EgressPolicy].
 //
-// The default (when no policy is installed, or when the allowlist is empty or
-// nil) is deny: Allow returns false. A denied decision surfaces to the calling
-// tool as an error observation so the model is informed it was blocked (per
-// FR-TOOL-06 AC-1; architecture §8.4).
+// A session with an explicitly installed policy is governed by that policy
+// alone (an explicit empty allowlist is a deliberate deny-all tighten). A
+// session with NO installed policy falls back to the operator default
+// allowlist ([WithDefaultAllowedHosts]); when that too is empty or nil the
+// result is deny: Allow returns false. A denied decision surfaces to the
+// calling tool as an error observation so the model is informed it was blocked
+// (per FR-TOOL-06 AC-1; architecture §8.4).
 //
 // The decision (allowed or denied) is appended to the session's audit log and
 // is retrievable via [Broker.Decisions].
@@ -115,8 +139,11 @@ func (b *Broker) Allow(_ context.Context, sessionID, host string) (bool, error) 
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	policy, ok := b.policies[sessionID]
-	allowed := ok && matchesPolicy(host, policy.AllowedHosts)
+	hosts := b.defaultHosts
+	if policy, ok := b.policies[sessionID]; ok {
+		hosts = policy.AllowedHosts
+	}
+	allowed := matchesPolicy(host, hosts)
 
 	b.decisions[sessionID] = append(b.decisions[sessionID], Decision{
 		SessionID: sessionID,

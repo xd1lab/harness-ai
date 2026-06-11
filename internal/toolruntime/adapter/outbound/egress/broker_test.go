@@ -255,6 +255,60 @@ func TestBroker_DecisionsEmptyForUnknownSession(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Operator default allowlist (per-session fallback)
+// ---------------------------------------------------------------------------
+
+// TestBroker_DefaultAllowlistAppliesToAnySession verifies that an operator-
+// configured default allowlist (WithDefaultAllowedHosts) governs EVERY session
+// that has no explicit policy installed — sessions arrive implicitly with each
+// ExecuteTool call, so per-session policy cannot be pre-installed at startup.
+func TestBroker_DefaultAllowlistAppliesToAnySession(t *testing.T) {
+	b := egress.New(egress.WithDefaultAllowedHosts([]string{"api.example.com", "*.internal.example.com"}))
+
+	allowed, err := b.Allow(ctx, "sess-a", "api.example.com")
+	require.NoError(t, err)
+	assert.True(t, allowed, "default allowlist must apply to a session with no explicit policy")
+
+	allowed, err = b.Allow(ctx, "sess-b", "svc.internal.example.com")
+	require.NoError(t, err)
+	assert.True(t, allowed, "default wildcard must apply to any session")
+
+	allowed, err = b.Allow(ctx, "sess-a", "attacker.tld")
+	require.NoError(t, err)
+	assert.False(t, allowed, "hosts outside the default allowlist stay denied")
+}
+
+// TestBroker_EmptyDefaultStaysDenyAll verifies the safe default is unchanged:
+// no default allowlist configured means deny-all for sessions without a policy.
+func TestBroker_EmptyDefaultStaysDenyAll(t *testing.T) {
+	b := egress.New(egress.WithDefaultAllowedHosts(nil))
+	allowed, err := b.Allow(ctx, "sess-a", "api.example.com")
+	require.NoError(t, err)
+	assert.False(t, allowed, "empty default allowlist must deny all")
+}
+
+// TestBroker_ExplicitSessionPolicyOverridesDefault verifies that an explicitly
+// installed per-session policy takes precedence over the operator default —
+// including an explicit EMPTY policy, which is a deliberate deny-all tighten.
+func TestBroker_ExplicitSessionPolicyOverridesDefault(t *testing.T) {
+	b := egress.New(egress.WithDefaultAllowedHosts([]string{"api.example.com"}))
+	require.NoError(t, b.SetPolicy(ctx, app.EgressPolicy{SessionID: "locked", AllowedHosts: nil}))
+	require.NoError(t, b.SetPolicy(ctx, app.EgressPolicy{SessionID: "widened", AllowedHosts: []string{"other.example.com"}}))
+
+	allowed, err := b.Allow(ctx, "locked", "api.example.com")
+	require.NoError(t, err)
+	assert.False(t, allowed, "an explicit empty policy is a deliberate deny-all override")
+
+	allowed, err = b.Allow(ctx, "widened", "other.example.com")
+	require.NoError(t, err)
+	assert.True(t, allowed, "explicit session policy must govern that session")
+
+	allowed, err = b.Allow(ctx, "widened", "api.example.com")
+	require.NoError(t, err)
+	assert.False(t, allowed, "explicit session policy replaces (not merges with) the default")
+}
+
+// ---------------------------------------------------------------------------
 // Concurrency safety
 // ---------------------------------------------------------------------------
 

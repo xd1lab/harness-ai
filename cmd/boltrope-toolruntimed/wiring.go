@@ -39,11 +39,6 @@ import (
 
 const serviceName = "tool-runtime"
 
-// defaultSessionID is the v1 single-session sandbox key the native tools' routing
-// workspace binds to (see workspace.go). The dedup ledger and egress broker
-// remain per-(tenant,session) keyed independently.
-const defaultSessionID = "tool-runtime"
-
 // toolSettings are the tool-runtime-specific knobs read from the environment.
 type toolSettings struct {
 	// DockerBin overrides the docker CLI binary name (default "docker").
@@ -107,12 +102,12 @@ func envOr(key, def string) string {
 // path; the daemon's [buildToolRuntime] reuses one shared set. It is kept
 // separate so the registry can be unit-tested in isolation.
 func buildRegistry(ts toolSettings) (*registry.Registry, error) {
-	broker, policy := buildEgress(ts)
+	broker := buildEgress(ts)
 	rt, err := buildRuntime(ts)
 	if err != nil {
 		return nil, err
 	}
-	ws := newRoutingWorkspace(rt, defaultSessionID, policy)
+	ws := newSessionWorkspaces(rt, ts.EgressAllowlist)
 	reg := newRegistry(ts)
 	if err := registerNative(reg, ws, broker); err != nil {
 		return nil, err
@@ -120,26 +115,23 @@ func buildRegistry(ts toolSettings) (*registry.Registry, error) {
 	return reg, nil
 }
 
-// buildEgress constructs the deny-by-default egress [egress.Broker] and installs
-// the operator-configured [app.EgressPolicy] for the v1 single session via
-// [egress.Broker.SetPolicy]. This is the wiring seam that lets an operator widen
-// egress from config (BOLTROPE_TOOLRT_EGRESS_ALLOWLIST): with no allowlist the
-// policy is empty and the broker denies all hosts (the safe default). It returns
-// both the broker and the installed policy so the routing workspace binds the
-// SAME policy the broker enforces.
+// buildEgress constructs the deny-by-default egress [egress.Broker] with the
+// operator-configured allowlist as its DEFAULT policy for every session. This
+// is the wiring seam that lets an operator widen egress from config
+// (BOLTROPE_TOOLRT_EGRESS_ALLOWLIST): sessions arrive implicitly with each
+// ExecuteTool call, so the default — not a pre-installed per-session policy —
+// is how the config reaches them; with no allowlist the broker denies all
+// hosts for all sessions (the safe default). The session workspace router
+// stamps the SAME allowlist onto each session's sandbox EgressPolicy (see
+// sessionWorkspaces), so the workspace policy and broker decisions agree.
 //
 // In v1 this is the POLICY layer only: the per-session sandbox runs with
 // --network none by default (the network namespace is the actual containment;
 // architecture §8.4), so an allowlist installed here does not by itself grant a
 // network path — gating allowlisted egress additionally requires the egress-proxy
 // network path (roadmap; ADR-0003).
-func buildEgress(ts toolSettings) (*egress.Broker, app.EgressPolicy) {
-	broker := egress.New()
-	policy := app.EgressPolicy{SessionID: defaultSessionID, AllowedHosts: ts.EgressAllowlist}
-	// SetPolicy on an empty allowlist is a deliberate deny-all install; Broker
-	// never returns an error from SetPolicy, so the daemon proceeds.
-	_ = broker.SetPolicy(context.Background(), policy)
-	return broker, policy
+func buildEgress(ts toolSettings) *egress.Broker {
+	return egress.New(egress.WithDefaultAllowedHosts(ts.EgressAllowlist))
 }
 
 // buildRuntime constructs the container [runtime.Runtime] with conservative
@@ -169,9 +161,10 @@ func newRegistry(ts toolSettings) *registry.Registry {
 	return registry.New(mcpSource{client: client})
 }
 
-// registerNative registers every native tool (bound to ws + broker) into reg,
-// returning the first registration error.
-func registerNative(reg *registry.Registry, ws app.Workspace, broker app.EgressBroker) error {
+// registerNative registers every native tool (bound to the per-session
+// workspace router ws + broker) into reg, returning the first registration
+// error.
+func registerNative(reg *registry.Registry, ws app.SessionWorkspaces, broker app.EgressBroker) error {
 	for _, tool := range tools.Native(ws, broker) {
 		if err := reg.Register(context.Background(), tool); err != nil {
 			return fmt.Errorf("toolruntimed: register native tool %q: %w", tool.Spec().Name, err)
@@ -181,22 +174,24 @@ func registerNative(reg *registry.Registry, ws app.Workspace, broker app.EgressB
 }
 
 // buildToolRuntime wires the full tool-runtime: a shared container runtime + the
-// deny-by-default egress broker back both the native tools' routing workspace and
-// the ExecuteTool use-case; the durable pgx dedup ledger and the filesystem blob
-// store complete the dependency set. It returns the ExecuteTool service, the
-// registry (for ListTools), and the shutdown closers (the dedup pool).
-func buildToolRuntime(cfg *config.Config, ts toolSettings) (*execute.Service, *registry.Registry, []func() error, error) {
-	broker, policy := buildEgress(ts)
+// deny-by-default egress broker back both the native tools' per-session
+// workspace router and the ExecuteTool use-case; the durable pgx dedup ledger
+// and the filesystem blob store complete the dependency set. It returns the
+// ExecuteTool service, the registry (for ListTools), the container runtime (so
+// Run can start the §10.6 sandbox lifecycle reaper), and the shutdown closers
+// (the dedup pool and the runtime, which destroys any live sandboxes).
+func buildToolRuntime(cfg *config.Config, ts toolSettings) (*execute.Service, *registry.Registry, *runtime.Runtime, []func() error, error) {
+	broker := buildEgress(ts)
 
 	rt, err := buildRuntime(ts)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
-	ws := newRoutingWorkspace(rt, defaultSessionID, policy)
+	ws := newSessionWorkspaces(rt, ts.EgressAllowlist)
 	reg := newRegistry(ts)
 	if err := registerNative(reg, ws, broker); err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	// The durable dedup ledger over the event-store database (the tool_executions
@@ -204,7 +199,7 @@ func buildToolRuntime(cfg *config.Config, ts toolSettings) (*execute.Service, *r
 	// blocks on Postgres; readiness gates on reachability instead.
 	dedupPool, err := dedup.NewSimplePool(cfg.Postgres.DSN)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("toolruntimed: build dedup pool: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("toolruntimed: build dedup pool: %w", err)
 	}
 	dedupStore := dedup.New(dedupPool)
 
@@ -218,13 +213,18 @@ func buildToolRuntime(cfg *config.Config, ts toolSettings) (*execute.Service, *r
 		Blobs:    blobs,
 	})
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("toolruntimed: build execute service: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("toolruntimed: build execute service: %w", err)
 	}
 
 	closers := []func() error{
 		func() error { dedupPool.Close(); return nil },
+		// Destroy live sandboxes on shutdown so containers do not outlive the
+		// daemon (resume re-Creates a fresh workspace; ADR-0012 clean-workspace
+		// resume). Any container that still escapes (crash) is reclaimed by
+		// ReconcileOrphans on the next start.
+		func() error { return rt.Close(context.Background()) },
 	}
-	return svc, reg, closers, nil
+	return svc, reg, rt, closers, nil
 }
 
 // Run wires the tool-runtime and serves it until ctx is cancelled or a signal
@@ -237,12 +237,22 @@ func Run(ctx context.Context, cfg *config.Config, logw io.Writer) error {
 	}
 
 	ts := loadToolSettings()
-	svc, reg, closers, err := buildToolRuntime(cfg, ts)
+	svc, reg, rt, closers, err := buildToolRuntime(cfg, ts)
 	if err != nil {
 		_ = tel.Shutdown(ctx)
 		return err
 	}
 	server := trgrpc.NewServer(svc, reg)
+
+	// Sandbox lifecycle manager (architecture §10.6): with per-session sandboxes
+	// the daemon MUST reclaim them or live containers accumulate to the MaxLive
+	// backpressure cap. First reconcile orphans left by a prior process (best-
+	// effort: Docker may not be reachable yet — readiness gates separately),
+	// then run the idle/absolute-TTL reaper until shutdown.
+	go func() {
+		_, _ = rt.ReconcileOrphans(ctx)
+		rt.RunReaper(ctx)
+	}()
 
 	credsCfg, err := serverCredsConfig(ts.TrustDomain, cfg, tel)
 	if err != nil {

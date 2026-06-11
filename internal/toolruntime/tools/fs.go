@@ -49,15 +49,16 @@ func optStringArg(args map[string]any, key, def string) (val string, ok bool) {
 // read
 // ---------------------------------------------------------------------------
 
-// ReadTool reads a file from the session workspace. It is read-only with no
-// network egress and is eligible for the orchestrator's bounded read-only pool
-// (architecture §9.2).
+// ReadTool reads a file from the calling session's workspace. It is read-only
+// with no network egress and is eligible for the orchestrator's bounded
+// read-only pool (architecture §9.2).
 type ReadTool struct {
-	ws app.Workspace
+	ws app.SessionWorkspaces
 }
 
-// NewReadTool returns a [ReadTool] backed by ws.
-func NewReadTool(ws app.Workspace) *ReadTool { return &ReadTool{ws: ws} }
+// NewReadTool returns a [ReadTool] that resolves the calling session's
+// workspace through ws.
+func NewReadTool(ws app.SessionWorkspaces) *ReadTool { return &ReadTool{ws: ws} }
 
 // Spec returns the read tool's declaration.
 func (t *ReadTool) Spec() domain.ToolSpec {
@@ -77,15 +78,19 @@ func (t *ReadTool) Spec() domain.ToolSpec {
 	}
 }
 
-// Execute reads the file at args["path"] via the workspace and returns its
-// contents. A read failure (e.g. missing file) is reported as an error
-// observation, not a Go error.
-func (t *ReadTool) Execute(ctx context.Context, _ string, args map[string]any) (domain.Observation, error) {
+// Execute reads the file at args["path"] via the calling session's workspace
+// and returns its contents. A read failure (e.g. missing file) is reported as
+// an error observation, not a Go error.
+func (t *ReadTool) Execute(ctx context.Context, sessionID string, args map[string]any) (domain.Observation, error) {
 	path, ok := stringArg(args, "path")
 	if !ok || path == "" {
 		return errObs("read: required string field %q is missing", "path"), nil
 	}
-	data, err := t.ws.Read(ctx, path)
+	ws, err := t.ws.Workspace(ctx, sessionID)
+	if err != nil {
+		return errObs("read: %v", err), nil
+	}
+	data, err := ws.Read(ctx, path)
 	if err != nil {
 		return errObs("read: %v", err), nil
 	}
@@ -96,14 +101,15 @@ func (t *ReadTool) Execute(ctx context.Context, _ string, args map[string]any) (
 // write
 // ---------------------------------------------------------------------------
 
-// WriteTool creates or overwrites a file in the session workspace. It is a
-// mutating tool (serialized per session) with no network egress.
+// WriteTool creates or overwrites a file in the calling session's workspace.
+// It is a mutating tool (serialized per session) with no network egress.
 type WriteTool struct {
-	ws app.Workspace
+	ws app.SessionWorkspaces
 }
 
-// NewWriteTool returns a [WriteTool] backed by ws.
-func NewWriteTool(ws app.Workspace) *WriteTool { return &WriteTool{ws: ws} }
+// NewWriteTool returns a [WriteTool] that resolves the calling session's
+// workspace through ws.
+func NewWriteTool(ws app.SessionWorkspaces) *WriteTool { return &WriteTool{ws: ws} }
 
 // Spec returns the write tool's declaration.
 func (t *WriteTool) Spec() domain.ToolSpec {
@@ -124,8 +130,9 @@ func (t *WriteTool) Spec() domain.ToolSpec {
 	}
 }
 
-// Execute writes args["content"] to args["path"] via the workspace.
-func (t *WriteTool) Execute(ctx context.Context, _ string, args map[string]any) (domain.Observation, error) {
+// Execute writes args["content"] to args["path"] via the calling session's
+// workspace.
+func (t *WriteTool) Execute(ctx context.Context, sessionID string, args map[string]any) (domain.Observation, error) {
 	path, ok := stringArg(args, "path")
 	if !ok || path == "" {
 		return errObs("write: required string field %q is missing", "path"), nil
@@ -134,7 +141,11 @@ func (t *WriteTool) Execute(ctx context.Context, _ string, args map[string]any) 
 	if !ok {
 		return errObs("write: required string field %q is missing", "content"), nil
 	}
-	if err := t.ws.Write(ctx, path, []byte(content)); err != nil {
+	ws, err := t.ws.Workspace(ctx, sessionID)
+	if err != nil {
+		return errObs("write: %v", err), nil
+	}
+	if err := ws.Write(ctx, path, []byte(content)); err != nil {
 		return errObs("write: %v", err), nil
 	}
 	return domain.Observation{Content: fmt.Sprintf("wrote %d bytes to %s", len(content), path)}, nil
@@ -144,15 +155,17 @@ func (t *WriteTool) Execute(ctx context.Context, _ string, args map[string]any) 
 // edit
 // ---------------------------------------------------------------------------
 
-// EditTool performs an exact string replacement in a workspace file: it reads the
-// file, replaces an occurrence of old_string with new_string, and writes it back.
-// It is a mutating tool (serialized per session) with no network egress.
+// EditTool performs an exact string replacement in a file of the calling
+// session's workspace: it reads the file, replaces an occurrence of old_string
+// with new_string, and writes it back. It is a mutating tool (serialized per
+// session) with no network egress.
 type EditTool struct {
-	ws app.Workspace
+	ws app.SessionWorkspaces
 }
 
-// NewEditTool returns an [EditTool] backed by ws.
-func NewEditTool(ws app.Workspace) *EditTool { return &EditTool{ws: ws} }
+// NewEditTool returns an [EditTool] that resolves the calling session's
+// workspace through ws.
+func NewEditTool(ws app.SessionWorkspaces) *EditTool { return &EditTool{ws: ws} }
 
 // Spec returns the edit tool's declaration.
 func (t *EditTool) Spec() domain.ToolSpec {
@@ -180,7 +193,7 @@ func (t *EditTool) Spec() domain.ToolSpec {
 // requiring a unique match), and writes the result back. Mismatches (file
 // missing, old_string absent, or non-unique without replace_all) are reported as
 // error observations.
-func (t *EditTool) Execute(ctx context.Context, _ string, args map[string]any) (domain.Observation, error) {
+func (t *EditTool) Execute(ctx context.Context, sessionID string, args map[string]any) (domain.Observation, error) {
 	path, ok := stringArg(args, "path")
 	if !ok || path == "" {
 		return errObs("edit: required string field %q is missing", "path"), nil
@@ -195,7 +208,11 @@ func (t *EditTool) Execute(ctx context.Context, _ string, args map[string]any) (
 	}
 	replaceAll, _ := args["replace_all"].(bool)
 
-	data, err := t.ws.Read(ctx, path)
+	ws, err := t.ws.Workspace(ctx, sessionID)
+	if err != nil {
+		return errObs("edit: %v", err), nil
+	}
+	data, err := ws.Read(ctx, path)
 	if err != nil {
 		return errObs("edit: %v", err), nil
 	}
@@ -214,7 +231,7 @@ func (t *EditTool) Execute(ctx context.Context, _ string, args map[string]any) (
 	} else {
 		updated = strings.Replace(content, oldStr, newStr, 1)
 	}
-	if err := t.ws.Write(ctx, path, []byte(updated)); err != nil {
+	if err := ws.Write(ctx, path, []byte(updated)); err != nil {
 		return errObs("edit: %v", err), nil
 	}
 	return domain.Observation{Content: fmt.Sprintf("edited %s (%d replacement(s))", path, count)}, nil

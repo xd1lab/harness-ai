@@ -130,6 +130,22 @@ type Workspace interface {
 	NetworkPolicy(ctx context.Context) (EgressPolicy, error)
 }
 
+// SessionWorkspaces resolves the per-session [Workspace] a tool call runs in.
+// The native tools bind to it at registry-build time and resolve the CALLING
+// session's own sandbox on every execution from the session id the
+// [github.com/xd1lab/harness-ai/internal/toolruntime/domain.Tool] Execute
+// contract carries. This is the routing seam that keeps tool construction
+// session-agnostic while guaranteeing every execution lands in the calling
+// session's own sandbox — never a shared one (per-session isolation is the v1
+// containment boundary; architecture §2.2, §5.3, §8.4).
+type SessionWorkspaces interface {
+	// Workspace returns sessionID's live workspace, provisioning it on first
+	// use. It MUST fail (rather than fall back to any shared workspace) when
+	// sessionID is empty or the workspace cannot be provisioned — a shared
+	// fallback would silently break cross-session isolation.
+	Workspace(ctx context.Context, sessionID string) (Workspace, error)
+}
+
 // RuntimePort manages the lifecycle of per-session [Workspace] sandboxes (architecture
 // §5.3 sandboxmgr, §10.6). The sandboxmgr enforces idle/absolute TTLs and a
 // max-live cap and reaps sandboxes whose session is finished/failed/abandoned

@@ -12,6 +12,7 @@ import (
 
 	"github.com/xd1lab/harness-ai/internal/platform/config"
 	"github.com/xd1lab/harness-ai/internal/toolruntime/app"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/app/truntimetest"
 )
 
 func baseConfig(t *testing.T) *config.Config {
@@ -52,14 +53,17 @@ func TestBuildRegistry_RegistersNativeTools(t *testing.T) {
 // error — the full tool-runtime dependency graph (T-TR-07).
 func TestBuildExecuteService_Constructs(t *testing.T) {
 	cfg := baseConfig(t)
-	svc, reg, closers, err := buildToolRuntime(cfg, toolSettings{})
+	svc, reg, rt, closers, err := buildToolRuntime(cfg, toolSettings{})
 	require.NoError(t, err)
 	require.NotNil(t, svc)
 	require.NotNil(t, reg)
-	// Closers (the dedup pool) must be returned for shutdown.
+	require.NotNil(t, rt, "the container runtime must be returned so Run can start the §10.6 reaper")
+	// Closers (the dedup pool + the runtime) must be returned for shutdown.
 	assert.NotEmpty(t, closers)
 	for _, c := range closers {
-		_ = c() // closing a never-connected SimplePool is a no-op and must not panic.
+		// Closing a never-connected SimplePool / a runtime with no live sandboxes
+		// is a no-op and must not panic.
+		_ = c()
 	}
 }
 
@@ -129,53 +133,110 @@ func TestLoadToolSettings_EgressAllowlist(t *testing.T) {
 }
 
 // TestBuildEgress_DenyAllByDefault asserts that with no configured allowlist the
-// broker denies every host for the default session (deny-by-default), proving an
-// unconfigured deployment has no egress policy installed that would permit a host.
+// broker denies every host for EVERY session (deny-by-default), proving an
+// unconfigured deployment has no egress policy that would permit a host.
 func TestBuildEgress_DenyAllByDefault(t *testing.T) {
-	broker, policy := buildEgress(toolSettings{})
+	broker := buildEgress(toolSettings{})
 	require.NotNil(t, broker)
-	assert.Equal(t, defaultSessionID, policy.SessionID)
-	assert.Empty(t, policy.AllowedHosts)
 
-	allowed, err := broker.Allow(context.Background(), defaultSessionID, "api.example.com")
-	require.NoError(t, err)
-	assert.False(t, allowed, "unconfigured broker must deny all egress")
+	for _, sid := range []string{"sess-a", "sess-b"} {
+		allowed, err := broker.Allow(context.Background(), sid, "api.example.com")
+		require.NoError(t, err)
+		assert.False(t, allowed, "unconfigured broker must deny all egress for session %q", sid)
+	}
 }
 
-// TestBuildEgress_InstallsConfiguredAllowlist asserts that a configured allowlist
-// is installed on the broker via SetPolicy in the wiring (not just tests), so an
-// operator CAN permit egress to the listed hosts while everything else stays denied.
-func TestBuildEgress_InstallsConfiguredAllowlist(t *testing.T) {
+// TestBuildEgress_ConfiguredAllowlistGovernsEverySession asserts that the
+// operator-configured allowlist is the broker's default policy for ANY session —
+// sessions arrive implicitly with each ExecuteTool call, so the wiring cannot
+// pre-install per-session policies at startup. Hosts outside it stay denied.
+func TestBuildEgress_ConfiguredAllowlistGovernsEverySession(t *testing.T) {
 	ts := toolSettings{EgressAllowlist: []string{"api.example.com", "*.internal.example.com"}}
-	broker, policy := buildEgress(ts)
+	broker := buildEgress(ts)
 	require.NotNil(t, broker)
-	assert.Equal(t, defaultSessionID, policy.SessionID)
-	assert.Equal(t, ts.EgressAllowlist, policy.AllowedHosts)
 
 	ctx := context.Background()
-	allowed, err := broker.Allow(ctx, defaultSessionID, "api.example.com")
-	require.NoError(t, err)
-	assert.True(t, allowed, "configured exact host must be allowed")
+	for _, sid := range []string{"sess-a", "sess-b"} {
+		allowed, err := broker.Allow(ctx, sid, "api.example.com")
+		require.NoError(t, err)
+		assert.True(t, allowed, "configured exact host must be allowed for session %q", sid)
 
-	allowed, err = broker.Allow(ctx, defaultSessionID, "svc.internal.example.com")
-	require.NoError(t, err)
-	assert.True(t, allowed, "configured wildcard host must be allowed")
+		allowed, err = broker.Allow(ctx, sid, "svc.internal.example.com")
+		require.NoError(t, err)
+		assert.True(t, allowed, "configured wildcard host must be allowed for session %q", sid)
 
-	allowed, err = broker.Allow(ctx, defaultSessionID, "attacker.tld")
-	require.NoError(t, err)
-	assert.False(t, allowed, "host outside the allowlist must stay denied")
+		allowed, err = broker.Allow(ctx, sid, "attacker.tld")
+		require.NoError(t, err)
+		assert.False(t, allowed, "host outside the allowlist must stay denied for session %q", sid)
+	}
 }
 
-// TestBuildEgress_PolicyMatchesWorkspaceBinding asserts the egress policy returned
-// by buildEgress (and thus bound to the routing workspace) carries the same
-// allowlist installed on the broker — the workspace's NetworkPolicy and the broker
-// agree on the configured hosts for the session.
-func TestBuildEgress_PolicyMatchesWorkspaceBinding(t *testing.T) {
-	ts := toolSettings{EgressAllowlist: []string{"api.example.com"}}
-	_, policy := buildEgress(ts)
+// ---- per-session sandbox routing (architecture §2.2, §5.3) ----------------
 
-	ws := newRoutingWorkspace(nil, defaultSessionID, policy)
-	got, err := ws.NetworkPolicy(context.Background())
+// TestSessionWorkspaces_RoutesPerSession is the X-03 regression test: tool
+// calls from DIFFERENT sessions must land in DIFFERENT sandboxes — never one
+// shared container. The router must provision (and key) a workspace per
+// session id, so /workspace state never leaks across sessions.
+func TestSessionWorkspaces_RoutesPerSession(t *testing.T) {
+	ctx := context.Background()
+	rt := truntimetest.NewFakeRuntimePort()
+	router := newSessionWorkspaces(rt, nil)
+
+	wsA, err := router.Workspace(ctx, "sess-a")
 	require.NoError(t, err)
-	assert.Equal(t, app.EgressPolicy{SessionID: defaultSessionID, AllowedHosts: []string{"api.example.com"}}, got)
+	wsB, err := router.Workspace(ctx, "sess-b")
+	require.NoError(t, err)
+
+	// State written through session A's workspace must be invisible to B's.
+	require.NoError(t, wsA.Write(ctx, "/workspace/hello.txt", []byte("A's secret")))
+	_, err = wsB.Read(ctx, "/workspace/hello.txt")
+	require.Error(t, err, "session B must not see session A's files (cross-session isolation)")
+
+	// The runtime must have been asked for one workspace PER session id.
+	require.NotNil(t, rt.WorkspaceFor("sess-a"))
+	require.NotNil(t, rt.WorkspaceFor("sess-b"))
+}
+
+// TestSessionWorkspaces_ReusesLiveWorkspace asserts a second call for the same
+// session re-attaches to the SAME live workspace (no destructive re-Create —
+// runtime.Create tears down an existing container for clean-workspace resume,
+// so the router must Get before Create).
+func TestSessionWorkspaces_ReusesLiveWorkspace(t *testing.T) {
+	ctx := context.Background()
+	rt := truntimetest.NewFakeRuntimePort()
+	router := newSessionWorkspaces(rt, nil)
+
+	ws1, err := router.Workspace(ctx, "sess-a")
+	require.NoError(t, err)
+	require.NoError(t, ws1.Write(ctx, "/workspace/state.txt", []byte("alive")))
+
+	ws2, err := router.Workspace(ctx, "sess-a")
+	require.NoError(t, err)
+	got, err := ws2.Read(ctx, "/workspace/state.txt")
+	require.NoError(t, err, "same session must re-attach to its live workspace, not a fresh one")
+	assert.Equal(t, "alive", string(got))
+}
+
+// TestSessionWorkspaces_EmptySessionIDFailsClosed asserts the router refuses an
+// empty session id instead of falling back to any shared sandbox key (the exact
+// failure mode of the old defaultSessionID binding).
+func TestSessionWorkspaces_EmptySessionIDFailsClosed(t *testing.T) {
+	router := newSessionWorkspaces(truntimetest.NewFakeRuntimePort(), nil)
+	_, err := router.Workspace(context.Background(), "")
+	require.Error(t, err, "empty session id must be refused, never routed to a shared sandbox")
+}
+
+// TestSessionWorkspaces_StampsOperatorAllowlist asserts each session's sandbox
+// is created with the operator-configured egress allowlist on ITS OWN session-
+// scoped policy, so the workspace's NetworkPolicy and the broker default agree.
+func TestSessionWorkspaces_StampsOperatorAllowlist(t *testing.T) {
+	ctx := context.Background()
+	rt := truntimetest.NewFakeRuntimePort()
+	router := newSessionWorkspaces(rt, []string{"api.example.com"})
+
+	ws, err := router.Workspace(ctx, "sess-a")
+	require.NoError(t, err)
+	got, err := ws.NetworkPolicy(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, app.EgressPolicy{SessionID: "sess-a", AllowedHosts: []string{"api.example.com"}}, got)
 }
