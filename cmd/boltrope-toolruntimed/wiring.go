@@ -31,6 +31,7 @@ import (
 	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/outbound/egress"
 	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/outbound/mcp"
 	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/outbound/runtime"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/outbound/sessionstatus"
 	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/registry"
 	"github.com/xd1lab/harness-ai/internal/toolruntime/app"
 	"github.com/xd1lab/harness-ai/internal/toolruntime/app/execute"
@@ -135,9 +136,11 @@ func buildEgress(ts toolSettings) *egress.Broker {
 }
 
 // buildRuntime constructs the container [runtime.Runtime] with conservative
-// defaults overlaid by ts. The docker CLI is invoked lazily on first Create, so
-// this never probes for Docker (readiness does, separately).
-func buildRuntime(ts toolSettings) (*runtime.Runtime, error) {
+// defaults overlaid by ts, plus any extra options (the daemon passes the
+// session-status authority; the standalone registry path passes none). The
+// docker CLI is invoked lazily on first Create, so this never probes for
+// Docker (readiness does, separately).
+func buildRuntime(ts toolSettings, opts ...runtime.Option) (*runtime.Runtime, error) {
 	cfg := runtime.DefaultConfig()
 	if ts.DockerBin != "" {
 		cfg.DockerBin = ts.DockerBin
@@ -145,11 +148,26 @@ func buildRuntime(ts toolSettings) (*runtime.Runtime, error) {
 	if ts.Image != "" {
 		cfg.Image = ts.Image
 	}
-	rt, err := runtime.New(cfg)
+	rt, err := runtime.New(cfg, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("toolruntimed: build container runtime: %w", err)
 	}
 	return rt, nil
+}
+
+// buildSessionStatus builds the reaper's session-status authority (architecture
+// §10.6): a [sessionstatus.Lookup] over the same event-store DSN the dedup
+// ledger uses, calling the migration-0005 SECURITY DEFINER function so the
+// RLS-bound app role can resolve a session's status without a tenant principal
+// (the reaper has none). The returned closer releases the pool. Lookup
+// failures at sweep time are fail-safe (retain → TTL fallback), but a DSN that
+// cannot even parse is a fatal wiring error.
+func buildSessionStatus(cfg *config.Config) (runtime.SessionStatusFunc, func() error, error) {
+	pool, err := sessionstatus.NewSimplePool(cfg.Postgres.DSN)
+	if err != nil {
+		return nil, nil, fmt.Errorf("toolruntimed: build session-status pool: %w", err)
+	}
+	return sessionstatus.New(pool).Status, func() error { pool.Close(); return nil }, nil
 }
 
 // newRegistry builds an empty registry with an optional lazy MCP source.
@@ -183,8 +201,17 @@ func registerNative(reg *registry.Registry, ws app.SessionWorkspaces, broker app
 func buildToolRuntime(cfg *config.Config, ts toolSettings) (*execute.Service, *registry.Registry, *runtime.Runtime, []func() error, error) {
 	broker := buildEgress(ts)
 
-	rt, err := buildRuntime(ts)
+	// The session-status authority arms the reaper's immediate reclamation of
+	// finished/failed sessions' sandboxes (architecture §10.6); without it only
+	// the TTLs reap.
+	statusFn, closeStatus, err := buildSessionStatus(cfg)
 	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+
+	rt, err := buildRuntime(ts, runtime.WithSessionStatus(statusFn))
+	if err != nil {
+		_ = closeStatus()
 		return nil, nil, nil, nil, err
 	}
 
@@ -217,6 +244,7 @@ func buildToolRuntime(cfg *config.Config, ts toolSettings) (*execute.Service, *r
 	}
 
 	closers := []func() error{
+		closeStatus,
 		func() error { dedupPool.Close(); return nil },
 		// Destroy live sandboxes on shutdown so containers do not outlive the
 		// daemon (resume re-Creates a fresh workspace; ADR-0012 clean-workspace
@@ -248,7 +276,9 @@ func Run(ctx context.Context, cfg *config.Config, logw io.Writer) error {
 	// the daemon MUST reclaim them or live containers accumulate to the MaxLive
 	// backpressure cap. First reconcile orphans left by a prior process (best-
 	// effort: Docker may not be reachable yet — readiness gates separately),
-	// then run the idle/absolute-TTL reaper until shutdown.
+	// then run the reaper until shutdown: ended sessions are reclaimed
+	// immediately via the sessions-table status lookup, with the idle/absolute
+	// TTLs as the fail-safe backstop.
 	go func() {
 		_, _ = rt.ReconcileOrphans(ctx)
 		rt.RunReaper(ctx)

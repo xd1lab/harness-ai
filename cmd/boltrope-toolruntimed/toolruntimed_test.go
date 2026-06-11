@@ -240,3 +240,23 @@ func TestSessionWorkspaces_StampsOperatorAllowlist(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, app.EgressPolicy{SessionID: "sess-a", AllowedHosts: []string{"api.example.com"}}, got)
 }
+
+// TestBuildSessionStatus_ValidDSNReturnsLookup asserts the daemon constructs a
+// session-status authority for the reaper from the event-store DSN: a nil
+// SessionStatusFunc would silently degrade §10.6 to TTL-only reaping.
+func TestBuildSessionStatus_ValidDSNReturnsLookup(t *testing.T) {
+	statusFn, closeStatus, err := buildSessionStatus(baseConfig(t))
+	require.NoError(t, err)
+	require.NotNil(t, statusFn, "the reaper must get a session-status authority (architecture §10.6)")
+	require.NoError(t, closeStatus())
+}
+
+// TestBuildSessionStatus_MalformedDSNFails asserts a bad DSN is a fatal wiring
+// error, not a silent TTL-only fallback.
+func TestBuildSessionStatus_MalformedDSNFails(t *testing.T) {
+	cfg := baseConfig(t)
+	cfg.Postgres.DSN = "postgres://u@localhost:not-a-port/db"
+	_, _, err := buildSessionStatus(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "session-status")
+}
