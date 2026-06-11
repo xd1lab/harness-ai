@@ -10,6 +10,8 @@
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/xd1lab/harness-ai/badge)](https://securityscorecards.dev/viewer/?uri=github.com/xd1lab/harness-ai)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
+**English** · [繁體中文](README.zh-Hant.md)
+
 Boltrope turns a stateless LLM completion API into a **stateful, tool-using, self-correcting agent** that you run on your own infrastructure, against any supported hosted or self-hosted model. It is backend-only (no frontend, no proprietary cloud dependency) and built on one idea: the single source of truth is an **append-only, event-sourced log in PostgreSQL**. Session resume, fork, replay, cost accounting, and observability all derive from that log.
 
 **Why another harness?** Most agent frameworks couple the loop to one vendor's SDK, keep session state in process memory, and run tools with unrestricted host access. Boltrope draws three hard boundaries instead: a normalized `Provider` interface so the loop never imports a vendor SDK; a durable event log so a crashed agent resumes deterministically (and is never silently re-billed); and a single sandboxed tool-runtime with deny-by-default egress as the only place model-influenced code runs. Context is treated as a finite resource — actively managed via token accounting, automatic compaction, and prompt caching.
