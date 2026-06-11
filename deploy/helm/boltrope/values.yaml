@@ -1,0 +1,231 @@
+# Boltrope Helm chart — production-posture defaults.
+# ============================================================================
+# This chart FAILS CLOSED at render time (NFR-SEC-01):
+#   * devInsecure.enabled=true refuses to render unless devInsecure.acknowledged
+#     is ALSO true (a cluster must never drift into dev mode by accident).
+#   * With devInsecure disabled (production), spire.enabled must be true and
+#     oidc.issuer must be set — the daemons would refuse to start anyway
+#     (no SPIFFE source → ErrNoServerIdentity; no issuer → refused start), but
+#     the chart surfaces it at install time instead of in CrashLoopBackOff.
+#   * modelGateway.provider is required, and `stub` is rejected in production.
+#
+# The compose stack (deploy/docker-compose.yml) remains the DEV path; this
+# chart is the production kit. Read deploy/README.md → "Production deployment".
+
+# -- Image registry/owner for the release images published by GoReleaser.
+image:
+  registry: ghcr.io/xd1lab
+  # -- Tag for every service image; empty uses the chart appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+  # -- e.g. [{name: ghcr-pull}] for private mirrors; the upstream GHCR images are public.
+  pullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# -- SPIFFE trust domain shared by every workload (architecture §8.1). Must
+# match the SPIRE server's trust_domain.
+trustDomain: boltrope.local
+
+logLevel: info
+
+# Dev-insecure escape hatch (BOLTROPE_DEV_INSECURE; NFR-SEC-01). NEVER for
+# production: static shared-seed dev CA instead of SPIRE, a fixed dev principal
+# instead of OIDC. Rendering with enabled=true REQUIRES acknowledged=true.
+devInsecure:
+  enabled: false
+  acknowledged: false
+  caSeed: boltrope-dev-ca-seed/v1/DO-NOT-USE-IN-PRODUCTION
+
+# SPIRE-issued workload identity (production transport security). The chart
+# does NOT install SPIRE itself — use the official SPIFFE helm-charts-hardened
+# chart; see deploy/k8s/spire/ for the worked example + registration entries.
+spire:
+  enabled: true
+  socket:
+    # -- How pods reach the SPIRE agent Workload API: "csi" mounts the
+    # SPIFFE CSI driver (recommended; default in the SPIFFE helm chart),
+    # "hostPath" mounts the agent's socket directory from the node.
+    mode: csi
+    csiDriver: csi.spiffe.io
+    hostPath: /run/spire/agent-sockets
+    # -- In-container mount point + socket file name; together they form
+    # BOLTROPE_SPIFFE_ENDPOINT_SOCKET=unix://<mountPath>/<socketFile>.
+    mountPath: /spiffe-workload-api
+    socketFile: spire-agent.sock
+
+postgres:
+  # -- PostgreSQL major version pin (NFR-PORT-03; floor is 13).
+  version: "16"
+  # -- REQUIRED. Existing Secret holding the NON-OWNER application-role DSN
+  # (boltrope_app: NOBYPASSRLS, RLS-bound) every service connects with, e.g.
+  # postgres://boltrope_app:...@pg:5432/boltrope?sslmode=verify-full
+  appDSNSecret:
+    name: ""
+    key: dsn
+  # -- Existing Secret holding the OWNER/superuser DSN. Used ONLY by the
+  # migrate hook Job (and the optional grant Job) — never by the services.
+  # Required when migrate.enabled or grant.enabled.
+  ownerDSNSecret:
+    name: ""
+    key: dsn
+
+# One-shot schema-migration gate (NFR-OPS-01/02): a pre-install/pre-upgrade
+# hook Job running the embedded forward-only migrations as the owner role, so
+# no service ever serves against an unmigrated schema.
+migrate:
+  enabled: true
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: "1", memory: 256Mi}
+
+# Optional one-shot provisioning Job (the production counterpart of the
+# compose boltrope-grant): gives the NOLOGIN boltrope_app role a LOGIN
+# credential and registers tenant rows. Most deployments provision both
+# out-of-band through their secrets/DB tooling instead — that is why this is
+# off by default.
+grant:
+  enabled: false
+  image: postgres:16
+  appRole: boltrope_app
+  # -- Existing Secret holding the app role's login password.
+  appPasswordSecret:
+    name: ""
+    key: password
+  # -- Tenant rows to register (id MUST be the UUID your IdP emits as the
+  # token's tenant_id claim; see deploy/README.md "Client-edge auth").
+  tenants: []
+  #  - id: 8a3d2f1e-9c4b-4f6a-b1d2-3e4f5a6b7c8d
+  #    name: acme-corp
+
+# Client-edge OIDC auth on orchestratord (FR-API-03; ADR-0020). REQUIRED in
+# production: startup performs discovery + JWKS fetch and refuses to serve on
+# failure.
+oidc:
+  issuer: ""
+  audience: boltrope
+
+# OpenTelemetry export (optional; an absent collector never blocks a turn).
+otlp:
+  endpoint: ""
+  insecure: false
+
+# Shared blob store (FR-STATE-05): one volume mounted by orchestratord,
+# toolruntimed and projectord — so multi-replica/multi-node scheduling needs a
+# ReadWriteMany storage class (NFS, CephFS, EFS, Azure Files, ...). For a
+# single-node evaluation cluster ReadWriteOnce works if you pin the three
+# blob-mounting pods to one node yourself.
+blobs:
+  existingClaim: ""
+  storageClass: ""
+  accessModes: [ReadWriteMany]
+  size: 10Gi
+  # -- fsGroup applied to every blob-mounting pod so the distroless nonroot
+  # (65532) and the toolruntime's boltrope user can both write the shared
+  # volume through the supplemental group.
+  fsGroup: 65532
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+orchestrator:
+  replicas: 1
+  # -- Model id the loop uses when a session does not specify one.
+  defaultModel: claude-sonnet-4-6
+  subagentMaxDepth: 2
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: "1", memory: 512Mi}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+modelGateway:
+  replicas: 1
+  # -- REQUIRED: anthropic | gemini | openai | openaicompat. The chart refuses
+  # `stub` in production (it is the keyless compose demo provider).
+  provider: ""
+  # -- Existing Secret holding the provider API key, exposed to modelgwd as
+  # env `envName` (the gateway stores only the env-var NAME — NFR-SEC-05 —
+  # and resolves the value through its secrets port at this trust boundary).
+  apiKey:
+    secretName: ""
+    secretKey: api-key
+    envName: ANTHROPIC_API_KEY
+  # -- Base URL for provider=openaicompat (vLLM, Ollama, LM Studio, ...).
+  openaiBaseURL: ""
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: "1", memory: 512Mi}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+toolRuntime:
+  replicas: 1
+  sandbox:
+    # -- Where the per-session sandbox containers run:
+    #    "dind"       — a Docker-in-Docker sidecar in the toolruntimed pod
+    #                   (PRIVILEGED; schedule on a dedicated node pool and
+    #                   read deploy/README.md "Sandbox backend" before use);
+    #    "hostSocket" — the node's Docker socket (docker-out-of-docker;
+    #                   root-equivalent on the node, only for clusters whose
+    #                   runtime IS Docker).
+    mode: dind
+    # -- Image the runtime launches per session (`sleep infinity`, --network
+    # none, hard CPU/memory/pids limits).
+    image: debian:stable-slim
+    dind:
+      image: docker:27-dind
+      resources:
+        requests: {cpu: 250m, memory: 256Mi}
+        limits: {cpu: "2", memory: 2Gi}
+    hostSocket:
+      path: /var/run/docker.sock
+      # -- gid of the node's docker group (`stat -c '%g' /var/run/docker.sock`)
+      # so the non-root toolruntime user can use the socket.
+      dockerGID: ""
+  # -- Egress allowlist POLICY for the broker (deny-by-default when empty).
+  # v1 containment is the sandbox's --network none; see ADR-0003.
+  egressAllowlist: []
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: "1", memory: 512Mi}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+projector:
+  replicas: 1
+  subscription: cost-rollup
+  sweepInterval: 5m
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 500m, memory: 256Mi}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# Ingress for the REST/JSON + SSE facade and health/metrics (orchestratord's
+# HTTP listener). The pod serves PLAINTEXT HTTP — terminate TLS here (or in
+# your mesh); the OIDC bearer token is the request's authentication. The gRPC
+# edge (9000) speaks SPIFFE mTLS and is for in-mesh clients; do not route it
+# through a TLS-terminating ingress.
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  annotations: {}
+  # -- Standard ingress TLS blocks, e.g. [{hosts: [api.example.com], secretName: boltrope-tls}].
+  tls: []
+
+# Baseline NetworkPolicy: default-deny ingress to all Boltrope pods, then
+# allow orchestratord→{modelgwd,toolruntimed} :9000, anything→orchestratord
+# :8080/:9000, and metrics :8080 within the namespace. Egress is left open
+# (modelgwd must reach your provider; toolruntimed its registry). Tighten per
+# cluster.
+networkPolicy:
+  enabled: false

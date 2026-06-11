@@ -1,0 +1,78 @@
+{{- include "boltrope.guards" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "boltrope.fullname" . }}-orchestratord
+  labels:
+    {{- include "boltrope.labels" . | nindent 4 }}
+    app.kubernetes.io/component: orchestratord
+spec:
+  replicas: {{ .Values.orchestrator.replicas }}
+  selector:
+    matchLabels:
+      {{- include "boltrope.selectorLabels" (dict "ctx" . "component" "orchestratord") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "boltrope.selectorLabels" (dict "ctx" . "component" "orchestratord") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "boltrope.serviceAccountName" . }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: {{ .Values.blobs.fsGroup }}
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: orchestratord
+          image: {{ include "boltrope.image" (dict "ctx" . "component" "orchestratord") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "boltrope.containerSecurityContext" . | nindent 10 }}
+          ports:
+            - name: grpc
+              containerPort: 9000
+            - name: http
+              containerPort: 8080
+          env:
+            {{- include "boltrope.commonEnv" . | nindent 12 }}
+            {{- include "boltrope.identityEnv" . | nindent 12 }}
+            - name: BOLTROPE_TOOLRUNTIME_ENDPOINT
+              value: {{ printf "%s-toolruntimed:9000" (include "boltrope.fullname" .) | quote }}
+            - name: BOLTROPE_DEFAULT_MODEL
+              value: {{ .Values.orchestrator.defaultModel | quote }}
+            - name: BOLTROPE_SUBAGENT_MAX_DEPTH
+              value: {{ .Values.orchestrator.subagentMaxDepth | quote }}
+            {{- if not .Values.devInsecure.enabled }}
+            - name: BOLTROPE_OIDC_ISSUER
+              value: {{ .Values.oidc.issuer | quote }}
+            {{- if .Values.oidc.audience }}
+            - name: BOLTROPE_OIDC_AUDIENCE
+              value: {{ .Values.oidc.audience | quote }}
+            {{- end }}
+            {{- end }}
+          {{- include "boltrope.probes" . | nindent 10 }}
+          resources:
+            {{- toYaml .Values.orchestrator.resources | nindent 12 }}
+          volumeMounts:
+            - name: blobs
+              mountPath: /var/lib/boltrope/blobs
+            {{- include "boltrope.identityVolumeMounts" . | nindent 12 }}
+      volumes:
+        {{- include "boltrope.blobsVolume" . | nindent 8 }}
+        {{- include "boltrope.identityVolumes" . | nindent 8 }}
+      {{- with .Values.orchestrator.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.orchestrator.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.orchestrator.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

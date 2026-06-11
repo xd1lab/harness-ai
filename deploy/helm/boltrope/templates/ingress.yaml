@@ -1,0 +1,38 @@
+{{- include "boltrope.guards" . -}}
+{{- if .Values.ingress.enabled -}}
+{{- $_ := required "ingress.host is required when ingress.enabled." .Values.ingress.host -}}
+# Exposes orchestratord's HTTP listener: the REST/JSON + SSE facade
+# (POST /v1/sessions, .../run as text/event-stream, .../control, .../fork) and
+# health/metrics. The pod serves plaintext HTTP — terminate TLS here; requests
+# authenticate with the OIDC bearer token (FR-API-03). The gRPC edge (9000)
+# speaks SPIFFE mTLS and is NOT routed through this ingress.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "boltrope.fullname" . }}
+  labels:
+    {{- include "boltrope.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "boltrope.fullname" . }}-orchestratord
+                port:
+                  name: http
+{{- end }}

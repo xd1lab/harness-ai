@@ -1,0 +1,59 @@
+{{- include "boltrope.guards" . -}}
+{{- if .Values.grant.enabled -}}
+{{- $_ := required "postgres.ownerDSNSecret.name is required when grant.enabled (the grant runs ALTER ROLE as the owner)." .Values.postgres.ownerDSNSecret.name -}}
+{{- $_ = required "grant.appPasswordSecret.name is required when grant.enabled: an existing Secret holding the app role's login password." .Values.grant.appPasswordSecret.name -}}
+# Optional provisioning one-shot (the production counterpart of the compose
+# boltrope-grant): gives the migration-created NOLOGIN boltrope_app role its
+# LOGIN credential and registers tenant rows (the UUIDs your IdP emits as the
+# token tenant_id claim). Runs AFTER the migrate hook (hook-weight 0 > -5).
+# Idempotent: ALTER ROLE is re-runnable and the INSERTs are ON CONFLICT DO
+# NOTHING. Most deployments do both out-of-band instead — see deploy/README.md.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "boltrope.fullname" . }}-grant
+  labels:
+    {{- include "boltrope.labels" . | nindent 4 }}
+    app.kubernetes.io/component: grant
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 4
+  template:
+    metadata:
+      labels:
+        {{- include "boltrope.selectorLabels" (dict "ctx" . "component" "grant") | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: grant
+          image: {{ .Values.grant.image }}
+          env:
+            - name: OWNER_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.ownerDSNSecret.name | quote }}
+                  key: {{ .Values.postgres.ownerDSNSecret.key | quote }}
+            - name: APP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.grant.appPasswordSecret.name | quote }}
+                  key: {{ .Values.grant.appPasswordSecret.key | quote }}
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              psql "$OWNER_DSN" -v ON_ERROR_STOP=1 \
+                -c "ALTER ROLE {{ .Values.grant.appRole }} WITH LOGIN PASSWORD '$APP_PASSWORD';"
+              {{- range .Values.grant.tenants }}
+              psql "$OWNER_DSN" -v ON_ERROR_STOP=1 \
+                -c "INSERT INTO tenants (id, name) VALUES ('{{ .id }}', '{{ .name }}') ON CONFLICT (id) DO NOTHING;"
+              {{- end }}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 128Mi}
+{{- end }}

@@ -1,0 +1,65 @@
+# SPIFFE ID registration for the four Boltrope workloads.
+# ============================================================================
+# Applied to a cluster running SPIRE with the spire-controller-manager (the
+# default in the official SPIFFE helm chart): each ClusterSPIFFEID matches the
+# pods by the labels the Boltrope chart stamps and issues the EXACT identity
+# each daemon presents and its peers pin (cmd/*/wiring.go serviceName;
+# architecture §8.1):
+#
+#   orchestratord → spiffe://<trust-domain>/orchestrator
+#   modelgwd      → spiffe://<trust-domain>/model-gateway
+#   toolruntimed  → spiffe://<trust-domain>/tool-runtime
+#   projectord    → spiffe://<trust-domain>/projectord
+#
+# The segment names are part of the wire contract — orchestratord PINS
+# spiffe://<td>/model-gateway and spiffe://<td>/tool-runtime when dialing, and
+# the downstream RBAC admits only spiffe://<td>/orchestrator — so changing
+# them breaks mutual authentication. {{ .TrustDomain }} below is expanded by
+# the spire-controller-manager, not by Helm.
+apiVersion: spire.spiffe.io/v1alpha1
+kind: ClusterSPIFFEID
+metadata:
+  name: boltrope-orchestrator
+spec:
+  className: spire-mgmt-spire
+  spiffeIDTemplate: "spiffe://{{ .TrustDomain }}/orchestrator"
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: boltrope
+      app.kubernetes.io/component: orchestratord
+---
+apiVersion: spire.spiffe.io/v1alpha1
+kind: ClusterSPIFFEID
+metadata:
+  name: boltrope-model-gateway
+spec:
+  className: spire-mgmt-spire
+  spiffeIDTemplate: "spiffe://{{ .TrustDomain }}/model-gateway"
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: boltrope
+      app.kubernetes.io/component: modelgwd
+---
+apiVersion: spire.spiffe.io/v1alpha1
+kind: ClusterSPIFFEID
+metadata:
+  name: boltrope-tool-runtime
+spec:
+  className: spire-mgmt-spire
+  spiffeIDTemplate: "spiffe://{{ .TrustDomain }}/tool-runtime"
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: boltrope
+      app.kubernetes.io/component: toolruntimed
+---
+apiVersion: spire.spiffe.io/v1alpha1
+kind: ClusterSPIFFEID
+metadata:
+  name: boltrope-projectord
+spec:
+  className: spire-mgmt-spire
+  spiffeIDTemplate: "spiffe://{{ .TrustDomain }}/projectord"
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: boltrope
+      app.kubernetes.io/component: projectord

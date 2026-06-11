@@ -301,6 +301,13 @@ Read the details:
 - **Deny-by-default egress** — every per-session sandbox runs with `--network none` by default, so all model-influenced tools (sandbox `bash`, `webfetch`, `websearch`, MCP HTTP) have **no external network** — the network namespace is the v1 containment, and there is no unrestricted egress path. A per-session egress **broker** is the deny-by-default allowlist *policy* layer (configure allowed hosts via `BOLTROPE_TOOLRT_EGRESS_ALLOWLIST`; empty ⇒ deny-all); combined with a forward egress-proxy data path it will gate allowlisted egress per connection — the proxy is a [roadmap](#roadmap--deferred) item, so in v1 `webfetch`/`websearch` are effectively disabled unless an egress path is configured. Provider-native/server-side tools are disabled in v1.
 - **Secrets** live only in model-gateway configuration (env), never in the log or any response; secret-bearing types redact via `slog.LogValuer`.
 
+**Deploying to Kubernetes?** The production kit is the Helm chart at
+[`deploy/helm/boltrope/`](deploy/helm/boltrope/) — SPIRE-issued identity,
+OIDC edge auth, the migration-gate hook Job, and the sandboxed tool runtime,
+**fail-closed at render time** (no OIDC issuer / no SPIRE / `stub` provider /
+unacknowledged dev-insecure all refuse to render). SPIRE from zero:
+[`deploy/k8s/spire/`](deploy/k8s/spire/).
+
 Found a vulnerability? Please report it privately — see [SECURITY.md](SECURITY.md). The [ADR-0013 security model](docs/decisions/0013-security-model.md) has the full picture.
 
 ---

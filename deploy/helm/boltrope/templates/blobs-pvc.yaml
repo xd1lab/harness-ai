@@ -1,0 +1,22 @@
+{{- include "boltrope.guards" . -}}
+{{- if not .Values.blobs.existingClaim -}}
+# Shared blob store (FR-STATE-05) mounted by orchestratord, toolruntimed and
+# projectord. ReadWriteMany by default — see values.yaml `blobs` for the
+# single-node ReadWriteOnce caveat.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "boltrope.fullname" . }}-blobs
+  labels:
+    {{- include "boltrope.labels" . | nindent 4 }}
+    app.kubernetes.io/component: blobs
+spec:
+  accessModes:
+    {{- toYaml .Values.blobs.accessModes | nindent 4 }}
+  {{- with .Values.blobs.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.blobs.size }}
+{{- end }}

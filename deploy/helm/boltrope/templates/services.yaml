@@ -1,0 +1,79 @@
+{{- include "boltrope.guards" . -}}
+# One ClusterIP Service per daemon: gRPC 9000 (SPIFFE mTLS in production) and
+# HTTP 8080 (/livez /readyz /metrics; orchestratord additionally serves the
+# REST/JSON + SSE facade there).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "boltrope.fullname" . }}-orchestratord
+  labels:
+    {{- include "boltrope.labels" . | nindent 4 }}
+    app.kubernetes.io/component: orchestratord
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "boltrope.selectorLabels" (dict "ctx" . "component" "orchestratord") | nindent 4 }}
+  ports:
+    - name: grpc
+      port: 9000
+      targetPort: grpc
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "boltrope.fullname" . }}-modelgwd
+  labels:
+    {{- include "boltrope.labels" . | nindent 4 }}
+    app.kubernetes.io/component: modelgwd
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "boltrope.selectorLabels" (dict "ctx" . "component" "modelgwd") | nindent 4 }}
+  ports:
+    - name: grpc
+      port: 9000
+      targetPort: grpc
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "boltrope.fullname" . }}-toolruntimed
+  labels:
+    {{- include "boltrope.labels" . | nindent 4 }}
+    app.kubernetes.io/component: toolruntimed
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "boltrope.selectorLabels" (dict "ctx" . "component" "toolruntimed") | nindent 4 }}
+  ports:
+    - name: grpc
+      port: 9000
+      targetPort: grpc
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "boltrope.fullname" . }}-projectord
+  labels:
+    {{- include "boltrope.labels" . | nindent 4 }}
+    app.kubernetes.io/component: projectord
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "boltrope.selectorLabels" (dict "ctx" . "component" "projectord") | nindent 4 }}
+  ports:
+    - name: grpc
+      port: 9000
+      targetPort: grpc
+    - name: http
+      port: 8080
+      targetPort: http

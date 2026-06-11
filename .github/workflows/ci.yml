@@ -46,6 +46,46 @@ jobs:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
           args: --timeout=5m
 
+  # ── Helm chart: lint, render every supported mode, schema-validate, and
+  #    prove the render-time fail-closed guards actually refuse (NFR-SEC-01) ──
+  helm:
+    name: helm
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Lint chart
+        run: helm lint deploy/helm/boltrope -f deploy/helm/boltrope/values-production.example.yaml
+      - name: Render + schema-validate (production / dev / hostSocket)
+        run: |
+          set -euo pipefail
+          chart=deploy/helm/boltrope
+          prod="-f $chart/values-production.example.yaml"
+          dev="--set devInsecure.enabled=true --set devInsecure.acknowledged=true \
+               --set postgres.appDSNSecret.name=pg-app --set postgres.ownerDSNSecret.name=pg-owner \
+               --set modelGateway.provider=stub"
+          for variant in "$prod" "$dev" "$prod --set toolRuntime.sandbox.mode=hostSocket --set toolRuntime.sandbox.hostSocket.dockerGID=999"; do
+            # shellcheck disable=SC2086
+            helm template boltrope "$chart" $variant \
+              | docker run --rm -i ghcr.io/yannh/kubeconform@sha256:faffaf43f95aa6425306e1ab8d6fcad72acb9049158f38e574c085ea1ec0f64e -strict -summary -
+          done
+      - name: Fail-closed guards refuse to render
+        run: |
+          set -euo pipefail
+          chart=deploy/helm/boltrope
+          expect_fail() { # <grep pattern> <helm args...>
+            local pattern=$1; shift
+            if helm template boltrope "$chart" "$@" >/dev/null 2>/tmp/guard.err; then
+              echo "GUARD MISSED: helm template $* rendered successfully"; exit 1
+            fi
+            grep -q "$pattern" /tmp/guard.err || { echo "GUARD WRONG MESSAGE for $*:"; cat /tmp/guard.err; exit 1; }
+          }
+          expect_fail "oidc.issuer is required"
+          expect_fail "devInsecure.acknowledged=true" --set devInsecure.enabled=true
+          expect_fail "rejected in production" -f "$chart/values-production.example.yaml" --set modelGateway.provider=stub
+          expect_fail "spire.enabled=true" -f "$chart/values-production.example.yaml" --set spire.enabled=false
+          expect_fail "dockerGID is required" -f "$chart/values-production.example.yaml" --set toolRuntime.sandbox.mode=hostSocket
+
   # ── buf: lint the contracts + breaking-change detection vs. the base ──────
   proto:
     name: proto

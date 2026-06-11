@@ -1,0 +1,87 @@
+{{- include "boltrope.guards" . -}}
+{{- $provider := required "modelGateway.provider is required: anthropic | gemini | openai | openaicompat (the chart refuses the compose demo provider `stub` in production)." .Values.modelGateway.provider -}}
+{{- if and (not .Values.devInsecure.enabled) (eq $provider "stub") -}}
+{{- fail "modelGateway.provider=stub is the keyless compose demo provider and is rejected in production (devInsecure disabled). Configure a real provider." -}}
+{{- end -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "boltrope.fullname" . }}-modelgwd
+  labels:
+    {{- include "boltrope.labels" . | nindent 4 }}
+    app.kubernetes.io/component: modelgwd
+spec:
+  replicas: {{ .Values.modelGateway.replicas }}
+  selector:
+    matchLabels:
+      {{- include "boltrope.selectorLabels" (dict "ctx" . "component" "modelgwd") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "boltrope.selectorLabels" (dict "ctx" . "component" "modelgwd") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "boltrope.serviceAccountName" . }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: modelgwd
+          image: {{ include "boltrope.image" (dict "ctx" . "component" "modelgwd") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "boltrope.containerSecurityContext" . | nindent 10 }}
+          ports:
+            - name: grpc
+              containerPort: 9000
+            - name: http
+              containerPort: 8080
+          env:
+            {{- include "boltrope.commonEnv" . | nindent 12 }}
+            {{- include "boltrope.identityEnv" . | nindent 12 }}
+            - name: BOLTROPE_MODELGW_PROVIDER
+              value: {{ $provider | quote }}
+            {{- if .Values.modelGateway.openaiBaseURL }}
+            - name: BOLTROPE_MODELGW_OPENAI_BASE_URL
+              value: {{ .Values.modelGateway.openaiBaseURL | quote }}
+            {{- end }}
+            {{- with .Values.modelGateway.apiKey }}
+            {{- if .secretName }}
+            # model-gateway is the ONLY service that sees provider keys
+            # (NFR-SEC-05): it is configured with the env-var NAME and resolves
+            # the value through its secrets port at this trust boundary.
+            - name: BOLTROPE_MODELGW_API_KEY_ENV
+              value: {{ .envName | quote }}
+            - name: {{ .envName }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .secretName | quote }}
+                  key: {{ .secretKey | quote }}
+            {{- end }}
+            {{- end }}
+          {{- include "boltrope.probes" . | nindent 10 }}
+          resources:
+            {{- toYaml .Values.modelGateway.resources | nindent 12 }}
+          {{- if not .Values.devInsecure.enabled }}
+          volumeMounts:
+            {{- include "boltrope.identityVolumeMounts" . | nindent 12 }}
+          {{- end }}
+      {{- if not .Values.devInsecure.enabled }}
+      volumes:
+        {{- include "boltrope.identityVolumes" . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.modelGateway.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.modelGateway.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.modelGateway.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

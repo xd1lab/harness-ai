@@ -1,0 +1,68 @@
+{{- include "boltrope.guards" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "boltrope.fullname" . }}-projectord
+  labels:
+    {{- include "boltrope.labels" . | nindent 4 }}
+    app.kubernetes.io/component: projectord
+spec:
+  replicas: {{ .Values.projector.replicas }}
+  selector:
+    matchLabels:
+      {{- include "boltrope.selectorLabels" (dict "ctx" . "component" "projectord") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "boltrope.selectorLabels" (dict "ctx" . "component" "projectord") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "boltrope.serviceAccountName" . }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: {{ .Values.blobs.fsGroup }}
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: projectord
+          image: {{ include "boltrope.image" (dict "ctx" . "component" "projectord") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "boltrope.containerSecurityContext" . | nindent 10 }}
+          ports:
+            - name: grpc
+              containerPort: 9000
+            - name: http
+              containerPort: 8080
+          env:
+            {{- include "boltrope.commonEnv" . | nindent 12 }}
+            {{- include "boltrope.identityEnv" . | nindent 12 }}
+            - name: BOLTROPE_PROJECTOR_SUBSCRIPTION
+              value: {{ .Values.projector.subscription | quote }}
+            - name: BOLTROPE_PROJECTOR_SWEEP_INTERVAL
+              value: {{ .Values.projector.sweepInterval | quote }}
+          {{- include "boltrope.probes" . | nindent 10 }}
+          resources:
+            {{- toYaml .Values.projector.resources | nindent 12 }}
+          volumeMounts:
+            - name: blobs
+              mountPath: /var/lib/boltrope/blobs
+            {{- include "boltrope.identityVolumeMounts" . | nindent 12 }}
+      volumes:
+        {{- include "boltrope.blobsVolume" . | nindent 8 }}
+        {{- include "boltrope.identityVolumes" . | nindent 8 }}
+      {{- with .Values.projector.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.projector.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.projector.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -1,0 +1,98 @@
+# Example production values for the Boltrope chart.
+# ============================================================================
+# Prerequisites (in this order):
+#   1. PostgreSQL ≥13 reachable from the cluster, with two Secrets:
+#        kubectl create secret generic boltrope-pg-owner \
+#          --from-literal=dsn='postgres://boltrope_owner:...@pg.example.internal:5432/boltrope?sslmode=verify-full'
+#        kubectl create secret generic boltrope-pg-app \
+#          --from-literal=dsn='postgres://boltrope_app:...@pg.example.internal:5432/boltrope?sslmode=verify-full'
+#        kubectl create secret generic boltrope-pg-app-password \
+#          --from-literal=password='...'   # only if grant.enabled
+#   2. SPIRE installed with registration entries for the four workloads
+#      (see deploy/k8s/spire/ in the repo).
+#   3. An OIDC IdP issuing RS256 tokens with the tenant_id claim
+#      (deploy/README.md → "Client-edge auth in production").
+#   4. The provider API key Secret:
+#        kubectl create secret generic boltrope-anthropic --from-literal=api-key='sk-ant-...'
+#
+# Install:
+#   helm install boltrope deploy/helm/boltrope -f my-production-values.yaml
+
+trustDomain: boltrope.example.com
+
+spire:
+  enabled: true
+  socket:
+    mode: csi # the SPIFFE CSI driver, as installed by the official SPIRE helm chart
+
+postgres:
+  version: "16"
+  appDSNSecret:
+    name: boltrope-pg-app
+    key: dsn
+  ownerDSNSecret:
+    name: boltrope-pg-owner
+    key: dsn
+
+migrate:
+  enabled: true
+
+# One-time bootstrap convenience; disable again (and rotate the password
+# through your secrets manager) once provisioned.
+grant:
+  enabled: true
+  appPasswordSecret:
+    name: boltrope-pg-app-password
+    key: password
+  tenants:
+    - id: 8a3d2f1e-9c4b-4f6a-b1d2-3e4f5a6b7c8d
+      name: acme-corp
+
+oidc:
+  issuer: https://idp.example.com/realms/boltrope
+  audience: boltrope
+
+otlp:
+  endpoint: otel-collector.observability:4317
+  insecure: false
+
+blobs:
+  storageClass: nfs-client # any ReadWriteMany class
+  size: 50Gi
+
+orchestrator:
+  replicas: 1 # the fenced single-writer lease makes >1 safe, but start here
+  defaultModel: claude-sonnet-4-6
+
+modelGateway:
+  provider: anthropic
+  apiKey:
+    secretName: boltrope-anthropic
+    secretKey: api-key
+    envName: ANTHROPIC_API_KEY
+
+toolRuntime:
+  sandbox:
+    mode: dind
+  # Schedule the privileged-sidecar pod onto an isolated pool:
+  nodeSelector:
+    boltrope.io/sandbox-pool: "true"
+  tolerations:
+    - key: boltrope.io/sandbox-pool
+      operator: Exists
+      effect: NoSchedule
+
+ingress:
+  enabled: true
+  className: nginx
+  host: boltrope-api.example.com
+  annotations:
+    # SSE needs response buffering off on nginx-ingress:
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+  tls:
+    - hosts: [boltrope-api.example.com]
+      secretName: boltrope-api-tls
+
+networkPolicy:
+  enabled: true

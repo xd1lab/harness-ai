@@ -1,0 +1,62 @@
+{{- include "boltrope.guards" . -}}
+{{- if .Values.migrate.enabled -}}
+{{- $_ := required "postgres.ownerDSNSecret.name is required when migrate.enabled: an existing Secret holding the OWNER DSN the migration gate runs under (services never use it)." .Values.postgres.ownerDSNSecret.name -}}
+# Schema-migration gate (NFR-OPS-01/02): a pre-install/pre-upgrade hook, so the
+# release's pods are only created after the embedded forward-only migrations
+# applied cleanly — the K8s equivalent of the compose
+# postgres → migrate → services ordering. Runs as the OWNER role; the services
+# connect as the RLS-bound non-owner app role.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "boltrope.fullname" . }}-migrate
+  labels:
+    {{- include "boltrope.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrate
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 4
+  template:
+    metadata:
+      labels:
+        {{- include "boltrope.selectorLabels" (dict "ctx" . "component" "migrate") | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: {{ include "boltrope.image" (dict "ctx" . "component" "migrate") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "boltrope.containerSecurityContext" . | nindent 10 }}
+          env:
+            - name: BOLTROPE_POSTGRES__DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.ownerDSNSecret.name | quote }}
+                  key: {{ .Values.postgres.ownerDSNSecret.key | quote }}
+            - name: BOLTROPE_POSTGRES__VERSION
+              value: {{ .Values.postgres.version | quote }}
+            # migrate reuses the shared config loader, which validates ALL
+            # required fields even though it only consumes the DSN; supply
+            # harmless placeholders (mirrors the compose migrate one-shot).
+            - name: BOLTROPE_SERVER__GRPC_ADDR
+              value: ":0"
+            - name: BOLTROPE_SERVER__HTTP_ADDR
+              value: ":0"
+            - name: BOLTROPE_MODEL_GATEWAY__ENDPOINT
+              value: "unused:0"
+            - name: BOLTROPE_BLOB__DIR
+              value: /tmp
+          resources:
+            {{- toYaml .Values.migrate.resources | nindent 12 }}
+{{- end }}

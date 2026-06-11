@@ -1,0 +1,40 @@
+Boltrope {{ .Chart.AppVersion }} deployed as release {{ .Release.Name }}.
+
+{{- if .Values.devInsecure.enabled }}
+
+!! DEV-INSECURE MODE (acknowledged) !!
+Static dev CA, fixed dev principal, NO edge auth. Never expose this release.
+{{- else }}
+
+Mode: production (SPIRE identity + OIDC edge auth, fail-closed).
+  Trust domain : {{ .Values.trustDomain }}
+  OIDC issuer  : {{ .Values.oidc.issuer }}
+
+Pods only become Ready once they hold an SVID and the schema is migrated:
+  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+
+If pods stay NotReady, check SPIRE registration first (see deploy/k8s/spire/
+in the repo) — readiness deliberately gates on identity (NFR-SEC-01).
+{{- end }}
+
+Drive a session over REST/SSE (no client tooling needed):
+
+{{- if .Values.ingress.enabled }}
+  BASE=https://{{ .Values.ingress.host }}
+{{- else }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "boltrope.fullname" . }}-orchestratord 8080:8080 &
+  BASE=http://localhost:8080
+{{- end }}
+  TOKEN=<an RS256 access token from your IdP with the tenant_id claim>
+
+  curl -sS -X POST "$BASE/v1/sessions" \
+    -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+    -d '{"mode":"default"}'
+  curl -N -X POST "$BASE/v1/sessions/<id>/run" \
+    -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+    -d '{"text":"Reply with exactly: OK"}'
+
+Remember to register each tenant UUID from your IdP's tenant_id claim in the
+tenants table (grant.tenants, or by hand) — sessions are RLS-scoped to it.
+
+Docs: deploy/README.md (production posture, OIDC walkthrough, sandbox backend).

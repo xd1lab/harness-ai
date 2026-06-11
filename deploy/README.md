@@ -234,23 +234,50 @@ sandbox.
 
 ---
 
-## Production deployment (summary)
+## Production deployment (Helm chart)
 
-This compose file is **not** the production deployment. For production:
+This compose file is **not** the production deployment. The production kit is
+the **Helm chart at [`deploy/helm/boltrope/`](helm/boltrope/)** plus the
+**SPIRE worked example at [`deploy/k8s/spire/`](k8s/spire/)**. The chart is
+fail-closed at render time, mirroring the daemons' own startup guarantees: it
+refuses to render without an OIDC issuer and SPIRE in production, refuses the
+`stub` demo provider, and the dev-insecure escape hatch requires an explicit
+`devInsecure.acknowledged=true`.
 
-- Run **SPIRE** so each workload gets an auto-rotating X.509 SVID; build the
-  services with the `spire` build tag and **do not** set `BOLTROPE_DEV_INSECURE`.
-  Readiness gates on SVID presence, so a workload with no identity is never ready.
-- Configure **client-edge OIDC auth** — see the walkthrough below. Without
-  `BOLTROPE_OIDC_ISSUER` a production orchestrator refuses to start (fail-closed).
-- Run migrations as a **Kubernetes init container / Job** (the same
-  `boltrope-migrate` binary) gating the rollout, mirroring the compose gate.
-- Provision the `boltrope_app` login credential through your secrets manager;
-  give the services the non-owner DSN and keep the owner DSN for migrations only.
-- Replace the docker-socket sandbox with a hardened backend (rootless, socket
-  proxy, or microVM) per ADR-0005.
-- Publish multi-arch images + SBOM + signatures via the release pipeline
-  (GoReleaser; NFR-PORT-04).
+```bash
+# 1. SPIRE + registration entries (see deploy/k8s/spire/README.md)
+# 2. Secrets: app-role DSN, owner DSN, provider API key
+# 3. Install:
+helm install boltrope deploy/helm/boltrope \
+  -f deploy/helm/boltrope/values-production.example.yaml   # copy + edit
+```
+
+What the chart gives you, mapped to the architecture:
+
+- **SPIRE-issued identity** (architecture §8.1): every pod mounts the SPIFFE
+  CSI driver (or a hostPath socket) and gets
+  `BOLTROPE_SPIFFE_ENDPOINT_SOCKET`; the release images build with
+  `-tags spire`. No SVID → the daemon refuses to start and never becomes
+  Ready (NFR-SEC-01).
+- **Client-edge OIDC** (FR-API-03): `oidc.issuer` is required; the walkthrough
+  below applies unchanged.
+- **Migration gate** (NFR-OPS-01/02): a pre-install/pre-upgrade hook Job runs
+  the embedded migrations as the owner role before any pod is created. The
+  optional `grant` Job provisions the `boltrope_app` login + tenant rows, or
+  do both out-of-band through your secrets manager.
+- **Sandbox backend**: `toolRuntime.sandbox.mode=dind` (default) runs the
+  per-session sandboxes inside a Docker-in-Docker sidecar — **privileged**, so
+  schedule the tool-runtime onto a dedicated node pool; `hostSocket` drives
+  the node's Docker where the cluster runtime is Docker. Both are
+  containers-only v1 (ADR-0005); a microVM/gVisor backend is roadmap.
+- **REST/SSE edge**: the optional Ingress fronts orchestratord's HTTP listener
+  (TLS terminates at the ingress; the OIDC bearer authenticates the request).
+  The gRPC edge speaks SPIFFE mTLS for in-mesh clients only.
+- Optional baseline **NetworkPolicy** (default-deny ingress + the legitimate
+  paths) — defense in depth on top of mTLS, not the auth boundary.
+
+Published artifacts: multi-arch images + SBOM + cosign signatures per release
+(GoReleaser; NFR-PORT-04) — the chart consumes `ghcr.io/xd1lab/boltrope-*`.
 
 ## Client-edge auth in production (OIDC)
 

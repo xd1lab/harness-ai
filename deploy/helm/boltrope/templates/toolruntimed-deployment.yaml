@@ -1,0 +1,131 @@
+{{- include "boltrope.guards" . -}}
+{{- $sandbox := .Values.toolRuntime.sandbox -}}
+{{- if not (or (eq $sandbox.mode "dind") (eq $sandbox.mode "hostSocket")) -}}
+{{- fail (printf "toolRuntime.sandbox.mode must be dind or hostSocket, got %q" $sandbox.mode) -}}
+{{- end -}}
+{{- if and (eq $sandbox.mode "hostSocket") (not $sandbox.hostSocket.dockerGID) -}}
+{{- fail "toolRuntime.sandbox.hostSocket.dockerGID is required in hostSocket mode (the node docker group's gid; `stat -c '%g' /var/run/docker.sock` on a node) so the non-root toolruntime user can use the socket." -}}
+{{- end -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "boltrope.fullname" . }}-toolruntimed
+  labels:
+    {{- include "boltrope.labels" . | nindent 4 }}
+    app.kubernetes.io/component: toolruntimed
+spec:
+  replicas: {{ .Values.toolRuntime.replicas }}
+  selector:
+    matchLabels:
+      {{- include "boltrope.selectorLabels" (dict "ctx" . "component" "toolruntimed") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "boltrope.selectorLabels" (dict "ctx" . "component" "toolruntimed") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "boltrope.serviceAccountName" . }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: false # the dind sidecar's dockerd must run as root; the toolruntimed container itself drops to the non-root boltrope user (image USER)
+        fsGroup: {{ .Values.blobs.fsGroup }}
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+        {{- if eq $sandbox.mode "hostSocket" }}
+        supplementalGroups: [{{ $sandbox.hostSocket.dockerGID }}]
+        {{- end }}
+      containers:
+        - name: toolruntimed
+          image: {{ include "boltrope.image" (dict "ctx" . "component" "toolruntimed") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: grpc
+              containerPort: 9000
+            - name: http
+              containerPort: 8080
+          env:
+            {{- include "boltrope.commonEnv" . | nindent 12 }}
+            {{- include "boltrope.identityEnv" . | nindent 12 }}
+            - name: BOLTROPE_TOOLRT_DOCKER_BIN
+              value: docker
+            - name: BOLTROPE_TOOLRT_IMAGE
+              value: {{ $sandbox.image | quote }}
+            {{- with .Values.toolRuntime.egressAllowlist }}
+            - name: BOLTROPE_TOOLRT_EGRESS_ALLOWLIST
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- if eq $sandbox.mode "dind" }}
+            - name: DOCKER_HOST
+              value: unix:///dind/docker.sock
+            {{- end }}
+          {{- include "boltrope.probes" . | nindent 10 }}
+          resources:
+            {{- toYaml .Values.toolRuntime.resources | nindent 12 }}
+          volumeMounts:
+            - name: blobs
+              mountPath: /var/lib/boltrope/blobs
+            {{- include "boltrope.identityVolumeMounts" . | nindent 12 }}
+            {{- if eq $sandbox.mode "dind" }}
+            - name: dind-sock
+              mountPath: /dind
+            {{- else }}
+            - name: docker-sock
+              mountPath: /var/run/docker.sock
+            {{- end }}
+        {{- if eq $sandbox.mode "dind" }}
+        # Docker-in-Docker sidecar: the per-session sandbox containers
+        # (boltrope-sbx-<sessionID>, --network none, hard limits) run inside
+        # THIS daemon — not on the node's runtime. PRIVILEGED by necessity;
+        # schedule the tool-runtime on a dedicated node pool and read
+        # deploy/README.md → "Sandbox backend" (ADR-0005) before production use.
+        - name: dind
+          image: {{ $sandbox.dind.image }}
+          securityContext:
+            privileged: true
+          args:
+            - --host=unix:///dind/docker.sock
+          env:
+            - name: DOCKER_TLS_CERTDIR
+              value: ""
+          resources:
+            {{- toYaml $sandbox.dind.resources | nindent 12 }}
+          volumeMounts:
+            - name: dind-sock
+              mountPath: /dind
+            - name: dind-storage
+              mountPath: /var/lib/docker
+        {{- end }}
+      volumes:
+        {{- include "boltrope.blobsVolume" . | nindent 8 }}
+        {{- include "boltrope.identityVolumes" . | nindent 8 }}
+        {{- if eq $sandbox.mode "dind" }}
+        - name: dind-sock
+          emptyDir: {}
+        - name: dind-storage
+          emptyDir: {}
+        {{- else }}
+        - name: docker-sock
+          hostPath:
+            path: {{ $sandbox.hostSocket.path }}
+            type: Socket
+        {{- end }}
+      {{- with .Values.toolRuntime.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.toolRuntime.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.toolRuntime.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

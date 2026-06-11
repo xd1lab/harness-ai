@@ -1,0 +1,24 @@
+apiVersion: v2
+name: boltrope
+description: >-
+  Boltrope — a durable, security-first AI agent harness. Deploys the four
+  services (orchestratord, modelgwd, toolruntimed, projectord) with the
+  migration gate, SPIRE-issued workload identity, OIDC client-edge auth, and
+  the sandboxed tool runtime. Production posture by default: rendering fails
+  closed unless identity (SPIRE) and edge auth (OIDC issuer) are configured,
+  and the dev-insecure escape hatch requires an explicit acknowledgement.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.24.0-0"
+home: https://github.com/xd1lab/harness-ai
+sources:
+  - https://github.com/xd1lab/harness-ai
+keywords:
+  - ai
+  - agents
+  - llm
+  - harness
+maintainers:
+  - name: Boltrope maintainers
+    url: https://github.com/xd1lab/harness-ai
