@@ -43,6 +43,16 @@ func withPrincipal(ctx context.Context, p Principal) context.Context {
 	return ctx
 }
 
+// ContextWithPrincipal is the exported form of the principal placement used by
+// sibling inbound transports (the REST/SSE facade): it carries p as the
+// verified principal AND scopes the RLS tenant, identically to what the gRPC
+// interceptors do — so every transport feeds the same ownership and
+// row-level-security path. p MUST come from [Authenticator.VerifyBearer] (or
+// the dev path); placing an unverified principal here bypasses edge auth.
+func ContextWithPrincipal(ctx context.Context, p Principal) context.Context {
+	return withPrincipal(ctx, p)
+}
+
 // PrincipalFromContext returns the verified [Principal] placed on ctx by the
 // auth interceptor, or false when none is present (the request was not
 // authenticated). Handlers use it to enforce tenant ownership.
@@ -111,19 +121,20 @@ func authError(format string, args ...any) error {
 	return status.Errorf(codes.Unauthenticated, "edge auth: "+format, args...)
 }
 
-// authenticator carries the resolved auth policy and performs the per-call
-// validation shared by the unary and stream interceptors.
-type authenticator struct {
+// Authenticator carries the resolved auth policy and performs the per-call
+// validation shared by the unary and stream gRPC interceptors AND the REST
+// facade (one policy, every transport). Construct it with [NewAuthenticator].
+type Authenticator struct {
 	cfg         AuthConfig
 	tenantClaim string
 	parserOpts  []jwt.ParserOption
 }
 
-// newAuthenticator validates the config and builds the shared validator. It
+// NewAuthenticator validates the config and builds the shared validator. It
 // returns an error when the config is neither a valid production policy nor dev
 // mode (fail-closed): a non-dev policy MUST pin at least one algorithm and
 // supply a Keyfunc.
-func newAuthenticator(cfg AuthConfig) (*authenticator, error) {
+func NewAuthenticator(cfg AuthConfig) (*Authenticator, error) {
 	tenantClaim := cfg.TenantClaim
 	if tenantClaim == "" {
 		tenantClaim = defaultTenantClaim
@@ -151,7 +162,7 @@ func newAuthenticator(cfg AuthConfig) (*authenticator, error) {
 		opts = append(opts, jwt.WithAudience(cfg.Audience))
 	}
 
-	return &authenticator{cfg: cfg, tenantClaim: tenantClaim, parserOpts: opts}, nil
+	return &Authenticator{cfg: cfg, tenantClaim: tenantClaim, parserOpts: opts}, nil
 }
 
 // pinnedAlgs returns the configured algorithms with any "none" variant removed
@@ -173,20 +184,36 @@ func pinnedAlgs(algs []string) []string {
 
 // authenticate validates the request and returns the derived [Principal]. In dev
 // mode it returns the dev principal without inspecting the token. Otherwise it
-// extracts the bearer token from the gRPC `authorization` metadata, parses and
-// verifies it under the pinned policy, and derives the tenant + subject.
-func (a *authenticator) authenticate(ctx context.Context) (Principal, error) {
+// extracts the bearer token from the gRPC `authorization` metadata and verifies
+// it via [Authenticator.VerifyBearer].
+func (a *Authenticator) authenticate(ctx context.Context) (Principal, error) {
 	if a.cfg.DevInsecure {
-		p := a.cfg.DevPrincipal
-		if p.TenantID == "" {
-			p = Principal{TenantID: DevTenantID, Subject: "dev"}
-		}
-		return p, nil
+		return a.devPrincipal(), nil
 	}
-
 	raw, err := bearerToken(ctx)
 	if err != nil {
 		return Principal{}, err
+	}
+	return a.VerifyBearer(raw)
+}
+
+// devPrincipal returns the configured dev principal (or the default).
+func (a *Authenticator) devPrincipal() Principal {
+	p := a.cfg.DevPrincipal
+	if p.TenantID == "" {
+		p = Principal{TenantID: DevTenantID, Subject: "dev"}
+	}
+	return p
+}
+
+// VerifyBearer parses and verifies a raw bearer token under the pinned policy
+// and derives the tenant + subject. It is the single token-verification path
+// shared by the gRPC interceptors and the REST facade, so the two transports
+// can never drift (FR-API-03's "identical auth"). In dev mode the dev
+// principal is returned regardless of raw (the dev edge requires no token).
+func (a *Authenticator) VerifyBearer(raw string) (Principal, error) {
+	if a.cfg.DevInsecure {
+		return a.devPrincipal(), nil
 	}
 
 	claims := jwt.MapClaims{}
@@ -244,7 +271,7 @@ func bearerToken(ctx context.Context) (string, error) {
 // is neither a valid production policy nor dev mode causes construction to fail
 // closed via the returned error.
 func NewAuthInterceptor(cfg AuthConfig) (grpc.UnaryServerInterceptor, error) {
-	a, err := newAuthenticator(cfg)
+	a, err := NewAuthenticator(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +288,7 @@ func NewAuthInterceptor(cfg AuthConfig) (grpc.UnaryServerInterceptor, error) {
 // it authenticates the stream's metadata and wraps the [grpc.ServerStream] so the
 // handler's stream context carries the verified [Principal].
 func NewStreamAuthInterceptor(cfg AuthConfig) (grpc.StreamServerInterceptor, error) {
-	a, err := newAuthenticator(cfg)
+	a, err := NewAuthenticator(cfg)
 	if err != nil {
 		return nil, err
 	}

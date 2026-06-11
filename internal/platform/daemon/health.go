@@ -44,9 +44,15 @@ const readinessProbeTimeout = 3 * time.Second
 //   - GET /metrics — the Prometheus exposition of reg (RED/USE + OTel bridge).
 //
 // hasIdentity reports SVID presence (see [HasServerIdentity]); checks are the
-// dependency probes.
-func healthHandler(reg prometheus.Gatherer, hasIdentity func() bool, checks []ReadinessCheck) http.Handler {
+// dependency probes. extraRoutes, when non-nil, registers additional
+// service-specific HTTP routes on the same mux (e.g. the orchestrator's REST
+// facade) — registered FIRST so a buggy contribution cannot shadow the three
+// operational endpoints below (ServeMux panics on an exact duplicate).
+func healthHandler(reg prometheus.Gatherer, hasIdentity func() bool, checks []ReadinessCheck, extraRoutes func(*http.ServeMux)) http.Handler {
 	mux := http.NewServeMux()
+	if extraRoutes != nil {
+		extraRoutes(mux)
+	}
 
 	mux.HandleFunc("/livez", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)

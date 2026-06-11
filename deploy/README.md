@@ -88,6 +88,18 @@ BOLTROPE_DEV_INSECURE=1 ./harnessctl --endpoint localhost:9000 run "hello world"
 > `--insecure` flag is plaintext-only — use it for a local orchestrator started
 > without mTLS, not the compose dev edge.
 
+### Driving a session over REST/SSE (no client tooling)
+
+The same flows work from `curl` or any HTTP client: the orchestrator's HTTP
+port (8080, the same listener as `/readyz` and `/metrics`) serves the minimal
+REST facade — `POST /v1/sessions`, `POST /v1/sessions/{id}/run` (a
+`text/event-stream` of run events), `POST /v1/sessions/{id}/control`, plus
+GetSession/Fork. Identical auth to the gRPC edge: the dev stack needs no
+token; production sends the same OIDC bearer (and terminates TLS at your
+ingress — the facade itself is plain HTTP behind it). See README
+§"REST API (SSE)" and `examples/python/run_task.py` for a complete zero-SDK
+Python client.
+
 ---
 
 ## What comes up, and in what order

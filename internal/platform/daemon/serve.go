@@ -43,6 +43,11 @@ type Service struct {
 	// after RPCs drain — e.g. pool.Close(), spiffeSource.Close(). Each is
 	// best-effort; an error is logged, not fatal.
 	Closers []func() error
+	// HTTPRoutes, when non-nil, registers additional service-specific routes on
+	// the daemon's HTTP server alongside /livez,/readyz,/metrics — e.g. the
+	// orchestrator's REST/SSE facade. The contribution must apply its own auth;
+	// the daemon mounts it as-is. Optional.
+	HTTPRoutes func(*http.ServeMux)
 	// Background, when non-nil, is a long-running worker [Run] launches on a
 	// context cancelled at shutdown start (e.g. projectord's projection loop). A
 	// non-nil return other than the worker's own clean context-cancellation is
@@ -121,7 +126,7 @@ func Run(ctx context.Context, in RunInput) error {
 	in.Service.Register(grpcSrv)
 
 	httpSrv := &http.Server{
-		Handler:           healthHandler(in.Telemetry.Registry, in.HasIdentity, in.Service.ReadinessChecks),
+		Handler:           healthHandler(in.Telemetry.Registry, in.HasIdentity, in.Service.ReadinessChecks, in.Service.HTTPRoutes),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

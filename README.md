@@ -22,6 +22,7 @@ Boltrope turns a stateless LLM completion API into a **stateful, tool-using, sel
 
 - [Quickstart](#quickstart) · [Use a real model](#use-a-real-model)
 - [Install — binaries & container images](#install)
+- [REST API (SSE)](#rest-api-sse) — drive it from Python/curl, no SDK
 - [Feature overview](#feature-overview)
 - [Configuring a provider](#configuring-a-provider)
 - [Architecture](#architecture)
@@ -159,6 +160,38 @@ go build -tags spire ./cmd/...
 
 ---
 
+## REST API (SSE)
+
+You don't need Go or gRPC to drive Boltrope: the orchestrator's HTTP listener (port 8080 in the compose stack, next to `/readyz` and `/metrics`) serves a minimal REST/JSON facade over the **same server** the gRPC edge uses — identical auth (the shared OIDC validator; the dev stack needs no token), identical ownership checks, identical event stream.
+
+```bash
+# 1. Create a session.
+SESSION=$(curl -fsS -X POST localhost:8080/v1/sessions \
+    -d '{"mode":"default"}' | jq -r .sessionId)
+
+# 2. Run a task — the response is a live Server-Sent-Events stream.
+curl -NfsS -X POST "localhost:8080/v1/sessions/$SESSION/run" \
+    -d '{"text":"Write a hello-world Go program."}'
+# id: 2
+# event: text_delta
+# data: {"seq":"2","textDelta":{"text":"I received your task..."}}
+#
+# event: result
+# data: {"result":{"subtype":"TERMINATION_SUBTYPE_SUCCESS","numTurns":"1",...}}
+
+# 3. Out-of-band control (approve a pending tool call, interrupt, reattach):
+curl -fsS -X POST "localhost:8080/v1/sessions/$SESSION/control" \
+    -d '{"action":"approve","call_id":"<call-id from the approval_request frame>"}'
+```
+
+Every SSE frame carries its durable event seq as the `id:` field, so reconnecting with the standard `Last-Event-ID` header (or `{"after_seq": N}`) resumes exactly — no duplicates, no gaps. Frame payloads are canonical protojson of the `boltrope.v1.RunEvent` message; in production send `Authorization: Bearer <OIDC access token>` and terminate TLS at your ingress.
+
+**Python, zero SDK:** [examples/python/run_task.py](examples/python/run_task.py) is a complete ~100-line client (`pip install requests`) that creates a session, streams a run, and answers approval prompts interactively.
+
+Routes: `POST /v1/sessions` · `GET /v1/sessions/{id}` · `POST /v1/sessions/{id}/run` (SSE) · `POST /v1/sessions/{id}/control` · `POST /v1/sessions/{id}/fork`.
+
+---
+
 ## Feature overview
 
 Everything below is implemented in v1 unless explicitly marked _roadmap_.
@@ -172,7 +205,7 @@ Everything below is implemented in v1 unless explicitly marked _roadmap_.
 - **Hooks / middleware** — `PreToolUse`, `PostToolUse`, `Stop`, and `PreCompact` hooks run as host subprocesses behind a `CommandRunner` port; a `PreToolUse` block prevents dispatch.
 - **Context management** — running token accounting, automatic compaction before the budget threshold, append-only tool-result clearing (stubs in the window, full content retained in the log/blob store), and tenant-scoped prompt-cache prefixes.
 - **Observability** — OpenTelemetry GenAI spans (`invoke_agent` / `chat` / `execute_tool`) with `gen_ai.*` attributes and trace-context propagation over gRPC; RED metrics per RPC (errors broken down by termination subtype) and USE/saturation gauges (worker-pool, live sandboxes, PG pool, blob bytes, projection lag); `slog` JSON logs with `LogValuer` secret redaction; gRPC health + HTTP `/livez` / `/readyz` with dependency-gated readiness.
-- **Client API** — a resumable `Run` server-stream (Last-Event-ID semantics) plus a unary `Control` RPC (approve / deny / interrupt / reattach). The client API is **gRPC-only in v1**; a REST/JSON facade (grpc-gateway, `Run` over SSE + `Control` POST, enforcing identical auth) is _roadmap_, planned as `google.api.http` annotations over the same protos.
+- **Client API** — a resumable `Run` server-stream (Last-Event-ID semantics) plus a unary `Control` RPC (approve / deny / interrupt / reattach), served over **gRPC and a REST/JSON + SSE facade** (`Run` streams as `text/event-stream`; identical auth and ownership checks by construction — the facade calls the same server). See [REST API](#rest-api-sse) and [examples/python/run_task.py](examples/python/run_task.py) for the zero-SDK Python path.
 - **Deterministic eval harness** — golden scenarios drive the real loop against a scripted fake provider and fake clock, with **no network**; wired into CI as a required gate.
 
 ---
@@ -240,7 +273,7 @@ Boltrope is **three long-lived services plus one projection worker**, all over a
 | **tool-runtime** (`boltrope-toolruntimed`) | The trust boundary for model-influenced code: tool registry (native + MCP), JSON-Schema validation, per-session sandboxes, MCP client, and the deny-by-default egress broker. |
 | **projectord** (`boltrope-projectord`) | Read-side worker (off the request path): tails the event log and runs cost-rollup and OTel-export projections with an xmin-bounded safe-advance cursor. Lag never blocks a turn. |
 
-Plus `boltrope-migrate` (runs DDL and exits — a release gate) and `harnessctl` (the client CLI/SDK). Services talk gRPC + protobuf with mTLS; the client edge is gRPC (a REST facade is planned — see [Roadmap](#roadmap--deferred)).
+Plus `boltrope-migrate` (runs DDL and exits — a release gate) and `harnessctl` (the client CLI/SDK). Services talk gRPC + protobuf with mTLS; the client edge is gRPC plus a minimal [REST/SSE facade](#rest-api-sse) on the orchestrator's HTTP listener (a full REST mapping for every RPC is [roadmap](#roadmap--deferred)).
 
 ```
 Client ──gRPC (resumable Run / Control)──> Orchestrator ──┬─ gRPC ─> Model Gateway ──> LLM APIs / self-hosted
@@ -280,7 +313,7 @@ v1 is a deliberately focused, irreducible harness. The `Provider`, `Workspace`/`
 - **microVM / gVisor / OS-native sandbox backends** — v1 is containers-only behind the `Workspace`/`Runtime` port; multi-tenant execution of mutually-untrusted code is therefore out of scope for v1.
 - **Egress-proxy data path** — v1 contains egress with the sandbox network namespace (`--network none`) and ships the egress broker as the deny-by-default allowlist *policy* layer. The forward proxy that turns an allowlisted host into a live, per-connection-gated network path (re-enabling `webfetch`/`websearch`/MCP-HTTP for allowlisted hosts) is deferred; the `EgressBroker` port and the `--network` seam are shaped to slot it in without re-architecture.
 - **Model routing** and advanced multi-agent topologies.
-- **REST/JSON facade** — the v1 client API is gRPC-only. The facade is planned as grpc-gateway `google.api.http` annotations over the same protos — `Run` (over SSE) + `Control` POST first, a full REST mapping for every RPC later.
+- **Full REST mapping for every RPC** — v1 ships the minimal facade ([REST API](#rest-api-sse): CreateSession / GetSession / `Run` over SSE / Control / Fork); a generated, annotations-based mapping of the complete proto surface is deferred.
 - **Native-Ollama NDJSON adapter** — the OpenAI-compatible `/v1` path is used instead.
 - **Semantic codebase indexing** / tree-sitter repo map; **LLM-based risk classifier**; non-native function-calling fallback / constrained decoding.
 - **Durable workspace snapshots** (consistent filesystem resume after crash); virtual-filesystem context mounts; interactive workspace access.

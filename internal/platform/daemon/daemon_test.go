@@ -119,31 +119,31 @@ func TestHealthHandler(t *testing.T) {
 	reg := mustRegistry(t).Registry
 
 	t.Run("livez is always 200", func(t *testing.T) {
-		h := healthHandler(reg, func() bool { return false }, nil)
+		h := healthHandler(reg, func() bool { return false }, nil, nil)
 		assert.Equal(t, http.StatusOK, doGet(t, h, "/livez"))
 	})
 
 	t.Run("readyz 503 when no identity", func(t *testing.T) {
-		h := healthHandler(reg, func() bool { return false }, nil)
+		h := healthHandler(reg, func() bool { return false }, nil, nil)
 		assert.Equal(t, http.StatusServiceUnavailable, doGet(t, h, "/readyz"))
 	})
 
 	t.Run("readyz 503 when a dependency check fails", func(t *testing.T) {
 		h := healthHandler(reg, func() bool { return true }, []ReadinessCheck{
 			{Name: "db", Probe: func(context.Context) error { return errors.New("down") }},
-		})
+		}, nil)
 		assert.Equal(t, http.StatusServiceUnavailable, doGet(t, h, "/readyz"))
 	})
 
 	t.Run("readyz 200 when identity present and all checks pass", func(t *testing.T) {
 		h := healthHandler(reg, func() bool { return true }, []ReadinessCheck{
 			{Name: "db", Probe: func(context.Context) error { return nil }},
-		})
+		}, nil)
 		assert.Equal(t, http.StatusOK, doGet(t, h, "/readyz"))
 	})
 
 	t.Run("metrics endpoint serves prometheus text", func(t *testing.T) {
-		h := healthHandler(reg, func() bool { return true }, nil)
+		h := healthHandler(reg, func() bool { return true }, nil, nil)
 		assert.Equal(t, http.StatusOK, doGet(t, h, "/metrics"))
 	})
 }

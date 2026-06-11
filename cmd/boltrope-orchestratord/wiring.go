@@ -31,6 +31,7 @@ import (
 	genproto "github.com/xd1lab/harness-ai/gen/boltrope/v1"
 	"github.com/xd1lab/harness-ai/internal/orchestrator/adapter/inbound/approval"
 	igrpc "github.com/xd1lab/harness-ai/internal/orchestrator/adapter/inbound/grpc"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/adapter/inbound/rest"
 	"github.com/xd1lab/harness-ai/internal/orchestrator/adapter/outbound/eventstore"
 	"github.com/xd1lab/harness-ai/internal/orchestrator/app/agent"
 	"github.com/xd1lab/harness-ai/internal/orchestrator/app/agentctx"
@@ -164,7 +165,15 @@ func Run(ctx context.Context, cfg *config.Config, logw io.Writer) error {
 		_ = tel.Shutdown(ctx)
 		return err
 	}
-	authOpts, err := authServerOptions(buildAuthConfig(cfg, osettings, keyfunc))
+	authCfg := buildAuthConfig(cfg, osettings, keyfunc)
+	authOpts, err := authServerOptions(authCfg)
+	if err != nil {
+		_ = tel.Shutdown(ctx)
+		return err
+	}
+	// The REST/SSE facade shares the SAME auth policy (and keyfunc, hence the
+	// same JWKS cache) as the gRPC interceptors — identical auth per FR-API-03.
+	restAuth, err := igrpc.NewAuthenticator(authCfg)
 	if err != nil {
 		_ = tel.Shutdown(ctx)
 		return err
@@ -199,6 +208,10 @@ func Run(ctx context.Context, cfg *config.Config, logw io.Writer) error {
 
 	runner := igrpc.NewLoopRunner(deps, loopCfg)
 	server := igrpc.NewServer(store, gate, runner, ids.System{}, igrpc.Config{DefaultModel: osettings.DefaultModel})
+	// REST/JSON + SSE facade over the same server (spec §2 minimal facade:
+	// CreateSession/GetSession/Run-over-SSE/Control/Fork), mounted on the
+	// daemon's HTTP listener next to /livez,/readyz,/metrics.
+	restHandler := rest.NewHandler(server, restAuth)
 
 	// Shutdown closers, registered so they run LIFO (telemetry flush last).
 	closers := []func() error{func() error { _ = tel.Shutdown(ctx); return nil }}
@@ -222,6 +235,7 @@ func Run(ctx context.Context, cfg *config.Config, logw io.Writer) error {
 			// not on the first real turn; FR-OBS-05).
 			ReadinessChecks: append([]daemon.ReadinessCheck{dbReadiness(cfg.Postgres.DSN)}, down.readinessChecks()...),
 			Closers:         closers,
+			HTTPRoutes:      restHandler.Routes,
 		},
 	})
 }
