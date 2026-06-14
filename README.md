@@ -34,6 +34,7 @@ Context is treated as a finite resource — actively managed via token accountin
 - [Install — binaries & container images](#install)
 - [REST API (SSE)](#rest-api-sse) — drive it from Python/curl, no SDK
 - [MCP Server mode (callee)](#mcp-server-mode-callee) — other agents delegate to Boltrope
+- [Local dev mode (`boltrope-dev`)](#local-dev-mode-boltrope-dev) — one binary, no Docker, no keys
 - [Examples](#examples) · [How Boltrope compares](docs/comparison.md)
 - [Feature overview](#feature-overview)
 - [Configuring a provider](#configuring-a-provider)
@@ -226,6 +227,37 @@ The **run + approval loop keeps the call open**: a `run` `tools/call` holds its 
 
 ---
 
+## Local dev mode (`boltrope-dev`)
+
+The [Quickstart](#quickstart) brings up four services plus Postgres over mTLS. That's the honest production shape — but it's a lot to stand up just to *feel* the agent loop. `boltrope-dev` is the **30-second on-ramp**: a single, pure-Go binary that runs the **same** agent loop in **one process** — in-memory event store, the keyless `stub` model, a no-exec tool sandbox, plaintext loopback, no mTLS/OIDC/Postgres ([ADR-0024](docs/decisions/0024-boltrope-dev-local-mode.md)).
+
+```bash
+# Build the one binary (no Docker, no Postgres, no keys) and run it.
+go run ./cmd/boltrope-dev run
+# It prints a loud NOT-FOR-PRODUCTION banner, then serves:
+#   gRPC     : 127.0.0.1:8089
+#   REST/SSE : 127.0.0.1:8088
+
+# Drive a keyless task over the REST/SSE facade — no Authorization header.
+curl -s -X POST localhost:8088/v1/sessions -d '{}'          # => {"sessionId":"019e…"}
+curl -s -N -X POST localhost:8088/v1/sessions/<id>/run -d '{"text":"hello"}'
+# event: text_delta … "I received your task and I am working on it."
+# event: result      … "subtype":"TERMINATION_SUBTYPE_SUCCESS","numTurns":"1"
+```
+
+`harnessctl --insecure --endpoint localhost:8089 …` is the gRPC client against the same binary. It runs the **real** loop, policy pipeline, read-only-vs-mutation scheduling, approval gate, streaming, fork, and structured-output validate-retry — the only things stubbed are the network edges (model = keyless stub; tools = no-exec).
+
+**This is not, and cannot become, a production deployment — by construction:**
+
+- **It's a separate binary.** Production images never package `cmd/boltrope-dev`, so "can't run in prod by accident" is a *build-time* property, not a runtime flag. An import-graph test enforces that it pulls in **no** pgx, SPIRE/mTLS, or cross-service gRPC client edges.
+- **It refuses to start on production signals.** Any of `KUBERNETES_SERVICE_HOST`, `BOLTROPE_POSTGRES__DSN`, or `BOLTROPE_OIDC_ISSUER` → fail-closed exit. It binds **loopback only**; a non-loopback bind requires the conspicuous `--i-understand-this-is-not-production` flag.
+- **It's loud.** Every start prints a multi-line banner: `NOT FOR PRODUCTION · IN-MEMORY · NO RLS · NO mTLS · NO OIDC · LOOPBACK ONLY · NO-EXEC`.
+- **It still runs the tenant check.** With OIDC skipped it injects a fixed synthetic single-tenant principal, so `igrpc`'s `authorizeTenant` runs the same code path — single-tenant loopback semantics *replace* multi-tenant RLS, they don't delete the check.
+
+**v1 scope, honestly:** sessions are **in-memory** (non-persistent, lost on exit) and the sandbox is **no-exec** — `read`/`compute`/`sub-agent` work, but `bash` is a refusing placeholder (`"dev sandbox exec disabled"`), so v1 demonstrates the whole loop but does not run arbitrary shell/coding tasks. **SQLite/file persistence** and a **real opt-in local-exec sandbox** are re-scoped to roadmap and their flags (`--store`, `--enable-local-exec`) are **rejected, not silently ignored**. See [ADR-0024](docs/decisions/0024-boltrope-dev-local-mode.md).
+
+---
+
 ## Examples
 
 Runnable walkthroughs in [examples/](examples/) — the first three run end-to-end
@@ -366,6 +398,7 @@ v1 is a deliberately focused, irreducible harness. The `Provider`, `Workspace`/`
 
 - **MCP server mode** ([ADR-0022](docs/decisions/0022-mcp-server-mode.md)) ships in v1 over Streamable HTTP ([see above](#mcp-server-mode-callee)). Deferred: stdio transport, MCP `elicitation`, full OAuth Protected-Resource-Metadata discovery, the `prompts`/`resources`/`sampling` capabilities, and **A2A interoperability**.
 - **microVM / gVisor / OS-native sandbox backends** — v1 is containers-only behind the `Workspace`/`Runtime` port; multi-tenant execution of mutually-untrusted code is therefore out of scope for v1.
+- **`boltrope-dev` persistence & local exec** ([ADR-0024](docs/decisions/0024-boltrope-dev-local-mode.md)) — [local dev mode](#local-dev-mode-boltrope-dev) ships in v1 in-memory and no-exec. Deferred: SQLite/file persistence (`--store`) and a real opt-in local-exec sandbox (`--enable-local-exec`, with ADR-0014-grade process-tree-kill / fork-bomb / resource-limit tests); both flags are rejected today so the deferral is explicit, and both slot onto the existing `EventLogPort` / `Workspace`/`Runtime` seams.
 - **In-sandbox egress proxy** — `webfetch`/`websearch` reach allowlisted hosts today through the [egress data path](#web-access-egress) (an in-process hardened fetcher mediated by the broker; [ADR-0021](docs/decisions/0021-egress-data-path.md)). The sandbox itself stays `--network none`, so in-sandbox `bash` and MCP-HTTP still have no network; the forward proxy that would give the sandbox namespace a per-connection-gated path is deferred (the `EgressBroker` port and `--network` seam are shaped to slot it in without re-architecture).
 - **Model routing** and advanced multi-agent topologies.
 - **Full REST mapping for every RPC** — v1 ships the minimal facade ([REST API](#rest-api-sse): CreateSession / GetSession / `Run` over SSE / Control / Fork); a generated, annotations-based mapping of the complete proto surface is deferred.
