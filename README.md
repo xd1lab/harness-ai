@@ -33,6 +33,7 @@ Context is treated as a finite resource — actively managed via token accountin
 - [Quickstart](#quickstart) · [Use a real model](#use-a-real-model)
 - [Install — binaries & container images](#install)
 - [REST API (SSE)](#rest-api-sse) — drive it from Python/curl, no SDK
+- [MCP Server mode (callee)](#mcp-server-mode-callee) — other agents delegate to Boltrope
 - [Examples](#examples) · [How Boltrope compares](docs/comparison.md)
 - [Feature overview](#feature-overview)
 - [Configuring a provider](#configuring-a-provider)
@@ -203,6 +204,28 @@ Routes: `POST /v1/sessions` · `GET /v1/sessions/{id}` · `POST /v1/sessions/{id
 
 ---
 
+## MCP Server mode (callee)
+
+Boltrope also exposes **itself** as a [Model Context Protocol](https://modelcontextprotocol.io) server, so any compliant MCP client — Claude Desktop, Cursor, another agent framework — can delegate a whole governed task to it: create a session, run an agent task, inspect state, approve/deny a pending tool call, and fork. This is the **callee** position ([ADR-0022](docs/decisions/0022-mcp-server-mode.md)): Boltrope as a sandboxed, tenant-isolated, auditable, durable, replayable execution backend other agents call over the network.
+
+The endpoint is `POST /mcp` on the **same** HTTP listener as the REST facade and `/readyz`. It is a thin adapter over the *same* server methods, so OIDC auth, multi-tenant RLS, the approval gate, the per-tenant in-flight cap, durable resumable delivery, and at-most-once mutating actions are all inherited — identical to the gRPC and REST edges.
+
+```bash
+# 1. initialize — the MCP handshake (returns serverInfo + capabilities{tools}).
+curl -fsS -X POST localhost:8080/mcp -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
+
+# 2. tools/list — the 5 tools: create_session, run, get_session, control, fork.
+# 3. tools/call run with _meta.progressToken — the reply streams back on a
+#    text/event-stream leg as notifications/progress, then the terminal result.
+```
+
+The **run + approval loop keeps the call open**: a `run` `tools/call` holds its SSE leg open until the run terminates (exactly like REST's `POST .../run`). A risky tool call surfaces as an in-band approval `notifications/progress` frame carrying a `call_id`; you resolve it with a **concurrent** `tools/call control` (approve/deny) on a separate connection while the run stays open. A run needing N approvals is one `run` call interleaved with N `control` calls; a dropped leg reconnects via the durable `after_seq` cursor.
+
+**v1 ships Streamable HTTP only**, hand-rolled (no MCP SDK), mounted on the existing listener. Honestly deferred to roadmap: stdio transport, MCP `elicitation`, stateful `Mcp-Session-Id` redelivery, full OAuth Protected-Resource-Metadata discovery, and the `prompts`/`resources`/`sampling` capabilities — see [ADR-0022](docs/decisions/0022-mcp-server-mode.md). Walkthrough: [**examples/mcp-server/**](examples/mcp-server/) (initialize → tools/list → create_session → run, in ~50 lines of POSIX shell).
+
+---
+
 ## Examples
 
 Runnable walkthroughs in [examples/](examples/) — the first three run end-to-end
@@ -230,7 +253,7 @@ The capabilities behind the promises above — own your stack, isolate every ten
 - **Hooks / middleware** — `PreToolUse`, `PostToolUse`, `Stop`, and `PreCompact` hooks run as host subprocesses behind a `CommandRunner` port; a `PreToolUse` block prevents dispatch.
 - **Context management** — running token accounting, automatic compaction before the budget threshold, append-only tool-result clearing (stubs in the window, full content retained in the log/blob store), and tenant-scoped prompt-cache prefixes.
 - **Observability** — OpenTelemetry GenAI spans (`invoke_agent` / `chat` / `execute_tool`) with `gen_ai.*` attributes and trace-context propagation over gRPC; RED metrics per RPC (errors broken down by termination subtype) and USE/saturation gauges (worker-pool, live sandboxes, PG pool, blob bytes, projection lag); `slog` JSON logs with `LogValuer` secret redaction; gRPC health + HTTP `/livez` / `/readyz` with dependency-gated readiness.
-- **Client API** — a resumable `Run` server-stream (Last-Event-ID semantics) plus a unary `Control` RPC (approve / deny / interrupt / reattach), served over **gRPC and a REST/JSON + SSE facade** (`Run` streams as `text/event-stream`; identical auth and ownership checks by construction — the facade calls the same server). See [REST API](#rest-api-sse) and [examples/python/run_task.py](examples/python/run_task.py) for the zero-SDK Python path.
+- **Client API** — a resumable `Run` server-stream (Last-Event-ID semantics) plus a unary `Control` RPC (approve / deny / interrupt / reattach), served over **gRPC, a REST/JSON + SSE facade, and an MCP server endpoint** (`Run` streams as `text/event-stream`; identical auth and ownership checks by construction — every edge calls the same server). See [REST API](#rest-api-sse), [MCP Server mode](#mcp-server-mode-callee), and [examples/python/run_task.py](examples/python/run_task.py) for the zero-SDK Python path.
 - **Deterministic eval harness** — golden scenarios drive the real loop against a scripted fake provider and fake clock, with **no network**; wired into CI as a required gate.
 
 ---
@@ -298,12 +321,12 @@ Boltrope is **three long-lived services plus one projection worker**, all over a
 | **tool-runtime** (`boltrope-toolruntimed`) | The trust boundary for model-influenced code: tool registry (native + MCP), JSON-Schema validation, per-session sandboxes, MCP client, and the deny-by-default egress broker. |
 | **projectord** (`boltrope-projectord`) | Read-side worker (off the request path): tails the event log and runs cost-rollup and OTel-export projections with an xmin-bounded safe-advance cursor. Lag never blocks a turn. |
 
-Plus `boltrope-migrate` (runs DDL and exits — a release gate) and `harnessctl` (the client CLI/SDK). Services talk gRPC + protobuf with mTLS; the client edge is gRPC plus a minimal [REST/SSE facade](#rest-api-sse) on the orchestrator's HTTP listener (a full REST mapping for every RPC is [roadmap](#roadmap--deferred)).
+Plus `boltrope-migrate` (runs DDL and exits — a release gate) and `harnessctl` (the client CLI/SDK). Services talk gRPC + protobuf with mTLS; the client edge is gRPC plus a minimal [REST/SSE facade](#rest-api-sse) and an [MCP server endpoint](#mcp-server-mode-callee) on the orchestrator's HTTP listener (all three call the same server methods through the same auth; a full REST mapping for every RPC is [roadmap](#roadmap--deferred)).
 
 ```
-Client ──gRPC (resumable Run / Control)──> Orchestrator ──┬─ gRPC ─> Model Gateway ──> LLM APIs / self-hosted
-                                            (agent loop +  │                            (Anthropic/Gemini/OpenAI)
-                                             event store)  ├─ gRPC ─> Tool Runtime ──> Sandbox (per session)
+Client ──gRPC / REST+SSE / MCP (/mcp)──> Orchestrator ──┬─ gRPC ─> Model Gateway ──> LLM APIs / self-hosted
+  (resumable Run / Control;               (agent loop +  │                            (Anthropic/Gemini/OpenAI)
+   other agents call IN via MCP)           event store)  ├─ gRPC ─> Tool Runtime ──> Sandbox (per session)
                                                   │        │                            + egress broker
                                                   ▼        └──────────────────────────> External MCP servers
                                              PostgreSQL  <── projectord (cost-rollup, OTel export)
@@ -341,7 +364,7 @@ Found a vulnerability? Please report it privately — see [SECURITY.md](SECURITY
 
 v1 is a deliberately focused, irreducible harness. The `Provider`, `Workspace`/`Runtime`, `EventLogPort`, and MCP abstractions are shaped so these slot in **without re-architecture** ([ADR-0003](docs/decisions/0003-v1-scope.md)):
 
-- **MCP server mode** (and A2A interoperability) — v1 ships the MCP *client* only.
+- **MCP server mode** ([ADR-0022](docs/decisions/0022-mcp-server-mode.md)) ships in v1 over Streamable HTTP ([see above](#mcp-server-mode-callee)). Deferred: stdio transport, MCP `elicitation`, full OAuth Protected-Resource-Metadata discovery, the `prompts`/`resources`/`sampling` capabilities, and **A2A interoperability**.
 - **microVM / gVisor / OS-native sandbox backends** — v1 is containers-only behind the `Workspace`/`Runtime` port; multi-tenant execution of mutually-untrusted code is therefore out of scope for v1.
 - **In-sandbox egress proxy** — `webfetch`/`websearch` reach allowlisted hosts today through the [egress data path](#web-access-egress) (an in-process hardened fetcher mediated by the broker; [ADR-0021](docs/decisions/0021-egress-data-path.md)). The sandbox itself stays `--network none`, so in-sandbox `bash` and MCP-HTTP still have no network; the forward proxy that would give the sandbox namespace a per-connection-gated path is deferred (the `EgressBroker` port and `--network` seam are shaped to slot it in without re-architecture).
 - **Model routing** and advanced multi-agent topologies.
