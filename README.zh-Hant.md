@@ -2,7 +2,7 @@
 
 # Boltrope
 
-**以 Go 打造、可跨供應商移植、事件溯源的 AI agent harness。**
+**為「必須自行掌控資料、必須證明租戶隔離、需要稽核每一次執行」的團隊打造的可自架 AI agent 引擎。**
 
 [![CI](https://github.com/xd1lab/harness-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/xd1lab/harness-ai/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/xd1lab/harness-ai.svg)](https://pkg.go.dev/github.com/xd1lab/harness-ai)
@@ -14,11 +14,19 @@
 
 > 本文件是英文版 [README.md](README.md) 的完整繁體中文對譯，方便中文使用者閱讀。**權威來源以英文版為準**;若兩者有出入(例如英文版剛更新、中文版尚未跟上),請以英文版為主。連到 `docs/`、`examples/`、`deploy/` 的文件目前仍為英文。
 
-Boltrope 把無狀態的 LLM 補全 API,變成一個**有狀態、會使用工具、能自我修正的 agent**,讓你跑在自己的基礎設施上,對接任何支援的託管或自架模型。它是**純後端**的(沒有前端、不依賴任何專有雲),建立在單一理念上:唯一的真實來源是一份 **PostgreSQL 中只追加(append-only)、事件溯源的日誌**。會話的續傳、分叉、重播、成本計算與可觀測性,全都從這份日誌衍生而來。
+Boltrope 是一個讓你跑在自己基礎設施上的 AI agent 引擎。把它指向一個託管模型(Anthropic、Google、OpenAI)或一個你自架的模型——同一套應用程式碼對任何一個都能運作。它是**純後端**的:沒有 UI、不依賴任何專有雲、沒有供應商遙測。它唯一會對話的對象,就是你指定的那些端點——你的資料庫、你的模型供應商、你的可觀測性堆疊。
 
-**為什麼又一個 harness?** 多數 agent 框架把迴圈綁死在某一家供應商的 SDK 上、把會話狀態放在行程記憶體裡、並讓工具以不受限的主機權限執行。Boltrope 反其道而行,畫出三條硬邊界:一個正規化的 `Provider` 介面,讓迴圈永不 import 任何供應商 SDK;一份耐久的事件日誌,讓崩潰的 agent 能確定性地續跑(且絕不會被默默重複計費);以及一個單一的沙箱化 tool-runtime,搭配預設拒絕(deny-by-default)的網路出口,作為模型可影響的程式碼唯一的執行場所。Context 被當作有限資源——透過 token 計量、自動壓縮(compaction)與 prompt 快取來主動管理。
+貫穿其中的是一個理念:每一次執行都是 PostgreSQL 資料庫裡一筆永久、有序的紀錄,而不是放在記憶體裡的狀態。正是這筆紀錄,讓一次執行能在崩潰後續跑、之後能被重播或分叉、也能作為一份完整、可重播的紀錄交給稽核人員——也正是它,讓 agent 不會把同一個真實世界的動作做第二次。
 
-> **狀態:** v1,純後端。agent 迴圈、四大家族的 model gateway、事件儲存、沙箱化 tool-runtime、權限、MCP 客戶端,以及 OpenTelemetry 可觀測性皆已實作。今日已交付的內容見[功能總覽](#功能總覽),刻意延後的內容見[路線圖](#路線圖與延後項目)。
+**為什麼又一個 harness?** 許多 agent 框架把你綁在某一家模型供應商上、把一次執行的狀態放在記憶體裡(一崩潰就丟失),並讓工具以啟動它的那個行程相同的權限執行。對一個必須自架、又要面對安全審查的團隊來說,這三點都是負債。Boltrope 反其道而行:
+
+- **不被供應商鎖定。** 單一的內部介面意味著 agent 對任何支援的模型——託管或自架——運作方式都相同;換模型不必改你的應用程式。
+- **崩潰不丟東西,動作也不會重複。** 每一次執行都活在一份耐久的資料庫日誌裡,所以失敗的執行能從停下的地方續跑,而一個已經發生的真實世界動作——已寄出的 email、已扣款的卡、已寫出的檔案——不會被重做。
+- **模型驅動的程式碼跑在一個上鎖的盒子裡。** 工具在一個預設無網路的每會話沙箱中執行——這是模型可影響的程式碼唯一能跑的地方,除非你允許,否則它無法對外連線。
+
+Context 被當作有限資源——透過 token 計量、自動壓縮(compaction)與 prompt 快取來主動管理。
+
+> **狀態:** v1,純後端(尚無 UI)。今日已能運作的:agent 迴圈、四個模型家族的支援(Anthropic、Google、OpenAI,以及自架/OpenAI 相容)、耐久的事件日誌、每會話沙箱、權限與人工核可、一個 MCP 客戶端,以及內建的可觀測性。完整清單見[功能總覽](#功能總覽),目前刻意省略的內容見[路線圖](#路線圖與延後項目)。
 
 ---
 
@@ -210,11 +218,11 @@ curl -fsS -X POST "localhost:8080/v1/sessions/$SESSION/control" \
 
 ## 功能總覽
 
-除非明確標記為 _roadmap(路線圖)_,以下一切皆已在 v1 實作。
+支撐上述承諾——掌控你的技術堆疊、隔離每個租戶、安全地行動、稽核一切——的各項能力,在此逐一拆解。除非明確標記為 _roadmap(路線圖)_,以下一切皆已在 v1 實作。
 
 - **Agent 迴圈** — 單執行緒的 gather → act → verify(ReAct 風格)迴圈,具回合(turn)、`max_turns` / `max_budget_usd` 上限,以及具型別的終止子類型(`success`、`error_max_turns`、`error_max_budget_usd`、`error_during_execution`、`error_max_structured_output_retries`)。協作式取消、doom-loop(卡迴圈)偵測,以及限制深度的「子 agent 作為工具」。
 - **多 LLM、可跨供應商移植** — model-gateway 之後是單一正規化的 `Provider` 介面(Generate / Stream / CountTokens / Capabilities),具備 **Anthropic Claude**、**Google Gemini**、**OpenAI**(以 Responses API 為主、Chat Completions 為子旗標)的轉接器,以及一個涵蓋**自架**端點(vLLM、Ollama、LM Studio、llama.cpp、TGI、LiteLLM)的 **OpenAI 相容**轉接器。能力旗標按每 `(端點, 模型)` 解析,而非按供應商家族。迴圈持有**零**供應商 SDK import——新增一個供應商只動到一個轉接器套件加上一筆能力表項目。
-- **事件溯源的會話,含續傳與分叉** — 一份只追加的 PostgreSQL 日誌是唯一真實來源。追加是**樂觀的**(比對 `expected_seq`)、**有柵欄的**(lease epoch),且**冪等的**(重送的 `request_id` 是 no-op,不是衝突)。續傳會摺疊日誌並明確裁決開放中的回合/工具執行——崩潰的執行絕不會被默默重複計費。分叉可在任意序號處從一個會話分支出去,不動到母會話。
+- **事件溯源的會話,含續傳與分叉** — 一份只追加的 PostgreSQL 日誌是唯一真實來源。追加是**樂觀的**(比對 `expected_seq`)、**有柵欄的**(lease epoch),且**冪等的**(重送的 `request_id` 是 no-op,不是衝突)。崩潰之後,一次執行會從耐久日誌中恰好停下的地方續跑,而不是從頭開始;它重播已記錄的步驟,但不會重做已完成的工作。分叉可在歷史中的任意一點從會話分支出去,不動到原始會話——用於時光回溯除錯,或把一次真實執行凍結成一個測試。_(因為已完成的回合不會重跑,續傳的執行也不會為它們重複計費——這只在長時間、高成本的執行上才有意義;對短執行而言差異可忽略。)_
 - **沙箱化工具** — 核心原生工具(`read`、`edit`、`write`、`glob`、`grep`、`bash`、`webfetch`、`websearch`)在 `Workspace`/`Runtime` 埠之後的每會話容器內執行。工具輸入在執行前經 JSON-Schema 驗證;錯誤以 `Observation` 呈現,絕不 panic。取消時,行程群組在 cgroup/PID-namespace 邊界被擊殺。一份耐久的去重(dedup)帳本讓會變更狀態的工具在重啟後仍為至多一次(at-most-once)。
 - **權限與 human-in-the-loop** — 分層的 `deny → mode → allow → tool` 策略管線,含 `default` / `acceptEdits` / `plan` / `bypass` 模式、針對 lethal-trifecta 風險的污點追蹤網路出口閘門,以及以事件持久化的核可決定(可在重播時重新檢查)。會話的常設模式在建立時設定:`harnessctl --permission-mode default|acceptEdits|plan`(環境變數 `BOLTROPE_CTL_PERMISSION_MODE`)在 CLI 建立會話時套用;`bypass` 僅限操作者,客戶端提供的 bypass 會在伺服器端被拒(ADR-0019)。
 - **MCP(客戶端)** — 透過 **stdio 或 HTTP** 連接 Model Context Protocol 伺服器,具延遲 schema 載入;每個伺服器在自己的受限沙箱中執行;首次使用的註冊需要明確的人類核可,且 MCP 工具描述被當作不可信輸入。
@@ -314,7 +322,7 @@ Client ──gRPC (resumable Run / Control)──> Orchestrator ──┬─ gRP
 - **服務對服務 mTLS**,透過 SPIFFE/SPIRE 工作負載身分,搭配預設拒絕的每 RPC 動詞閘門。一個僅限開發的靜態憑證後備以 `BOLTROPE_DEV_INSECURE=1` 做環境變數閘控,並記錄一則醒目警告——它存在於二進位檔中,但除非明確啟用否則惰性;發行映像以 `-tags spire` 建置以啟用 SPIRE 路徑。
 - **客戶端邊緣認證**驗證 OIDC/bearer token(`iss`/`aud`/`exp`,拒絕 `alg=none`,JWKS 以 refresh-on-miss 輪替),並在每次呼叫驗證會話所有權。生產接線是兩個環境變數(`BOLTROPE_OIDC_ISSUER` / `_AUDIENCE`)——orchestrator 在啟動時執行 OIDC discovery,若沒有一個可達、issuer 相符的 IdP 就**拒絕啟動**;見[部署逐步說明](deploy/README.md#client-edge-auth-in-production-oidc)。
 - **租戶隔離**在資料庫層,透過 PostgreSQL Row-Level Security(非擁有者角色、從驗證過的 token 設 `SET LOCAL` GUC、`FORCE ROW LEVEL SECURITY`)。
-- **預設拒絕的網路出口** <a id="web-access-egress"></a> — 每會話沙箱以 `--network none` 執行,所以沙箱內的 `bash` 與 MCP-HTTP **沒有外部網路**。`webfetch`/`websearch` 工具透過**網路出口資料通道**([ADR-0021](docs/decisions/0021-egress-data-path.md))連到外界:一個位於 tool-runtime 信任邊界、強化過的行程內抓取器,**對每個請求與每個重導向跳轉**都由預設拒絕的 broker 中介(`BOLTROPE_TOOLRT_EGRESS_ALLOWLIST`;空 ⇒ 全部拒絕),搭配 DNS 釘選撥接與僅限公開位址的出口(SSRF 防禦)。`websearch` 查詢一個設定好的 SearXNG 相容 JSON 端點(`BOLTROPE_TOOLRT_SEARCH_URL`)。在操作者把主機加入白名單之前,什麼都連不到——即使加了,沙箱命名空間本身仍維持切斷。供應商原生 / 伺服器端工具在 v1 停用。
+- **預設拒絕的網路出口** <a id="web-access-egress"></a> — 預設情況下,agent 的沙箱**完全沒有網際網路存取**,所以模型驅動的程式碼無法偷偷對網路發出連線;唯一的出口是 `webfetch`/`websearch` 工具,而即便是它們,也**只能連到操作者明確允許的主機**。細節如下:每會話沙箱以 `--network none` 執行,所以沙箱內的 `bash` 與 MCP-HTTP **沒有外部網路**。`webfetch`/`websearch` 工具透過**網路出口資料通道**([ADR-0021](docs/decisions/0021-egress-data-path.md))連到外界:一個位於 tool-runtime 信任邊界、強化過的行程內抓取器,**對每個請求與每個重導向跳轉**都由預設拒絕的 broker 中介(`BOLTROPE_TOOLRT_EGRESS_ALLOWLIST`;空 ⇒ 全部拒絕),搭配 DNS 釘選撥接與僅限公開位址的出口(SSRF 防禦)。`websearch` 查詢一個設定好的 SearXNG 相容 JSON 端點(`BOLTROPE_TOOLRT_SEARCH_URL`)。在操作者把主機加入白名單之前,什麼都連不到——即使加了,沙箱命名空間本身仍維持切斷。供應商原生 / 伺服器端工具在 v1 停用。
 - **機密**只存在於 model-gateway 設定(環境變數)中,絕不在日誌或任何回應裡;持有機密的型別透過 `slog.LogValuer` 遮蔽。
 
 **要部署到 Kubernetes?** 生產套件是位於 [`deploy/helm/boltrope/`](deploy/helm/boltrope/) 的 Helm chart——SPIRE 簽發的身分、OIDC 邊緣認證、migration 閘門 hook Job,以及沙箱化的 tool-runtime,**在 render 時即 fail-closed**(沒有 OIDC issuer / 沒有 SPIRE / `stub` 供應商 / 未明確確認的 dev-insecure 都會拒絕 render)。SPIRE 從零開始:[`deploy/k8s/spire/`](deploy/k8s/spire/)。
@@ -367,7 +375,7 @@ v1 是一個刻意聚焦、不可再簡化的 harness。`Provider`、`Workspace`
 
 ### 徵求設計夥伴
 
-Boltrope 還很年輕、由一個小團隊打造,所以它刻意圍繞一種使用者塑形:需要**自架**、需要**資料庫強制的租戶隔離**與**可稽核的事件日誌**、且承擔不起為一次崩潰的執行重複計費的團隊。如果那就是你——一個正在建立內部 agent 服務的平台或安全團隊——我們希望由你的需求驅動路線圖。帶著你的使用情境與限制,開一個[設計夥伴討論](https://github.com/xd1lab/harness-ai/discussions/categories/design-partners)。誠實看待適配:如果你在快速做原型、或想要一個 UI / 整合目錄,今日[其他 harness](docs/comparison.md) 會更適合你,我們也會這樣說。
+Boltrope 還很年輕、由一個小團隊打造,所以它刻意圍繞一種使用者塑形:需要**自架**、需要**資料庫強制的租戶隔離**與**可稽核的每次執行紀錄**、且其 agent 會採取絕不能執行兩次的真實世界動作的團隊。如果那就是你——一個正在建立內部 agent 服務的平台或安全團隊——我們希望由你的需求驅動路線圖。帶著你的使用情境與限制,開一個[設計夥伴討論](https://github.com/xd1lab/harness-ai/discussions/categories/design-partners)。誠實看待適配:如果你在快速做原型、或想要一個 UI / 整合目錄,今日[其他 harness](docs/comparison.md) 會更適合你,我們也會這樣說。
 
 ---
 

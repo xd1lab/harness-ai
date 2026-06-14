@@ -1,9 +1,10 @@
 # The durable event ledger (and surviving a crash)
 
 Boltrope's core claim is that a session is an **append-only event log in
-PostgreSQL**, not state in a process's memory. This is what makes a crashed
-agent resumable and what guarantees it is never silently re-billed for work it
-already did. This example makes that tangible.
+PostgreSQL**, not state in a process's memory. That log is what lets a crashed
+run resume where it stopped, what makes every run replayable and auditable
+afterward, and what stops an agent from repeating an action it already took.
+This example makes that tangible.
 
 ## Run it
 
@@ -47,9 +48,15 @@ container:
 
 ## Why it matters
 
-- **Crash-resume never re-bills.** Cost and usage are events in the log; a
-  resumed session continues from the last recorded turn instead of replaying
-  (and re-charging) completed work.
+- **Actions don't double-fire.** A durable ledger records each mutating tool
+  call, so a crash-and-restart resumes without repeating an action that already
+  happened — an email already sent is not sent again, a file already written is
+  not written twice.
+- **A crashed run resumes where it stopped.** Cost and progress are events in
+  the log; a resumed session continues from the last recorded turn instead of
+  replaying completed work. _(For long, expensive runs that also means you
+  aren't re-charged for work already done; for short runs the saving is
+  negligible.)_
 - **The log is auditable.** Every approval decision, tool call, and cost is an
   immutable row — replayable and inspectable long after the run.
 - **Tenant-scoped at the database.** The `events`/`sessions` tables enforce

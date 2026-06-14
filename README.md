@@ -2,7 +2,7 @@
 
 # Boltrope
 
-**A provider-portable, event-sourced AI agent harness in Go.**
+**The self-hostable AI-agent engine for teams that must own their data, prove tenant isolation, and audit every run.**
 
 [![CI](https://github.com/xd1lab/harness-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/xd1lab/harness-ai/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/xd1lab/harness-ai.svg)](https://pkg.go.dev/github.com/xd1lab/harness-ai)
@@ -12,11 +12,19 @@
 
 **English** · [繁體中文](README.zh-Hant.md)
 
-Boltrope turns a stateless LLM completion API into a **stateful, tool-using, self-correcting agent** that you run on your own infrastructure, against any supported hosted or self-hosted model. It is backend-only (no frontend, no proprietary cloud dependency) and built on one idea: the single source of truth is an **append-only, event-sourced log in PostgreSQL**. Session resume, fork, replay, cost accounting, and observability all derive from that log.
+Boltrope is an AI-agent engine you run on your own infrastructure. Point it at a hosted model (Anthropic, Google, OpenAI) or one you host yourself — the same application code works against any of them. It is backend-only: no UI, no proprietary cloud, no vendor telemetry. The only things it talks to are the endpoints you point it at — your database, your model provider, your observability stack.
 
-**Why another harness?** Most agent frameworks couple the loop to one vendor's SDK, keep session state in process memory, and run tools with unrestricted host access. Boltrope draws three hard boundaries instead: a normalized `Provider` interface so the loop never imports a vendor SDK; a durable event log so a crashed agent resumes deterministically (and is never silently re-billed); and a single sandboxed tool-runtime with deny-by-default egress as the only place model-influenced code runs. Context is treated as a finite resource — actively managed via token accounting, automatic compaction, and prompt caching.
+One idea runs through it: every run is a permanent, ordered record in a PostgreSQL database, not state held in memory. That record is what lets a run resume after a crash, be replayed or branched later, and be handed to an auditor as a complete, replayable record of what happened — and it's what keeps an agent from firing the same real-world action twice.
 
-> **Status:** v1, backend-only. The agent loop, the four-family model gateway, the event store, the sandboxed tool-runtime, permissions, MCP client, and OpenTelemetry observability are implemented. See [Feature overview](#feature-overview) for what ships today and [Roadmap](#roadmap--deferred) for what is deliberately deferred.
+**Why another harness?** Many agent frameworks tie you to one model vendor, hold a run's state in memory (so a crash loses it), and run tools with the same access as the process that launched them. For a team that has to self-host and answer to a security review, those are three liabilities. Boltrope is built the opposite way:
+
+- **No vendor lock-in.** A single internal interface means the agent works the same against any supported model, hosted or self-hosted — switching models doesn't change your application.
+- **Nothing is lost in a crash, and nothing fires twice.** Every run lives in a durable database log, so a failed run resumes where it stopped, and a real-world action that already happened — an email sent, a card charged, a file written — isn't repeated.
+- **Model-driven code runs in a locked box.** Tools execute in a per-session sandbox with no network by default — the one place model-influenced code can run, and it can't reach out unless you allow it.
+
+Context is treated as a finite resource — actively managed via token accounting, automatic compaction, and prompt caching.
+
+> **Status:** v1, backend-only (no UI yet). What works today: the agent loop, support for four model families (Anthropic, Google, OpenAI, and self-hosted/OpenAI-compatible), the durable event log, the per-session sandbox, permissions and human approvals, an MCP client, and built-in observability. See [Feature overview](#feature-overview) for the full list and [Roadmap](#roadmap--deferred) for what is deliberately left out for now.
 
 ---
 
@@ -211,11 +219,11 @@ New here and weighing the options? [**How Boltrope compares**](docs/comparison.m
 
 ## Feature overview
 
-Everything below is implemented in v1 unless explicitly marked _roadmap_.
+The capabilities behind the promises above — own your stack, isolate every tenant, act safely, audit everything — broken out in detail. Everything below is implemented in v1 unless explicitly marked _roadmap_.
 
 - **Agent loop** — a single-threaded gather → act → verify (ReAct-style) loop with turns, `max_turns` / `max_budget_usd` caps, and typed termination subtypes (`success`, `error_max_turns`, `error_max_budget_usd`, `error_during_execution`, `error_max_structured_output_retries`). Cooperative cancellation, doom-loop (stuck-loop) detection, and depth-limited sub-agents-as-tools.
 - **Multi-LLM, provider-portable** — one normalized `Provider` interface (Generate / Stream / CountTokens / Capabilities) behind the model-gateway, with adapters for **Anthropic Claude**, **Google Gemini**, **OpenAI** (Responses API primary, Chat Completions sub-flag), and an **OpenAI-compatible** adapter covering **self-hosted** endpoints (vLLM, Ollama, LM Studio, llama.cpp, TGI, LiteLLM). Capability flags resolve per `(endpoint, model)`, not per provider family. The loop holds **zero** vendor-SDK imports — adding a provider touches only an adapter package plus a capabilities-table entry.
-- **Event-sourced sessions with resume & fork** — an append-only PostgreSQL log is the single source of truth. Appends are **optimistic** (compare `expected_seq`), **fenced** (lease epoch), and **idempotent** (a re-sent `request_id` is a no-op, not a conflict). Resume folds the log and adjudicates open turns/tool-executions explicitly — a crashed run is never silently re-billed. Fork branches a session at any sequence without touching the parent.
+- **Event-sourced sessions with resume & fork** — an append-only PostgreSQL log is the single source of truth. Appends are **optimistic** (compare `expected_seq`), **fenced** (lease epoch), and **idempotent** (a re-sent `request_id` is a no-op, not a conflict). After a crash, a run resumes from the durable log exactly where it stopped instead of starting over, replaying its recorded steps without re-doing completed work. Fork branches a session at any point in its history without touching the original — for time-travel debugging, or to freeze a real run into a test. _(Because completed turns aren't re-run, a resumed run isn't re-charged for them — which only matters for long, expensive runs; for short ones the difference is negligible.)_
 - **Sandboxed tools** — core native tools (`read`, `edit`, `write`, `glob`, `grep`, `bash`, `webfetch`, `websearch`) run inside per-session containers behind a `Workspace`/`Runtime` port. Tool inputs are JSON-Schema-validated before execution; errors surface as an `Observation`, never a panic. On cancellation the process group is killed at the cgroup/PID-namespace boundary. A durable dedup ledger makes mutating tools at-most-once across restarts.
 - **Permissions & human-in-the-loop** — a layered `deny → mode → allow → tool` policy pipeline with `default` / `acceptEdits` / `plan` / `bypass` modes, a taint-tracking egress gate for the lethal-trifecta risk, and approval decisions persisted as events (re-checkable on replay). A session's standing mode is set at creation: `harnessctl --permission-mode default|acceptEdits|plan` (env `BOLTROPE_CTL_PERMISSION_MODE`) applies when the CLI creates the session; `bypass` is operator-only and a client-supplied bypass is rejected server-side (ADR-0019).
 - **MCP (client)** — connect Model Context Protocol servers over **stdio or HTTP** with lazy schema loading; each server runs in its own confined sandbox; first-use registration requires explicit human approval and MCP tool descriptions are treated as untrusted input.
@@ -315,7 +323,7 @@ Read the details:
 - **Service-to-service mTLS** via SPIFFE/SPIRE workload identity, with deny-by-default per-RPC verb gates. A dev-only static-cert fallback is env-gated behind `BOLTROPE_DEV_INSECURE=1` and logs a loud warning — it is present in the binary but inert unless explicitly enabled; release images build with `-tags spire` to enable the SPIRE path.
 - **Client-edge auth** validates OIDC/bearer tokens (`iss`/`aud`/`exp`, `alg=none` rejected, JWKS rotation via refresh-on-miss) and verifies session ownership on every call. Production wiring is two env vars (`BOLTROPE_OIDC_ISSUER` / `_AUDIENCE`) — the orchestrator runs OIDC discovery at startup and **refuses to start** without a reachable, issuer-matching IdP; see the [deploy walkthrough](deploy/README.md#client-edge-auth-in-production-oidc).
 - **Tenant isolation** at the database layer via PostgreSQL Row-Level Security (non-owner role, `SET LOCAL` GUC from the verified token, `FORCE ROW LEVEL SECURITY`).
-- **Deny-by-default egress** <a id="web-access-egress"></a> — the per-session sandbox runs with `--network none`, so in-sandbox `bash` and MCP-HTTP have **no external network**. The `webfetch`/`websearch` tools reach the outside through the **egress data path** ([ADR-0021](docs/decisions/0021-egress-data-path.md)): a hardened in-process fetcher at the tool-runtime trust boundary, mediated **per request and per redirect hop** by the deny-by-default broker (`BOLTROPE_TOOLRT_EGRESS_ALLOWLIST`; empty ⇒ deny-all), with DNS-pinned dialing and public-address-only egress (SSRF defense). `websearch` queries a configured SearXNG-compatible JSON endpoint (`BOLTROPE_TOOLRT_SEARCH_URL`). Nothing is reachable until an operator allowlists the host — and even then the sandbox namespace itself stays severed. Provider-native/server-side tools are disabled in v1.
+- **Deny-by-default egress** <a id="web-access-egress"></a> — by default an agent's sandbox has **no internet access at all**, so model-driven code can't quietly reach out to the network; the only way out is the `webfetch`/`websearch` tools, and even they reach **only hosts an operator has explicitly allowed**. In detail: the per-session sandbox runs with `--network none`, so in-sandbox `bash` and MCP-HTTP have **no external network**. The `webfetch`/`websearch` tools reach the outside through the **egress data path** ([ADR-0021](docs/decisions/0021-egress-data-path.md)): a hardened in-process fetcher at the tool-runtime trust boundary, mediated **per request and per redirect hop** by the deny-by-default broker (`BOLTROPE_TOOLRT_EGRESS_ALLOWLIST`; empty ⇒ deny-all), with DNS-pinned dialing and public-address-only egress (SSRF defense). `websearch` queries a configured SearXNG-compatible JSON endpoint (`BOLTROPE_TOOLRT_SEARCH_URL`). Nothing is reachable until an operator allowlists the host — and even then the sandbox namespace itself stays severed. Provider-native/server-side tools are disabled in v1.
 - **Secrets** live only in model-gateway configuration (env), never in the log or any response; secret-bearing types redact via `slog.LogValuer`.
 
 **Deploying to Kubernetes?** The production kit is the Helm chart at
@@ -374,10 +382,11 @@ Contributions are welcome. Boltrope is built **spec-first and test-first** — s
 ### Design partners wanted
 
 Boltrope is young and built by a small team, so it is shaped deliberately around
-one kind of user: teams that **self-host**, need **DB-enforced tenant
-isolation** and an **auditable event log**, and can't afford to re-bill a
-crashed run. If that's you — a platform or security team standing up an internal
-agent service — we want your requirements driving the roadmap. Open a
+one kind of user: teams that **self-host**, need **database-enforced tenant
+isolation** and an **auditable record of every run**, and run agents that take
+real-world actions that must never fire twice. If that's you — a platform or
+security team standing up an internal agent service — we want your requirements
+driving the roadmap. Open a
 [design-partner discussion](https://github.com/xd1lab/harness-ai/discussions/categories/design-partners)
 with your use case and constraints. Honest about fit: if you're prototyping
 quickly or want a UI/integration catalog, [other harnesses](docs/comparison.md)

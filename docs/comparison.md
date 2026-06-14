@@ -2,8 +2,8 @@
 
 # How Boltrope compares
 
-There are excellent agent harnesses already. This page is an honest attempt to
-help you pick the right one — including the many cases where that isn't
+There are excellent agent harnesses already. This page helps you pick the right
+one for your team — and is honest about the many cases where that isn't
 Boltrope. It compares Boltrope with two popular open-source projects that also
 describe themselves as agent harnesses:
 
@@ -25,7 +25,7 @@ many pre-built integrations, start with one of them.
 | --- | --- |
 | Prototyping an agent in Python, fast, inside an existing LangChain app | **deepagents** |
 | A non-developer or SMB wanting "AI employees" with many ready integrations | **hive** |
-| A platform team that must **self-host**, prove **tenant isolation**, keep an **auditable record**, and survive crashes without double-charging | **Boltrope** |
+| A platform team that must **self-host**, prove **tenant isolation**, keep an **auditable record**, and run agents that take real actions safely | **Boltrope** |
 
 Boltrope's bet is the third row: teams for whom *where the data lives*, *who can
 see it*, and *what survives a restart* are requirements, not nice-to-haves. If
@@ -39,7 +39,7 @@ that is not you, one of the others is very likely the better tool today.
 | **Maturity / community** | Young, one maintainer, no production users yet | Large, active, LangChain-backed | Large, bounty-driven |
 | **Get-started speed** | `docker compose up` (a stack) | `pip install` + ~5 lines | Install the app |
 | **Session state** | Append-only event log in **PostgreSQL** | Your responsibility (bring your own store) | Local JSON / SQLite |
-| **Crash-resume** | Resumes from the durable log; completed turns are **not re-billed** | Not built in | Not a server model |
+| **Crash-resume** | Resumes from the durable log where it stopped; a durable ledger keeps actions **at-most-once**, so a crash-restart won't repeat a side effect (and won't re-charge completed work) | Not built in | Not a server model |
 | **Multi-tenant isolation** | **DB-enforced** (PostgreSQL RLS, non-owner role, `FORCE ROW LEVEL SECURITY`) | Not provided | Not provided |
 | **Client-edge auth** | OIDC/JWT, **fail-closed** (refuses to start without an issuer) | App's responsibility | n/a (desktop) |
 | **Tool sandbox** | Per-session container, `--network none` by default, process-tree kill, at-most-once mutating tools | Trust-based by default | Runs with the user's access |
@@ -81,7 +81,7 @@ The [roadmap](../README.md#roadmap--deferred) tracks these openly.
 
 For most people getting started today, deepagents or hive will get you further,
 faster. Boltrope earns its keep only when self-hosting, DB-enforced tenant
-isolation, an auditable event log, and crash-safe billing are hard
-requirements — the kind of constraints platform and security teams have, and
-that the alternatives leave to you. If that describes your situation, we'd
+isolation, an auditable record of every run, and crash-safe handling of
+real-world actions are hard requirements — the kind of constraints platform and
+security teams have, and that the alternatives leave to you. If that describes your situation, we'd
 genuinely like to [hear from you](../README.md#community--support).
