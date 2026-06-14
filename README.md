@@ -34,6 +34,7 @@ Context is treated as a finite resource — actively managed via token accountin
 - [Install — binaries & container images](#install)
 - [REST API (SSE)](#rest-api-sse) — drive it from Python/curl, no SDK
 - [MCP Server mode (callee)](#mcp-server-mode-callee) — other agents delegate to Boltrope
+- [Structured output](#structured-output) — get JSON your code can parse
 - [Local dev mode (`boltrope-dev`)](#local-dev-mode-boltrope-dev) — one binary, no Docker, no keys
 - [Examples](#examples) · [How Boltrope compares](docs/comparison.md)
 - [Feature overview](#feature-overview)
@@ -224,6 +225,25 @@ curl -fsS -X POST localhost:8080/mcp -H 'Content-Type: application/json' \
 The **run + approval loop keeps the call open**: a `run` `tools/call` holds its SSE leg open until the run terminates (exactly like REST's `POST .../run`). A risky tool call surfaces as an in-band approval `notifications/progress` frame carrying a `call_id`; you resolve it with a **concurrent** `tools/call control` (approve/deny) on a separate connection while the run stays open. A run needing N approvals is one `run` call interleaved with N `control` calls; a dropped leg reconnects via the durable `after_seq` cursor.
 
 **v1 ships Streamable HTTP only**, hand-rolled (no MCP SDK), mounted on the existing listener. Honestly deferred to roadmap: stdio transport, MCP `elicitation`, stateful `Mcp-Session-Id` redelivery, full OAuth Protected-Resource-Metadata discovery, and the `prompts`/`resources`/`sampling` capabilities — see [ADR-0022](docs/decisions/0022-mcp-server-mode.md). Walkthrough: [**examples/mcp-server/**](examples/mcp-server/) (initialize → tools/list → create_session → run, in ~50 lines of POSIX shell).
+
+---
+
+## Structured output
+
+Need a run to return JSON your code can parse instead of prose? Set an `output_schema` — a JSON Schema — on the run, and Boltrope holds the model to it. The same two fields work on every edge (gRPC, REST, and MCP):
+
+- **`output_schema`** — a JSON Schema *object* the final answer must satisfy (passed inline; a non-object is rejected with a `400` before the run even starts).
+- **`strict`** — ask for provider-native strict enforcement where the model supports it.
+
+```bash
+curl -NfsS -X POST "localhost:8080/v1/sessions/$SESSION/run" -d '{
+  "text": "Extract the invoice as JSON.",
+  "output_schema": {"type":"object","required":["total"],"properties":{"total":{"type":"number"}}},
+  "strict": true
+}'
+```
+
+Where the provider supports it natively — **OpenAI (Responses), Gemini, and current Anthropic models** — Boltrope sends your schema as the provider's own structured-output mode. Everywhere else (OpenAI-compatible/self-hosted endpoints, older models) it falls back to **validate-then-retry**: the final answer is checked against the schema and the model is re-asked on a mismatch, up to a cap (after which the run ends `error_max_structured_output_retries`). Either way the contract you get is identical — a schema-valid result, or an explicit, recorded failure ([ADR-0023](docs/decisions/0023-structured-output.md)).
 
 ---
 

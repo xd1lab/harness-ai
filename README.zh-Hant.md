@@ -36,6 +36,8 @@ Context 被當作有限資源——透過 token 計量、自動壓縮(compaction
 - [安裝 — 二進位檔與容器映像](#安裝)
 - [REST API(SSE)](#rest-api) — 用 Python/curl 驅動,免 SDK
 - [MCP 伺服器模式(被呼叫端)](#mcp-伺服器模式被呼叫端--callee) — 其他 agent 把工作委派給 Boltrope
+- [結構化輸出](#結構化輸出) — 取得程式可解析的 JSON
+- [本機開發模式 boltrope-dev](#本機開發模式-boltrope-dev) — 單一執行檔,免 Docker、免金鑰
 - [範例](#範例) · [Boltrope 與其他工具的比較](docs/comparison.md)
 - [功能總覽](#功能總覽)
 - [設定模型供應商](#設定模型供應商)
@@ -223,6 +225,56 @@ curl -fsS -X POST localhost:8080/mcp -H 'Content-Type: application/json' \
 **run + 核可迴圈會讓 call 保持開啟**:`run` 的 `tools/call` 會把它的 SSE 串流維持開啟直到該次執行終結(與 REST 的 `POST .../run` 完全一樣)。撞到風險工具呼叫時,會以 in-band 的核可 `notifications/progress` 訊框(帶 `call_id`)推出;你在**另一條連線**上以**並行的** `tools/call control`(approve/deny)解除,而 run 仍保持開啟。一次需要 N 次核可的 run = 一次 `run` call 交織 N 次 `control` call;斷線重連則用耐久的 `after_seq` 游標。
 
 **v1 只交付 Streamable HTTP**、手刻(不採 MCP SDK)、掛在既有監聽埠上。誠實延後到路線圖:stdio 傳輸、MCP `elicitation`、stateful `Mcp-Session-Id` 重送、完整 OAuth Protected-Resource-Metadata discovery,以及 `prompts`/`resources`/`sampling` capabilities——見 [ADR-0022](docs/decisions/0022-mcp-server-mode.md)。逐步示範:[**examples/mcp-server/**](examples/mcp-server/)(initialize → tools/list → create_session → run,約 50 行 POSIX shell)。
+
+---
+
+## 結構化輸出
+
+需要一次執行回傳程式可以解析的 JSON、而不是一段文字嗎?在執行上設定 `output_schema`(一份 JSON Schema),Boltrope 就會要求模型遵守它。同樣兩個欄位在每個入口(gRPC、REST、MCP)都通用:
+
+- **`output_schema`** — 最終答案必須符合的 JSON Schema **物件**(以 inline JSON 傳入;非物件會在執行開始前就以 `400` 拒絕)。
+- **`strict`** — 在模型支援時,要求供應商原生的嚴格 schema 強制。
+
+```bash
+curl -NfsS -X POST "localhost:8080/v1/sessions/$SESSION/run" -d '{
+  "text": "Extract the invoice as JSON.",
+  "output_schema": {"type":"object","required":["total"],"properties":{"total":{"type":"number"}}},
+  "strict": true
+}'
+```
+
+在供應商原生支援的地方——**OpenAI(Responses)、Gemini,以及目前的 Anthropic 模型**——Boltrope 會把你的 schema 當成供應商自己的結構化輸出模式送出。其他地方(OpenAI 相容/自架端點、較舊的模型)則退回**驗證後重試**:最終答案會對 schema 檢查,不符就再問模型一次,直到上限(之後該次執行以 `error_max_structured_output_retries` 結束)。無論走哪條路,你拿到的契約都一樣——一個符合 schema 的結果,或一個明確、有紀錄的失敗([ADR-0023](docs/decisions/0023-structured-output.md))。
+
+---
+
+## 本機開發模式 boltrope-dev
+
+[快速開始](#快速開始)會拉起四個服務加 Postgres、走 mTLS。那是誠實的生產形態——但只是想*感受*一下 agent 迴圈的話,要架起這一整套太重了。`boltrope-dev` 是**30 秒上手通道**:一個純 Go 的單一執行檔,在**單一行程**裡跑**同一套** agent 迴圈——記憶體事件儲存、免金鑰的 `stub` 模型、不可執行(no-exec)的工具沙箱、明文 loopback、無 mTLS/OIDC/Postgres([ADR-0024](docs/decisions/0024-boltrope-dev-local-mode.md))。
+
+```bash
+# 建置這一個執行檔(免 Docker、免 Postgres、免金鑰)並執行。
+go run ./cmd/boltrope-dev run
+# 它會印出醒目的「非生產用」橫幅,然後服務:
+#   gRPC     : 127.0.0.1:8089
+#   REST/SSE : 127.0.0.1:8088
+
+# 透過 REST/SSE 跑一個免金鑰任務——不需要 Authorization 標頭。
+curl -s -X POST localhost:8088/v1/sessions -d '{}'          # => {"sessionId":"019e…"}
+curl -s -N -X POST localhost:8088/v1/sessions/<id>/run -d '{"text":"hello"}'
+# event: text_delta … "I received your task and I am working on it."
+# event: result      … "subtype":"TERMINATION_SUBTYPE_SUCCESS","numTurns":"1"
+```
+
+`harnessctl --insecure --endpoint localhost:8089 …` 是對同一個執行檔的 gRPC 客戶端。它跑的是**真正的**迴圈、策略管線、唯讀-vs-變更的排程、審批閘門、串流、分叉,以及結構化輸出的驗證重試——唯一被替身化的只有網路邊緣(模型 = 免金鑰 stub;工具 = no-exec)。
+
+**它不是、也不可能變成生產部署——這是設計上的保證:**
+
+- **它是獨立的執行檔。** 生產映像永遠不打包 `cmd/boltrope-dev`,所以「不會不小心在生產跑」是**建置期**性質,不是執行期旗標。一個 import-graph 測試強制它**不**牽入 pgx、SPIRE/mTLS 或跨服務 gRPC 客戶端邊緣。
+- **遇到生產訊號就拒絕啟動。** `KUBERNETES_SERVICE_HOST`、`BOLTROPE_POSTGRES__DSN`、`BOLTROPE_OIDC_ISSUER` 任一存在 → fail-closed 退出。它**只綁 loopback**;要綁非 loopback 需要顯眼的 `--i-understand-this-is-not-production` 旗標。
+- **它很吵。** 每次啟動都印多行橫幅:`NOT FOR PRODUCTION · IN-MEMORY · NO RLS · NO mTLS · NO OIDC · LOOPBACK ONLY · NO-EXEC`。
+- **它仍然跑租戶檢查。** 跳過 OIDC 時它注入一個固定的合成單租戶 principal,所以 `igrpc` 的 `authorizeTenant` 走的是同一條程式路徑——單租戶 loopback 語意*取代*多租戶 RLS,而不是刪掉檢查。
+
+**v1 範圍,誠實說:** 會話是**記憶體**式的(不持久、退出即失),沙箱是 **no-exec**——`read`/`compute`/`sub-agent` 可用,但 `bash` 是會拒絕的佔位符(`"dev sandbox exec disabled"`),所以 v1 展示整套迴圈,但不執行任意 shell/coding 任務。**SQLite/檔案持久化**與**真正可選的本機-exec 沙箱**重新劃入路線圖,其旗標(`--store`、`--enable-local-exec`)是**被拒絕、而非默默忽略**。見 [ADR-0024](docs/decisions/0024-boltrope-dev-local-mode.md)。
 
 ---
 
