@@ -231,13 +231,22 @@ func (r *relay) send(frame *genproto.RunEvent) error {
 }
 
 // onApproval is invoked by an ApprovalNotifier-capable gate when a tool call
-// needs approval; it emits an ApprovalRequest frame tagged with the current head
-// seq. Failures to send are ignored (best-effort; the durable log remains the
-// authority and the client can reattach).
+// needs approval; it emits an ApprovalRequest frame tagged with the durable
+// resume cursor at the approval point so a client can reattach from there
+// (FR-API-01). The cursor is the highest live seq streamed so far, falling back
+// to the session's durable head when the live tail has not advanced yet (a tool
+// call can reach the gate before any client-visible delta has been streamed — the
+// durable head is then the correct, deterministic cursor). Failures to send are
+// ignored (best-effort; the durable log remains the authority).
 func (r *relay) onApproval(req app.ApprovalRequest) {
 	r.sendMu.Lock()
 	seq := r.liveSeq
 	r.sendMu.Unlock()
+	if seq == 0 {
+		if sess, err := r.server.log.LoadSession(context.Background(), r.sessionID); err == nil {
+			seq = sess.HeadSeq
+		}
+	}
 	_ = r.send(toGenApprovalFrame(seq, req.CallID, req.ToolName, req.Reason, req.Args))
 }
 

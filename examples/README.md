@@ -13,6 +13,7 @@ docker compose -f deploy/docker-compose.yml up --build -d --wait
 | Example | Shows | Needs |
 | --- | --- | --- |
 | [curl/](curl/) | Drive a session over REST/JSON + SSE with nothing but `curl` | keyless stub stack |
+| [mcp-server/](mcp-server/) | Call Boltrope as an MCP server (initialize → tools/list → create_session + run; the call-stays-open approval loop) with nothing but `curl` | keyless stub stack |
 | [durable-resume/](durable-resume/) | The durable event ledger: inspect the per-session log, and watch a session survive an orchestrator crash | keyless stub stack + `psql` |
 | [python/](python/) | A ~100-line `requests`-only client with interactive approvals | keyless stub stack |
 | [web-research/](web-research/) | Enable `webfetch`/`websearch` through the deny-by-default egress data path | a real model + an allowlisted host |

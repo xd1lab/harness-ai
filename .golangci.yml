@@ -171,6 +171,16 @@ linters:
           - forbidigo
         path: _test\.go
 
+      # The mcpserver test harness's JSON-RPC helpers (doRPC/callTool) read AND
+      # CLOSE the response body internally before returning the decoded envelope
+      # (plus the *http.Response, used only for status/header assertions).
+      # bodyclose cannot follow the deferred close across the helper boundary and
+      # flags every call site as a leak; the bodies ARE closed. Scope the
+      # exclusion to this package's test files only.
+      - linters:
+          - bodyclose
+        path: internal/orchestrator/adapter/inbound/mcpserver/.*_test\.go
+
       # ----------------------------------------------------------------------
       # Frozen-contract exemptions (Gate-4 input). The normalized kernel, the
       # domain types, the consumer-defined ports, and the policy contract are

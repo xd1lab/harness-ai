@@ -22,7 +22,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
@@ -31,6 +33,7 @@ import (
 	genproto "github.com/xd1lab/harness-ai/gen/boltrope/v1"
 	"github.com/xd1lab/harness-ai/internal/orchestrator/adapter/inbound/approval"
 	igrpc "github.com/xd1lab/harness-ai/internal/orchestrator/adapter/inbound/grpc"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/adapter/inbound/mcpserver"
 	"github.com/xd1lab/harness-ai/internal/orchestrator/adapter/inbound/rest"
 	"github.com/xd1lab/harness-ai/internal/orchestrator/adapter/outbound/eventstore"
 	"github.com/xd1lab/harness-ai/internal/orchestrator/app/agent"
@@ -73,6 +76,11 @@ type orchSettings struct {
 	// production (FR-API-03); unused in dev-insecure mode.
 	OIDCIssuer   string
 	OIDCAudience string
+	// MCPAllowedOrigins is the comma-separated browser-origin allowlist for the
+	// MCP Server-mode endpoint's DNS-rebinding guard (ADR-0022 §2.4). An empty
+	// list rejects any present Origin (fail-closed) and allows an absent one
+	// (non-browser MCP clients send none).
+	MCPAllowedOrigins []string
 }
 
 // loadOrchSettings reads the orchestrator-specific environment, applying the
@@ -84,11 +92,28 @@ func loadOrchSettings() orchSettings {
 		MaxContextTokens:    envInt("BOLTROPE_MAX_CONTEXT_TOKENS", 0),
 		SubAgentMaxDepth:    envInt("BOLTROPE_SUBAGENT_MAX_DEPTH", 2),
 		// Shared with the model-gateway so both daemons price a turn identically.
-		PricingFile:  os.Getenv("BOLTROPE_PRICING_FILE"),
-		TrustDomain:  envOr("BOLTROPE_TRUST_DOMAIN", "boltrope.local"),
-		OIDCIssuer:   os.Getenv("BOLTROPE_OIDC_ISSUER"),
-		OIDCAudience: os.Getenv("BOLTROPE_OIDC_AUDIENCE"),
+		PricingFile:       os.Getenv("BOLTROPE_PRICING_FILE"),
+		TrustDomain:       envOr("BOLTROPE_TRUST_DOMAIN", "boltrope.local"),
+		OIDCIssuer:        os.Getenv("BOLTROPE_OIDC_ISSUER"),
+		OIDCAudience:      os.Getenv("BOLTROPE_OIDC_AUDIENCE"),
+		MCPAllowedOrigins: splitCSV(os.Getenv("BOLTROPE_MCP_ALLOWED_ORIGINS")),
 	}
+}
+
+// splitCSV splits a comma-separated env value into a trimmed, non-empty slice
+// (nil for an empty/absent value).
+func splitCSV(v string) []string {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if t := strings.TrimSpace(p); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // envOr returns the value of env var key, or def when it is unset/empty.
@@ -212,6 +237,13 @@ func Run(ctx context.Context, cfg *config.Config, logw io.Writer) error {
 	// CreateSession/GetSession/Run-over-SSE/Control/Fork), mounted on the
 	// daemon's HTTP listener next to /livez,/readyz,/metrics.
 	restHandler := rest.NewHandler(server, restAuth)
+	// MCP Server-mode facade over the SAME server and the SAME authenticator
+	// (ADR-0022): a thin Streamable-HTTP adapter (POST /mcp) exposing Boltrope as
+	// an MCP server (initialize/tools.list/tools.call for create_session/run/
+	// get_session/control/fork). It inherits OIDC auth + RLS + the approval gate by
+	// construction. version labels initialize.serverInfo; the origin allowlist is
+	// the DNS-rebinding guard.
+	mcpHandler := mcpserver.NewHandler(server, restAuth, version, osettings.MCPAllowedOrigins)
 
 	// Shutdown closers, registered so they run LIFO (telemetry flush last).
 	closers := []func() error{func() error { _ = tel.Shutdown(ctx); return nil }}
@@ -235,7 +267,14 @@ func Run(ctx context.Context, cfg *config.Config, logw io.Writer) error {
 			// not on the first real turn; FR-OBS-05).
 			ReadinessChecks: append([]daemon.ReadinessCheck{dbReadiness(cfg.Postgres.DSN)}, down.readinessChecks()...),
 			Closers:         closers,
-			HTTPRoutes:      restHandler.Routes,
+			// The daemon accepts exactly one HTTPRoutes closure, so the REST and MCP
+			// route registrars are composed into one (REST first, MCP second) onto the
+			// daemon's single ServeMux — both sit beside /livez,/readyz,/metrics. The
+			// /v1/... (REST) and /mcp (MCP) paths do not collide (AC-20).
+			HTTPRoutes: func(mux *http.ServeMux) {
+				restHandler.Routes(mux)
+				mcpHandler.Routes(mux)
+			},
 		},
 	})
 }

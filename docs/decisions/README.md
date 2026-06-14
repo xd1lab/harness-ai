@@ -50,3 +50,4 @@ The resulting trade-offs — good, bad, and neutral — and any follow-up work.
 | [0019](0019-session-scoped-permission-mode.md) | Session-scoped permission mode persisted as `sessions.mode` (resolves ADR-0018 §4) | Accepted |
 | [0020](0020-production-oidc-edge-auth.md) | Production client-edge auth: OIDC discovery + JWKS Keyfunc (dependency-light, fail-closed startup, rate-limited rotation refresh) | Accepted |
 | [0021](0021-egress-data-path.md) | Egress data path: in-process hardened fetcher (DNS-pinned, SSRF-safe, redirect re-gated) for webfetch/websearch; sandbox stays `--network none` | Accepted |
+| [0022](0022-mcp-server-mode.md) | MCP Server mode: expose Boltrope as a callable MCP server (Streamable HTTP, hand-rolled thin adapter, shared OIDC+RLS, call-stays-open approvals via concurrent control) | Accepted |

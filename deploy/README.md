@@ -100,6 +100,38 @@ ingress — the facade itself is plain HTTP behind it). See README
 §"REST API (SSE)" and `examples/python/run_task.py` for a complete zero-SDK
 Python client.
 
+### Driving a session as an MCP server (MCP Server mode)
+
+Boltrope also exposes ITSELF as a Model Context Protocol (MCP) server, so an
+external MCP client (Claude Desktop, Cursor, another agent) can delegate a whole
+governed task to it — the "callee" position (ADR-0022). The MCP endpoint is
+`POST /mcp` on the SAME HTTP listener as REST and `/readyz` (Streamable HTTP
+only; `GET`/`DELETE /mcp` return `405 + Allow: POST`). It is a thin adapter over
+the same `igrpc.Server` methods, so OIDC auth, multi-tenant RLS, the per-tenant
+in-flight cap, the approval gate, durable resumable delivery, and at-most-once
+mutating actions are inherited identically to the gRPC/REST edges.
+
+- **Handshake:** `initialize` → `tools/list` returns 5 tools — `create_session`,
+  `run`, `get_session`, `control`, `fork`.
+- **Run + approval (call stays open):** call `tools/call run` with a
+  `_meta.progressToken` to get a `text/event-stream` leg of `notifications/progress`
+  frames; when the run hits a risky tool call, an in-band approval frame carries
+  the `call_id`. Resolve it with a CONCURRENT `tools/call control`
+  (`action:"approve"`/`"deny"`) on a SEPARATE connection while the `run` call
+  stays open — exactly how the REST `POST .../run` SSE + `POST .../control` pair
+  works. A run needing N approvals is one `run` call interleaved with N `control`
+  calls; a dropped leg is recovered by re-calling `run` with the last `after_seq`.
+- **Auth:** identical to the other edges (dev stack needs no token; production
+  sends the same OIDC bearer). See `examples/mcp-server/` for a runnable
+  `curl` walkthrough of the full handshake + run + approval loop.
+
+`BOLTROPE_MCP_ALLOWED_ORIGINS` (comma-separated, default empty) is the MCP
+endpoint's DNS-rebinding guard: a request with an **absent** `Origin` header is
+allowed (non-browser MCP clients send none), a request with a **present** `Origin`
+must match the allowlist or it is rejected with HTTP 403 (an empty allowlist +
+present Origin fails closed). Non-browser clients (Claude Desktop, Cursor,
+server-to-server) are unaffected by leaving it empty.
+
 ---
 
 ## What comes up, and in what order
