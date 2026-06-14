@@ -10,7 +10,7 @@
 // schema_migrations row, so they run on a per-test scratch DATABASE created on
 // the provisioned server — never on the provisioned database itself, which in
 // external-DSN mode may be a shared dev instance.
-package db
+package dbmigrate
 
 import (
 	"context"

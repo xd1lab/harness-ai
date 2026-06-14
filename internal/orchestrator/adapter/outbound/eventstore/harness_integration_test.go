@@ -32,6 +32,7 @@ import (
 
 	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
 	infradb "github.com/xd1lab/harness-ai/internal/orchestrator/infra/db"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/infra/dbmigrate"
 )
 
 const (
@@ -82,7 +83,7 @@ func newHarness(t *testing.T) *harness {
 
 	// Apply the embedded migrations as the owner. This also creates the
 	// boltrope_app role (NOBYPASSRLS).
-	if err := infradb.Migrate(ctx, ownerDSN); err != nil {
+	if err := dbmigrate.Migrate(ctx, ownerDSN); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 

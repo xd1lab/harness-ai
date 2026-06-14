@@ -8,9 +8,9 @@
 // It is intentionally tiny: all the work — connecting, the PostgreSQL >= 13
 // version gate, the forward-only guard, and applying the embedded Up migrations
 // — lives in the already-tested
-// [github.com/xd1lab/harness-ai/internal/orchestrator/infra/db] library half.
-// This binary only loads config (for the DSN) and maps the library's error to a
-// process exit code.
+// [github.com/xd1lab/harness-ai/internal/orchestrator/infra/dbmigrate] library
+// half. This binary only loads config (for the DSN) and maps the library's error
+// to a process exit code.
 package main
 
 import (
@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/xd1lab/harness-ai/internal/orchestrator/infra/db"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/infra/dbmigrate"
 	"github.com/xd1lab/harness-ai/internal/platform/config"
 )
 
@@ -43,7 +43,7 @@ func run(ctx context.Context, args, environ []string, _, stderr io.Writer) int {
 		return 1
 	}
 
-	if err := db.Migrate(ctx, cfg.Postgres.DSN); err != nil {
+	if err := dbmigrate.Migrate(ctx, cfg.Postgres.DSN); err != nil {
 		_, _ = fmt.Fprintf(stderr, "boltrope-migrate: %v\n", err)
 		return 1
 	}

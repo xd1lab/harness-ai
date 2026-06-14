@@ -1,9 +1,9 @@
-// Package db is the orchestrator's migration-runner library half: it applies the
-// embedded event-store migrations ([github.com/xd1lab/harness-ai/migrations]) to
-// a PostgreSQL DSN and gates on the pinned minimum server version. It is the
-// library that cmd/boltrope-migrate (written later) wraps, and it backs the
-// startup migration-gate check the orchestrator runs before accepting traffic
-// (NFR-OPS-01, NFR-PORT-03; architecture §10.2).
+// Package dbmigrate is the orchestrator's migration-runner library half: it
+// applies the embedded event-store migrations
+// ([github.com/xd1lab/harness-ai/migrations]) to a PostgreSQL DSN and gates on
+// the pinned minimum server version. It is the library that cmd/boltrope-migrate
+// wraps, and it backs the startup migration-gate check the orchestrator runs
+// before accepting traffic (NFR-OPS-01, NFR-PORT-03; architecture §10.2).
 //
 // # Why a hand-rolled migrate database driver
 //
@@ -29,7 +29,18 @@
 // [github.com/xd1lab/harness-ai/migrations.CheckForwardOnly] so a destructive
 // down on the log fails loudly even outside CI (ADR-0011 §6.1). Only Up
 // migrations are applied here; this library never runs Down on the event log.
-package db
+//
+// # Why a package separate from infra/db
+//
+// This migration runner pulls in pgx + golang-migrate; the sibling infra/db
+// package holds only the pure, pgx-free RLS tenant-context helpers
+// ([github.com/xd1lab/harness-ai/internal/orchestrator/infra/db.WithTenant]).
+// Keeping the heavy migration runner in its own package means a transport that
+// needs only WithTenant (the client-edge auth interceptor, and through it the
+// single-process cmd/boltrope-dev binary) does not drag the pgx driver into its
+// transitive graph — a build-time invariant the dev binary's import-graph guard
+// enforces (ADR-0024).
+package dbmigrate
 
 import (
 	"context"

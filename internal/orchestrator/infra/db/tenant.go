@@ -1,3 +1,14 @@
+// Package db holds the orchestrator's pure, dependency-light RLS tenant-context
+// helpers ([WithTenant]/[TenantFromContext]): the edge auth places the verified
+// tenant id here and the event store's pgx acquire-hook reads it back to run
+// SET LOCAL app.current_tenant so RLS scopes every borrowed connection
+// (architecture §6.7, §8.2). It imports only the standard library — no pgx — so a
+// transport that needs only the tenant context (the client-edge auth interceptor,
+// and through it the single-process cmd/boltrope-dev binary) does not drag the
+// Postgres driver into its transitive graph. The pgx-based migration runner lives
+// in the sibling
+// [github.com/xd1lab/harness-ai/internal/orchestrator/infra/dbmigrate] package
+// for exactly that reason (ADR-0024).
 package db
 
 import (

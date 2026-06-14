@@ -8,7 +8,7 @@ import (
 
 	"github.com/xd1lab/harness-ai/internal/orchestrator/app"
 	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
-	infradb "github.com/xd1lab/harness-ai/internal/orchestrator/infra/db"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/infra/dbmigrate"
 )
 
 // TestPgxPool_AppendLoad_Integration opens a real *pgxpool.Pool against the
@@ -31,7 +31,7 @@ func TestPgxPool_AppendLoad_Integration(t *testing.T) {
 	ownerDSN, mode := provisionOwnerDSN(ctx, t)
 	t.Logf("pool_pgxpool integration: mode=%s", mode)
 
-	if err := infradb.Migrate(ctx, ownerDSN); err != nil {
+	if err := dbmigrate.Migrate(ctx, ownerDSN); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	grantAppLogin(ctx, t, ownerDSN)

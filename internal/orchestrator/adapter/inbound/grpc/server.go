@@ -5,7 +5,6 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/jackc/pgx/v5/pgconn"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -515,11 +514,21 @@ func mapCreateSessionError(err error) error {
 	return status.Errorf(codes.Internal, "orchestrator: create session failed: %v", err)
 }
 
+// sqlStater is the driver-agnostic SQLSTATE-carrying error interface. The pgx
+// driver's *pgconn.PgError satisfies it (its SQLState method returns the Code),
+// so the transport detects a unique-violation WITHOUT importing the pgx driver
+// itself. Keeping this edge package pgx-free is load-bearing: the single-process
+// dev binary (cmd/boltrope-dev) depends on this transport and is required to be
+// pgx-free (no Postgres in dev mode); a direct pgconn import here would drag the
+// entire driver into the dev binary's transitive graph.
+type sqlStater interface{ SQLState() string }
+
 // isDuplicateKey reports whether err is (or wraps) a Postgres unique-violation
-// (SQLSTATE 23505), i.e. a duplicate session id on the CreateSession INSERT.
+// (SQLSTATE 23505), i.e. a duplicate session id on the CreateSession INSERT. It
+// matches via the driver-agnostic [sqlStater] interface, not a concrete pgx type.
 func isDuplicateKey(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation
+	var pgErr sqlStater
+	return errors.As(err, &pgErr) && pgErr.SQLState() == pgUniqueViolation
 }
 
 // pgUniqueViolation is the Postgres SQLSTATE for a unique_violation.

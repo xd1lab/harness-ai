@@ -51,3 +51,4 @@ The resulting trade-offs — good, bad, and neutral — and any follow-up work.
 | [0020](0020-production-oidc-edge-auth.md) | Production client-edge auth: OIDC discovery + JWKS Keyfunc (dependency-light, fail-closed startup, rate-limited rotation refresh) | Accepted |
 | [0021](0021-egress-data-path.md) | Egress data path: in-process hardened fetcher (DNS-pinned, SSRF-safe, redirect re-gated) for webfetch/websearch; sandbox stays `--network none` | Accepted |
 | [0022](0022-mcp-server-mode.md) | MCP Server mode: expose Boltrope as a callable MCP server (Streamable HTTP, hand-rolled thin adapter, shared OIDC+RLS, call-stays-open approvals via concurrent control) | Accepted |
+| [0024](0024-boltrope-dev-local-mode.md) | `boltrope dev` local mode: separate single-process, loopback-only, in-memory, no-exec dev binary running the real loop; build-time prod-exclusion + tested misuse fence | Accepted |

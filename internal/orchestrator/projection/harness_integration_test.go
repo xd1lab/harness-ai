@@ -27,7 +27,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
-	infradb "github.com/xd1lab/harness-ai/internal/orchestrator/infra/db"
+	"github.com/xd1lab/harness-ai/internal/orchestrator/infra/dbmigrate"
 )
 
 const (
@@ -60,7 +60,7 @@ func newHarness(t *testing.T) *pharness {
 	ctx := context.Background()
 	ownerDSN, mode := provisionOwnerDSN(ctx, t)
 
-	if err := infradb.Migrate(ctx, ownerDSN); err != nil {
+	if err := dbmigrate.Migrate(ctx, ownerDSN); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 
