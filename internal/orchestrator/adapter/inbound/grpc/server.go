@@ -56,6 +56,17 @@ type RunSpec struct {
 	Tainted bool
 	// Mode is the permission operating mode for this run.
 	Mode policy.Mode
+	// OutputSchema, when non-empty, is the JSON Schema (a JSON object encoded as
+	// bytes) constraining this run's final response to structured output. It is
+	// overlaid per-run onto the loop's [agent.Config.OutputSchema]; empty means
+	// free-form. Mirrors [llm.Request.OutputSchema] / the public
+	// RunRequest.output_schema field.
+	OutputSchema []byte
+	// Strict requests provider-native strict enforcement of OutputSchema where
+	// supported; otherwise the loop falls back to validate-and-retry. Meaningful
+	// only when OutputSchema is set. Mirrors [llm.Request.Strict] /
+	// RunRequest.strict.
+	Strict bool
 	// Sink forwards live generation deltas to the connected client. The runner
 	// MUST forward through it (never block on it) so a slow client cannot
 	// backpressure generation (NFR-REL-05).
@@ -352,11 +363,13 @@ func (s *Server) Run(req *genproto.RunRequest, stream genproto.OrchestratorServi
 	// spellings differ for accept-edits); an unset/zero mode resolves to the
 	// secure, most-restrictive ModeDefault.
 	return r.run(ctx, RunSpec{
-		SessionID:   req.GetSessionId(),
-		TenantID:    tenant,
-		UserMessage: fromGenMessage(req.GetMessage()),
-		Mode:        toPolicyMode(sess.Mode),
-		Sink:        r,
+		SessionID:    req.GetSessionId(),
+		TenantID:     tenant,
+		UserMessage:  fromGenMessage(req.GetMessage()),
+		Mode:         toPolicyMode(sess.Mode),
+		OutputSchema: req.GetOutputSchema(),
+		Strict:       req.GetStrict(),
+		Sink:         r,
 	})
 }
 

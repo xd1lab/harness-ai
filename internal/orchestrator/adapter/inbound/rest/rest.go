@@ -121,6 +121,14 @@ type runBody struct {
 	// AfterSeq is the resume cursor: only events with seq > after_seq are
 	// streamed. The standard SSE Last-Event-ID header takes precedence.
 	AfterSeq int64 `json:"after_seq"`
+	// OutputSchema is an OPTIONAL JSON Schema object constraining this run's final
+	// response to structured output. Passed inline as a JSON object (curl-friendly);
+	// the facade forwards the raw bytes onto RunRequest.output_schema. Omit for
+	// free-form output. A non-object value is rejected with HTTP 400.
+	OutputSchema json.RawMessage `json:"output_schema"`
+	// Strict requests provider-native strict schema enforcement where supported;
+	// otherwise the loop validates and retries. Meaningful only with output_schema.
+	Strict bool `json:"strict"`
 }
 
 // controlBody is the POST /v1/sessions/{id}/control request envelope.
@@ -198,9 +206,18 @@ func (h *Handler) run(w http.ResponseWriter, r *http.Request) {
 	req := &genproto.RunRequest{
 		SessionId: r.PathValue("id"),
 		AfterSeq:  afterSeq,
+		Strict:    body.Strict,
 	}
 	if body.Text != "" {
 		req.Message = userTextMessage(body.Text)
+	}
+	// A non-object output_schema is rejected at the facade BEFORE any run starts
+	// (fail-closed-early), giving a typed 400 rather than a mid-run loop failure.
+	if schema, ok := normalizeOutputSchema(body.OutputSchema); ok {
+		req.OutputSchema = schema
+	} else if len(body.OutputSchema) > 0 {
+		writeError(w, http.StatusBadRequest, codes.InvalidArgument, "output_schema must be a JSON object")
+		return
 	}
 
 	stream := newSSEStream(r.Context(), w)
@@ -273,6 +290,23 @@ func userTextMessage(text string) *genproto.Message {
 			{Part: &genproto.ContentPart_Text{Text: &genproto.TextPart{Text: text}}},
 		},
 	}
+}
+
+// normalizeOutputSchema validates that an inline output_schema is a JSON object
+// (the only shape a JSON Schema document takes) and returns its raw bytes. An
+// empty/omitted value yields (nil, true) — free-form, no error. A non-object
+// (array/number/string/null) yields (nil, false) so the caller rejects it with a
+// typed 400 before any run starts (IMPACT §4 fail-closed-early).
+func normalizeOutputSchema(raw json.RawMessage) (schema []byte, ok bool) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return nil, true
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, false
+	}
+	return []byte(raw), true
 }
 
 // parseMode maps the facade's mode vocabulary onto the proto enum, mirroring

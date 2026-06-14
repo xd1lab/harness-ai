@@ -11,7 +11,7 @@ import (
 // shape can be asserted without a live endpoint.
 func marshalParams(t *testing.T, req llm.Request) map[string]any {
 	t.Helper()
-	params, err := buildParams(req)
+	params, err := buildParams(req, llm.Capabilities{})
 	if err != nil {
 		t.Fatalf("buildParams: %v", err)
 	}
@@ -209,7 +209,7 @@ func TestBuildParams_BadToolSchema_InvalidRequest(t *testing.T) {
 	_, err := buildParams(llm.Request{
 		Model: "gpt-5",
 		Tools: []llm.ToolDef{{Name: "bad", JSONSchema: json.RawMessage(`{nope`)}},
-	})
+	}, llm.Capabilities{})
 	assertProviderErrorKind(t, err, llm.ErrInvalidRequest)
 }
 
@@ -235,7 +235,7 @@ func TestBuildParams_MaxTokensAndTemperature(t *testing.T) {
 func TestBuildParams_MalformedContinuationBlob_InvalidRequest(t *testing.T) {
 	// A truncated blob is a decode failure, unlike a well-formed foreign-surface
 	// blob which is silently ignored.
-	_, err := buildParams(llm.Request{Model: "gpt-5", ProviderRaw: json.RawMessage(`{"surface":`)})
+	_, err := buildParams(llm.Request{Model: "gpt-5", ProviderRaw: json.RawMessage(`{"surface":`)}, llm.Capabilities{})
 	assertProviderErrorKind(t, err, llm.ErrInvalidRequest)
 }
 
@@ -279,7 +279,7 @@ func TestConvertMessage_UnsupportedRole_InvalidRequest(t *testing.T) {
 	_, err := buildParams(llm.Request{
 		Model:    "gpt-5",
 		Messages: []llm.Message{{Role: llm.Role("system")}},
-	})
+	}, llm.Capabilities{})
 	assertProviderErrorKind(t, err, llm.ErrInvalidRequest)
 }
 
@@ -373,6 +373,6 @@ func TestConvertMessage_UnmarshalableToolArgs_InvalidRequest(t *testing.T) {
 				{ToolCall: &llm.ToolCall{ID: "c1", Name: "bad", Args: map[string]any{"f": func() {}}}},
 			}},
 		},
-	})
+	}, llm.Capabilities{})
 	assertProviderErrorKind(t, err, llm.ErrInvalidRequest)
 }

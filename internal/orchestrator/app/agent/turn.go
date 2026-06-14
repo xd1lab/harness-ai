@@ -289,6 +289,7 @@ func (l *Loop) buildRequest(ctx context.Context, st *runState) (llm.Request, err
 		Tools:        tools,
 		Stream:       true,
 		OutputSchema: append([]byte(nil), l.cfg.OutputSchema...),
+		Strict:       l.cfg.Strict,
 	}, nil
 }
 

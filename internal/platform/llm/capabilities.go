@@ -35,8 +35,15 @@ type Capabilities struct {
 	// local tokenizer). When false, CountTokens returns a [*ProviderError] with
 	// kind [ErrUnsupported].
 	SupportsTokenCounting bool
-	// SupportsJSONSchemaStrict reports whether the model enforces strict JSON
-	// Schema validation of tool arguments / structured output.
+	// SupportsJSONSchemaStrict reports whether native structured output is
+	// available and strict-enforceable for this (endpoint, model): i.e. the
+	// provider exposes a JSON-Schema response mode — OpenAI Responses
+	// text.format, Gemini response_schema, Anthropic Messages output_config.format
+	// — that constrains the final response to the request's OutputSchema. When
+	// false the gateway sends no native response_format and the orchestrator loop
+	// falls back to validate-and-retry (the correctness backstop holds in both
+	// cases). The central capability table is the single source of truth for this
+	// gate; an adapter's own self-report is not authoritative.
 	SupportsJSONSchemaStrict bool
 	// MaxOutputTokens is the maximum number of tokens the model can generate in a
 	// single response. A zero value means unknown/unspecified. Adapters may clamp

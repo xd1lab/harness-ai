@@ -190,8 +190,11 @@ var builtinCaps = map[string]llm.Capabilities{
 		SupportsSystemPrompt:       true,
 		SupportsThinking:           true,
 		SupportsTokenCounting:      true,
-		SupportsJSONSchemaStrict:   false,
-		MaxOutputTokens:            16000,
+		// Native structured output (stable Messages OutputConfig.Format) verified
+		// against Anthropic's structured-outputs supported-models list (TRACE.md,
+		// Feature S T-9). Flipped from the conservative default.
+		SupportsJSONSchemaStrict: true,
+		MaxOutputTokens:          16000,
 	},
 
 	// Claude 4 Opus — reasoning flagship (ADR-0004 research matrix)
@@ -203,8 +206,9 @@ var builtinCaps = map[string]llm.Capabilities{
 		SupportsSystemPrompt:       true,
 		SupportsThinking:           true,
 		SupportsTokenCounting:      true,
-		SupportsJSONSchemaStrict:   false,
-		MaxOutputTokens:            32000,
+		// Native structured output verified (TRACE.md, Feature S T-9).
+		SupportsJSONSchemaStrict: true,
+		MaxOutputTokens:          32000,
 	},
 
 	// Claude 4 Sonnet
@@ -216,8 +220,9 @@ var builtinCaps = map[string]llm.Capabilities{
 		SupportsSystemPrompt:       true,
 		SupportsThinking:           true,
 		SupportsTokenCounting:      true,
-		SupportsJSONSchemaStrict:   false,
-		MaxOutputTokens:            16000,
+		// Native structured output verified (TRACE.md, Feature S T-9).
+		SupportsJSONSchemaStrict: true,
+		MaxOutputTokens:          16000,
 	},
 
 	// -----------------------------------------------------------------------

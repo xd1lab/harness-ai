@@ -23,9 +23,26 @@ type Config struct {
 	// conservative generic profile via [GenericProfile]; use [LMStudioProfile] /
 	// [OllamaProfile] for those servers.
 	Profile EndpointProfile
+	// Capabilities, when non-nil, resolves per-(endpoint, model) capabilities from
+	// the central registry at request-build time. It is the ONLY path by which native
+	// structured output can be enabled for a self-hosted endpoint: the operator opts
+	// in via capabilities.Registry.SetEndpointOverride. A nil value (or no override)
+	// keeps the conservative default (no native; loop validate-retry).
+	Capabilities capabilityResolver
+	// Endpoint is the registry endpoint name this provider is bound to (e.g.
+	// "openaicompat"); used with Capabilities to resolve per-model caps.
+	Endpoint string
 	// Options are extra SDK request options appended after the base URL and key
 	// (e.g. custom headers); optional.
 	Options []option.RequestOption
+}
+
+// capabilityResolver is the narrow consumer-side port the provider uses to obtain
+// per-(endpoint, model) capabilities. The central *capabilities.Registry satisfies
+// it; the provider depends only on this interface so the concrete registry is
+// injected from wiring and tests can supply a fake.
+type capabilityResolver interface {
+	Resolve(endpoint, model string) llm.Capabilities
 }
 
 // placeholderAPIKey is substituted when [Config.APIKey] is empty so the SDK, which
@@ -39,8 +56,10 @@ const placeholderAPIKey = "sk-noauth-openaicompat"
 // Completions endpoints. It is safe for concurrent use; the underlying SDK client
 // is concurrency-safe.
 type Provider struct {
-	client  openai.Client
-	profile EndpointProfile
+	client   openai.Client
+	profile  EndpointProfile
+	resolver capabilityResolver // non-nil => resolve per-model caps centrally
+	endpoint string             // registry endpoint name (used with resolver)
 }
 
 // New constructs an OpenAI-compatible [Provider] for the given [Config]. It returns
@@ -64,16 +83,30 @@ func New(cfg Config) (*Provider, error) {
 	}, cfg.Options...)
 
 	return &Provider{
-		client:  openai.NewClient(opts...),
-		profile: profile,
+		client:   openai.NewClient(opts...),
+		profile:  profile,
+		resolver: cfg.Capabilities,
+		endpoint: cfg.Endpoint,
 	}, nil
+}
+
+// resolveCaps returns the capabilities used to gate native structured output for
+// model. With a central resolver injected it is authoritative (an operator can opt
+// in via SetEndpointOverride); otherwise it falls back to the endpoint profile,
+// which always reports SupportsJSONSchemaStrict=false — so native is never
+// blind-sent to an unknown self-hosted server.
+func (p *Provider) resolveCaps(model string) llm.Capabilities {
+	if p.resolver != nil {
+		return p.resolver.Resolve(p.endpoint, model)
+	}
+	return p.profile.capabilities()
 }
 
 // Generate runs a single non-streaming Chat Completions request and returns the
 // aggregated normalized [llm.Response]. Failures are normalized to a
 // [*llm.ProviderError].
 func (p *Provider) Generate(ctx context.Context, req llm.Request) (*llm.Response, error) {
-	params, err := buildParams(req)
+	params, err := buildParams(req, p.resolveCaps(req.Model))
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +122,7 @@ func (p *Provider) Generate(ctx context.Context, req llm.Request) (*llm.Response
 // the request is returned immediately as a [*llm.ProviderError]; mid-stream failures
 // surface from [llm.StreamReader.Recv].
 func (p *Provider) Stream(ctx context.Context, req llm.Request) (llm.StreamReader, error) {
-	params, err := buildParams(req)
+	params, err := buildParams(req, p.resolveCaps(req.Model))
 	if err != nil {
 		return nil, err
 	}

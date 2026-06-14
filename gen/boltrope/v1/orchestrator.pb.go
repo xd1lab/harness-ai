@@ -613,7 +613,20 @@ type RunRequest struct {
 	// after_seq is the resumable cursor (Last-Event-ID): the server replays only
 	// events with seq strictly greater than after_seq, then continues live. Zero
 	// streams from the start of the session (FR-API-01).
-	AfterSeq      int64 `protobuf:"varint,4,opt,name=after_seq,json=afterSeq,proto3" json:"after_seq,omitempty"`
+	AfterSeq int64 `protobuf:"varint,4,opt,name=after_seq,json=afterSeq,proto3" json:"after_seq,omitempty"`
+	// output_schema is an OPTIONAL JSON Schema (a JSON object encoded as bytes)
+	// constraining this run's final response to structured output. Empty/unset
+	// means free-form. The loop validates each response against it and retries up
+	// to the configured cap, terminating with
+	// TERMINATION_SUBTYPE_ERROR_MAX_STRUCTURED_OUTPUT_RETRIES on exhaustion; where
+	// the provider supports it the gateway also maps it onto native response_format.
+	// Mirrors llm.Request.OutputSchema / GenerationParams.output_schema.
+	OutputSchema []byte `protobuf:"bytes,5,opt,name=output_schema,json=outputSchema,proto3" json:"output_schema,omitempty"`
+	// strict requests provider-native strict enforcement of output_schema where
+	// supported (Capabilities.supports_json_schema_strict); otherwise the loop
+	// falls back to validate-and-retry. Meaningful only when output_schema is set.
+	// Mirrors llm.Request.Strict / GenerationParams.strict.
+	Strict        bool `protobuf:"varint,6,opt,name=strict,proto3" json:"strict,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -674,6 +687,20 @@ func (x *RunRequest) GetAfterSeq() int64 {
 		return x.AfterSeq
 	}
 	return 0
+}
+
+func (x *RunRequest) GetOutputSchema() []byte {
+	if x != nil {
+		return x.OutputSchema
+	}
+	return nil
+}
+
+func (x *RunRequest) GetStrict() bool {
+	if x != nil {
+		return x.Strict
+	}
+	return false
 }
 
 // ApprovalRequest is streamed to the client when a tool call requires
@@ -1519,14 +1546,16 @@ const file_boltrope_v1_orchestrator_proto_rawDesc = "" +
 	"\x0fforked_from_seq\x18\n" +
 	" \x01(\x03R\rforkedFromSeq\"D\n" +
 	"\x12GetSessionResponse\x12.\n" +
-	"\asession\x18\x01 \x01(\v2\x14.boltrope.v1.SessionR\asession\"\x95\x01\n" +
+	"\asession\x18\x01 \x01(\v2\x14.boltrope.v1.SessionR\asession\"\xd2\x01\n" +
 	"\n" +
 	"RunRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x02 \x01(\tR\tsessionId\x12.\n" +
 	"\amessage\x18\x03 \x01(\v2\x14.boltrope.v1.MessageR\amessage\x12\x1b\n" +
-	"\tafter_seq\x18\x04 \x01(\x03R\bafterSeq\"|\n" +
+	"\tafter_seq\x18\x04 \x01(\x03R\bafterSeq\x12#\n" +
+	"\routput_schema\x18\x05 \x01(\fR\foutputSchema\x12\x16\n" +
+	"\x06strict\x18\x06 \x01(\bR\x06strict\"|\n" +
 	"\x0fApprovalRequest\x12\x17\n" +
 	"\acall_id\x18\x01 \x01(\tR\x06callId\x12\x1b\n" +
 	"\ttool_name\x18\x02 \x01(\tR\btoolName\x12\x1b\n" +

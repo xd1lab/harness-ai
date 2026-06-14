@@ -131,7 +131,7 @@ func TestBuildConfigSystemAndTools(t *testing.T) {
 			JSONSchema:  json.RawMessage(`{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}`),
 		}},
 	}
-	cfg, err := buildConfig(req)
+	cfg, err := buildConfig(req, llm.Capabilities{})
 	if err != nil {
 		t.Fatalf("buildConfig error: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestBuildConfigSystemAndTools(t *testing.T) {
 // without a SystemInstruction or Tools (so we don't send empty envelopes).
 func TestBuildConfigNoSystemNoTools(t *testing.T) {
 	t.Parallel()
-	cfg, err := buildConfig(llm.Request{Model: "gemini-3-pro"})
+	cfg, err := buildConfig(llm.Request{Model: "gemini-3-pro"}, llm.Capabilities{})
 	if err != nil {
 		t.Fatalf("buildConfig error: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestBuildConfigToolChoice(t *testing.T) {
 			ToolChoice: tc.choice,
 			Tools:      []llm.ToolDef{{Name: "t", Description: "d", JSONSchema: json.RawMessage(`{"type":"object"}`)}},
 		}
-		cfg, err := buildConfig(req)
+		cfg, err := buildConfig(req, llm.Capabilities{})
 		if err != nil {
 			t.Fatalf("buildConfig(%q) error: %v", tc.choice, err)
 		}

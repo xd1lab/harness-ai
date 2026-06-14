@@ -29,9 +29,27 @@ type Config struct {
 	// zero value yields a sensible default for a tool-capable Responses model via
 	// [DefaultCapabilities].
 	Capabilities llm.Capabilities
+	// Resolver, when non-nil, resolves per-(endpoint, model) capabilities from the
+	// central registry at request-build time so the native structured-output gate
+	// reads the authoritative table rather than the static [Config.Capabilities].
+	// A nil Resolver preserves the legacy behavior (static caps / DefaultCapabilities).
+	Resolver capabilityResolver
+	// Endpoint is the registry endpoint name this provider is bound to (e.g.
+	// "openai"); used with Resolver to resolve per-model caps. Ignored when Resolver
+	// is nil.
+	Endpoint string
 	// Options are extra SDK request options appended after the key and base URL;
 	// optional.
 	Options []option.RequestOption
+}
+
+// capabilityResolver is the narrow consumer-side port the provider uses to obtain
+// per-(endpoint, model) capabilities. The central *capabilities.Registry satisfies
+// it (Resolve(endpoint, model) llm.Capabilities); the provider depends only on this
+// interface so the concrete registry is injected from wiring and tests can supply a
+// fake.
+type capabilityResolver interface {
+	Resolve(endpoint, model string) llm.Capabilities
 }
 
 // Provider is the native OpenAI [llm.Provider] implementation. By default it uses
@@ -41,6 +59,8 @@ type Config struct {
 type Provider struct {
 	client   openai.Client
 	caps     llm.Capabilities
+	resolver capabilityResolver     // non-nil => resolve per-model caps centrally
+	endpoint string                 // registry endpoint name (used with resolver)
 	chatImpl *openaicompat.Provider // non-nil only in Chat-Completions mode
 }
 
@@ -61,8 +81,10 @@ func New(cfg Config) (*Provider, error) {
 	opts = append(opts, cfg.Options...)
 
 	p := &Provider{
-		client: openai.NewClient(opts...),
-		caps:   caps,
+		client:   openai.NewClient(opts...),
+		caps:     caps,
+		resolver: cfg.Resolver,
+		endpoint: cfg.Endpoint,
 	}
 
 	if cfg.UseChatCompletions {
@@ -96,7 +118,7 @@ func (p *Provider) Generate(ctx context.Context, req llm.Request) (*llm.Response
 	if p.chatImpl != nil {
 		return p.chatImpl.Generate(ctx, req)
 	}
-	params, err := buildParams(req)
+	params, err := buildParams(req, p.resolveCaps(req.Model))
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +136,7 @@ func (p *Provider) Stream(ctx context.Context, req llm.Request) (llm.StreamReade
 	if p.chatImpl != nil {
 		return p.chatImpl.Stream(ctx, req)
 	}
-	params, err := buildParams(req)
+	params, err := buildParams(req, p.resolveCaps(req.Model))
 	if err != nil {
 		return nil, err
 	}
@@ -139,6 +161,17 @@ func (p *Provider) CountTokens(_ context.Context, _ llm.Request) (int, error) {
 // compatibility with per-model resolution.
 func (p *Provider) Capabilities(_ context.Context, _ string) (llm.Capabilities, error) {
 	return p.caps, nil
+}
+
+// resolveCaps returns the capabilities used to gate native structured output for
+// model. When a central resolver was injected it is authoritative (per-(endpoint,
+// model)); otherwise the static per-process [Provider.caps] is the fallback so
+// behavior is unchanged for callers that construct the provider without a resolver.
+func (p *Provider) resolveCaps(model string) llm.Capabilities {
+	if p.resolver != nil {
+		return p.resolver.Resolve(p.endpoint, model)
+	}
+	return p.caps
 }
 
 // Ensure Provider satisfies llm.Provider at compile time.

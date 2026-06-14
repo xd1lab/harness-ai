@@ -114,10 +114,16 @@ func loadCostFunc(path string) (mgwapp.CostFunc, error) {
 // API key (when the provider needs one) is resolved via the secrets port from the
 // configured env-var NAME, so a missing required credential fails fast (ADR-0013).
 // An unknown provider kind is a fatal configuration error (NFR-OPS-04).
-func buildProvider(ctx context.Context, gw gatewaySettings, secrets secret.SecretsPort) (llm.Provider, string, error) {
+//
+// reg is the SHARED central capability registry: the same instance also backs the
+// gateway Service, so the provider's native structured-output gate resolves
+// per-(endpoint, model) caps from the identical source of truth (one override
+// surface). It is injected into each capability-aware provider bound to the
+// returned endpoint name (Feature S / ADR-0023).
+func buildProvider(ctx context.Context, gw gatewaySettings, secrets secret.SecretsPort, reg *capabilities.Registry) (llm.Provider, string, error) {
 	switch gw.Provider {
 	case "", "openaicompat":
-		prov, err := openaicompat.New(openaicompat.Config{BaseURL: gw.OpenAIBaseURL})
+		prov, err := openaicompat.New(openaicompat.Config{BaseURL: gw.OpenAIBaseURL, Capabilities: reg, Endpoint: "openaicompat"})
 		if err != nil {
 			return nil, "", fmt.Errorf("modelgwd: build openaicompat provider: %w", err)
 		}
@@ -128,14 +134,14 @@ func buildProvider(ctx context.Context, gw gatewaySettings, secrets secret.Secre
 		if err != nil {
 			return nil, "", err
 		}
-		return anthropic.New(anthropic.WithAPIKey(key)), "anthropic", nil
+		return anthropic.New(anthropic.WithAPIKey(key), anthropic.WithCapabilities(reg, "anthropic")), "anthropic", nil
 
 	case "gemini":
 		key, err := resolveKey(ctx, secrets, gw.APIKeyEnv)
 		if err != nil {
 			return nil, "", err
 		}
-		prov, err := gemini.New(ctx, gemini.Config{APIKey: key})
+		prov, err := gemini.New(ctx, gemini.Config{APIKey: key, Capabilities: reg, Endpoint: "gemini"})
 		if err != nil {
 			return nil, "", fmt.Errorf("modelgwd: build gemini provider: %w", err)
 		}
@@ -146,7 +152,7 @@ func buildProvider(ctx context.Context, gw gatewaySettings, secrets secret.Secre
 		if err != nil {
 			return nil, "", err
 		}
-		prov, err := openai.New(openai.Config{APIKey: key, BaseURL: gw.OpenAIBaseURL})
+		prov, err := openai.New(openai.Config{APIKey: key, BaseURL: gw.OpenAIBaseURL, Resolver: reg, Endpoint: "openai"})
 		if err != nil {
 			return nil, "", fmt.Errorf("modelgwd: build openai provider: %w", err)
 		}
@@ -196,7 +202,13 @@ func Run(ctx context.Context, cfg *config.Config, logw io.Writer) error {
 		return err
 	}
 
-	provider, endpoint, err := buildProvider(ctx, gw, secrets)
+	// One shared capability registry backs BOTH the providers' native
+	// structured-output gate and the gateway Service's Capabilities RPC, so the
+	// gate and the advertised caps resolve from a single source of truth with one
+	// override surface (Feature S / ADR-0023).
+	caps := capabilities.NewRegistry(nil)
+
+	provider, endpoint, err := buildProvider(ctx, gw, secrets, caps)
 	if err != nil {
 		_ = tel.Shutdown(ctx)
 		return err
@@ -213,7 +225,7 @@ func Run(ctx context.Context, cfg *config.Config, logw io.Writer) error {
 	svc, err := mgwapp.NewService(mgwapp.Config{
 		Provider:     retrying,
 		Endpoint:     endpoint,
-		Capabilities: capabilities.NewRegistry(nil),
+		Capabilities: caps,
 		Cost:         costFn,
 	})
 	if err != nil {

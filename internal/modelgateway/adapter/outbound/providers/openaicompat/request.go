@@ -16,7 +16,13 @@ import (
 // conversation messages are translated turn by turn, and tools are wrapped as
 // function tools (architecture §11.5). It returns a [*llm.ProviderError] of kind
 // [llm.ErrInvalidRequest] if a tool schema cannot be decoded.
-func buildParams(req llm.Request) (openai.ChatCompletionNewParams, error) {
+//
+// caps is the per-(endpoint, model) capability set the provider resolves. Native
+// structured output (response_format=json_schema) is NEVER blind-sent to a
+// self-hosted endpoint: it is set only when req.OutputSchema is present AND
+// caps.SupportsJSONSchemaStrict — which the default profile always leaves false, so
+// it requires an explicit central-registry endpoint override to enable.
+func buildParams(req llm.Request, caps llm.Capabilities) (openai.ChatCompletionNewParams, error) {
 	params := openai.ChatCompletionNewParams{
 		Model: shared.ChatModel(req.Model),
 	}
@@ -55,6 +61,23 @@ func buildParams(req llm.Request) (openai.ChatCompletionNewParams, error) {
 	}
 	if req.Temperature != nil {
 		params.Temperature = param.NewOpt(*req.Temperature)
+	}
+
+	// Native structured output: opt-in only (caps strict comes solely from a central
+	// endpoint override for self-hosted servers). An undecodable/non-object schema
+	// silently skips native — the loop still validates against the same schema.
+	if len(req.OutputSchema) > 0 && caps.SupportsJSONSchemaStrict {
+		if schema, err := decodeSchema(req.OutputSchema); err == nil && len(schema) > 0 {
+			params.ResponseFormat = openai.ChatCompletionNewParamsResponseFormatUnion{
+				OfJSONSchema: &shared.ResponseFormatJSONSchemaParam{
+					JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
+						Name:   "output",
+						Schema: schema,
+						Strict: param.NewOpt(req.Strict && caps.SupportsJSONSchemaStrict),
+					},
+				},
+			}
+		}
 	}
 
 	return params, nil

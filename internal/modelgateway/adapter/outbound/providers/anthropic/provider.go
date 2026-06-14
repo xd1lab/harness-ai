@@ -28,6 +28,16 @@ var _ llm.Provider = (*Provider)(nil)
 type Provider struct {
 	client          sdk.Client
 	defaultMaxToken int64
+	resolver        capabilityResolver // non-nil => resolve per-model caps centrally
+	endpoint        string             // registry endpoint name (used with resolver)
+}
+
+// capabilityResolver is the narrow consumer-side port the provider uses to obtain
+// per-(endpoint, model) capabilities. The central *capabilities.Registry satisfies
+// it; the provider depends only on this interface so the concrete registry is
+// injected from wiring and tests can supply a fake.
+type capabilityResolver interface {
+	Resolve(endpoint, model string) llm.Capabilities
 }
 
 // Option configures a [Provider].
@@ -38,6 +48,8 @@ type config struct {
 	baseURL         string
 	requestOptions  []option.RequestOption
 	defaultMaxToken int64
+	resolver        capabilityResolver
+	endpoint        string
 }
 
 // WithAPIKey sets the Anthropic API key (maps to option.WithAPIKey).
@@ -66,6 +78,17 @@ func WithRequestOptions(opts ...option.RequestOption) Option {
 	return func(c *config) { c.requestOptions = append(c.requestOptions, opts...) }
 }
 
+// WithCapabilities injects a central capability resolver bound to endpoint so the
+// native structured-output gate reads the authoritative per-(endpoint, model)
+// table rather than the adapter-local self-report. When omitted, native structured
+// output is never sent (conservative fallback to the loop's validate-and-retry).
+func WithCapabilities(r capabilityResolver, endpoint string) Option {
+	return func(c *config) {
+		c.resolver = r
+		c.endpoint = endpoint
+	}
+}
+
 // New constructs a [Provider]. The SDK's own retry layer is disabled
 // (option.WithMaxRetries(0)) because retries are the model-gateway's
 // responsibility via the single harness-level retry policy keyed on
@@ -89,13 +112,27 @@ func New(opts ...Option) *Provider {
 	return &Provider{
 		client:          sdk.NewClient(reqOpts...),
 		defaultMaxToken: cfg.defaultMaxToken,
+		resolver:        cfg.resolver,
+		endpoint:        cfg.endpoint,
 	}
+}
+
+// resolveCaps returns the capabilities used to gate native structured output for
+// model. With a central resolver injected it is authoritative; otherwise it returns
+// the conservative zero value so native output is never sent (the adapter-local
+// resolveCapabilities self-report — which reports strict=true for all modern Claude
+// — is deliberately NOT the structured-output gate).
+func (p *Provider) resolveCaps(model string) llm.Capabilities {
+	if p.resolver != nil {
+		return p.resolver.Resolve(p.endpoint, model)
+	}
+	return llm.Capabilities{}
 }
 
 // Generate runs a single non-streaming generation and returns the aggregated
 // normalized [llm.Response]. On failure it returns a [*llm.ProviderError].
 func (p *Provider) Generate(ctx context.Context, req llm.Request) (*llm.Response, error) {
-	params, err := buildMessageParams(req, p.defaultMaxToken)
+	params, err := buildMessageParams(req, p.defaultMaxToken, p.resolveCaps(req.Model))
 	if err != nil {
 		return nil, &llm.ProviderError{Kind: llm.ErrInvalidRequest, Raw: err}
 	}
@@ -111,7 +148,7 @@ func (p *Provider) Generate(ctx context.Context, req llm.Request) (*llm.Response
 // request is returned immediately as a [*llm.ProviderError]; transport failures
 // surface from [llm.StreamReader.Recv].
 func (p *Provider) Stream(ctx context.Context, req llm.Request) (llm.StreamReader, error) {
-	params, err := buildMessageParams(req, p.defaultMaxToken)
+	params, err := buildMessageParams(req, p.defaultMaxToken, p.resolveCaps(req.Model))
 	if err != nil {
 		return nil, &llm.ProviderError{Kind: llm.ErrInvalidRequest, Raw: err}
 	}

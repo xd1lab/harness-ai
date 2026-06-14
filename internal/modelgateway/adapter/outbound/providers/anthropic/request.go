@@ -21,7 +21,14 @@ func base64Encode(b []byte) string { return base64.StdEncoding.EncodeToString(b)
 // translated to the provider's union. MaxTokens, when zero, is left to a
 // caller-supplied default in defaultMaxTokens so the SDK's required field is
 // always populated (the API rejects max_tokens <= 0).
-func buildMessageParams(req llm.Request, defaultMaxTokens int64) (sdk.MessageNewParams, error) {
+//
+// caps is the per-(endpoint, model) capability set resolved CENTRALLY by the
+// provider (NOT the adapter-local resolveCapabilities, which over-reports strict for
+// every modern Claude). When req.OutputSchema is set AND caps.SupportsJSONSchemaStrict,
+// native structured output is requested on the STABLE Messages path via
+// OutputConfig.Format=json_schema (no Beta, no forced-tool); otherwise OutputConfig
+// stays zero-valued and the loop's validate-and-retry is the backstop.
+func buildMessageParams(req llm.Request, defaultMaxTokens int64, caps llm.Capabilities) (sdk.MessageNewParams, error) {
 	msgs, err := buildMessages(req.Messages)
 	if err != nil {
 		return sdk.MessageNewParams{}, err
@@ -61,6 +68,17 @@ func buildMessageParams(req llm.Request, defaultMaxTokens int64) (sdk.MessageNew
 
 	if req.Temperature != nil {
 		params.Temperature = param.NewOpt(*req.Temperature)
+	}
+
+	// Native structured output on the stable Messages path: gated on a non-empty
+	// schema AND the central caps. The decoded schema is carried on
+	// OutputConfig.Format (a JSON-schema output format). An undecodable/non-object
+	// schema silently skips native output — the loop still validates the same schema.
+	if len(req.OutputSchema) > 0 && caps.SupportsJSONSchemaStrict {
+		var schema map[string]any
+		if err := json.Unmarshal(req.OutputSchema, &schema); err == nil && schema != nil {
+			params.OutputConfig.Format = sdk.JSONOutputFormatParam{Schema: schema}
+		}
 	}
 
 	return params, nil

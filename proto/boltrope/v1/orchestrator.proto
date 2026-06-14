@@ -202,6 +202,19 @@ message RunRequest {
   // events with seq strictly greater than after_seq, then continues live. Zero
   // streams from the start of the session (FR-API-01).
   int64 after_seq = 4;
+  // output_schema is an OPTIONAL JSON Schema (a JSON object encoded as bytes)
+  // constraining this run's final response to structured output. Empty/unset
+  // means free-form. The loop validates each response against it and retries up
+  // to the configured cap, terminating with
+  // TERMINATION_SUBTYPE_ERROR_MAX_STRUCTURED_OUTPUT_RETRIES on exhaustion; where
+  // the provider supports it the gateway also maps it onto native response_format.
+  // Mirrors llm.Request.OutputSchema / GenerationParams.output_schema.
+  bytes output_schema = 5;
+  // strict requests provider-native strict enforcement of output_schema where
+  // supported (Capabilities.supports_json_schema_strict); otherwise the loop
+  // falls back to validate-and-retry. Meaningful only when output_schema is set.
+  // Mirrors llm.Request.Strict / GenerationParams.strict.
+  bool strict = 6;
 }
 
 // ApprovalRequest is streamed to the client when a tool call requires

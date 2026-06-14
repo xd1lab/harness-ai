@@ -145,6 +145,11 @@ type Config struct {
 	// OutputSchema, when non-nil, requests structured output validated against
 	// this JSON Schema with validate-and-retry (mirrors [llm.Request.OutputSchema]).
 	OutputSchema []byte
+	// Strict requests provider-native strict enforcement of [OutputSchema] where
+	// the provider supports it (Capabilities.SupportsJSONSchemaStrict); otherwise
+	// the loop falls back to validate-and-retry. Meaningful only when OutputSchema
+	// is set. Mirrors [llm.Request.Strict].
+	Strict bool
 }
 
 const (

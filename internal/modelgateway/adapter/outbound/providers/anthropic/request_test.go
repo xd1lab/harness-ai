@@ -32,7 +32,7 @@ func TestBuildMessageParams_SystemTopLevel(t *testing.T) {
 		System:   "You are helpful.",
 		Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentPart{{Text: &llm.TextPart{Text: "hi"}}}}},
 	}
-	params, err := buildMessageParams(req, 4096)
+	params, err := buildMessageParams(req, 4096, llm.Capabilities{})
 	if err != nil {
 		t.Fatalf("buildMessageParams: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestBuildMessageParams_DefaultMaxTokens(t *testing.T) {
 		Model:    "claude-opus-4-8",
 		Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentPart{{Text: &llm.TextPart{Text: "hi"}}}}},
 	}
-	params, err := buildMessageParams(req, 1234)
+	params, err := buildMessageParams(req, 1234, llm.Capabilities{})
 	if err != nil {
 		t.Fatalf("buildMessageParams: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestBuildMessageParams_DefaultMaxTokens(t *testing.T) {
 	}
 
 	req.MaxTokens = 999
-	params, err = buildMessageParams(req, 1234)
+	params, err = buildMessageParams(req, 1234, llm.Capabilities{})
 	if err != nil {
 		t.Fatalf("buildMessageParams: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestBuildMessageParams_Tools(t *testing.T) {
 		Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentPart{{Text: &llm.TextPart{Text: "hi"}}}}},
 		Tools:    []llm.ToolDef{{Name: "get_weather", Description: "Look up weather", JSONSchema: schema}},
 	}
-	params, err := buildMessageParams(req, 4096)
+	params, err := buildMessageParams(req, 4096, llm.Capabilities{})
 	if err != nil {
 		t.Fatalf("buildMessageParams: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestBuildMessages_ToolResultIsUserTurn(t *testing.T) {
 			{Role: llm.RoleTool, Content: []llm.ContentPart{{ToolResult: &llm.ToolResult{CallID: "toolu_1", Content: "sunny"}}}},
 		},
 	}
-	params, err := buildMessageParams(req, 4096)
+	params, err := buildMessageParams(req, 4096, llm.Capabilities{})
 	if err != nil {
 		t.Fatalf("buildMessageParams: %v", err)
 	}
@@ -219,14 +219,14 @@ func TestBuildMessageParams_Temperature(t *testing.T) {
 		Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentPart{{Text: &llm.TextPart{Text: "hi"}}}}},
 	}
 	// nil -> absent
-	params, _ := buildMessageParams(base, 4096)
+	params, _ := buildMessageParams(base, 4096, llm.Capabilities{})
 	if _, present := marshalParams(t, params)["temperature"]; present {
 		t.Error("temperature present when Request.Temperature is nil")
 	}
 	// set -> present
 	temp := 0.5
 	base.Temperature = &temp
-	params, _ = buildMessageParams(base, 4096)
+	params, _ = buildMessageParams(base, 4096, llm.Capabilities{})
 	if got := marshalParams(t, params)["temperature"]; got != 0.5 {
 		t.Errorf("temperature = %v, want 0.5", got)
 	}
@@ -285,7 +285,7 @@ func TestBuildContentBlocks_Image(t *testing.T) {
 			{Text: &llm.TextPart{Text: "describe"}},
 		}}},
 	}
-	params, err := buildMessageParams(inline, 4096)
+	params, err := buildMessageParams(inline, 4096, llm.Capabilities{})
 	if err != nil {
 		t.Fatalf("buildMessageParams(inline image): %v", err)
 	}
@@ -307,7 +307,7 @@ func TestBuildContentBlocks_Image(t *testing.T) {
 			{Image: &llm.ImagePart{URL: "https://example.test/a.png"}},
 		}}},
 	}
-	params, err = buildMessageParams(urlReq, 4096)
+	params, err = buildMessageParams(urlReq, 4096, llm.Capabilities{})
 	if err != nil {
 		t.Fatalf("buildMessageParams(url image): %v", err)
 	}
@@ -324,7 +324,7 @@ func TestBuildContentBlocks_Image(t *testing.T) {
 			{Image: &llm.ImagePart{FileRef: "file_123"}},
 		}}},
 	}
-	if _, err := buildMessageParams(fileRef, 4096); err == nil {
+	if _, err := buildMessageParams(fileRef, 4096, llm.Capabilities{}); err == nil {
 		t.Error("expected an error for a file-ref-only image (unsupported)")
 	}
 }
@@ -336,7 +336,7 @@ func TestBuildMessages_UnknownRole(t *testing.T) {
 		Model:    "claude-opus-4-8",
 		Messages: []llm.Message{{Role: llm.Role("system"), Content: []llm.ContentPart{{Text: &llm.TextPart{Text: "x"}}}}},
 	}
-	if _, err := buildMessageParams(req, 4096); err == nil {
+	if _, err := buildMessageParams(req, 4096, llm.Capabilities{}); err == nil {
 		t.Error("expected an error for an unknown message role")
 	}
 }

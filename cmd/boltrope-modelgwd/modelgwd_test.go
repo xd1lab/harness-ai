@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/xd1lab/harness-ai/internal/modelgateway/app/capabilities"
 	"github.com/xd1lab/harness-ai/internal/platform/config"
 	"github.com/xd1lab/harness-ai/internal/platform/secret/secrettest"
 )
@@ -35,7 +36,7 @@ func baseConfig(t *testing.T) *config.Config {
 // (FR-MODEL-01 AC-2 path).
 func TestBuildProvider_DefaultOpenAICompat(t *testing.T) {
 	gw := gatewaySettings{Provider: "", OpenAIBaseURL: "http://localhost:11434/v1"}
-	prov, endpoint, err := buildProvider(context.Background(), gw, secrettest.NewFakeSecrets(nil))
+	prov, endpoint, err := buildProvider(context.Background(), gw, secrettest.NewFakeSecrets(nil), capabilities.NewRegistry(nil))
 	require.NoError(t, err)
 	require.NotNil(t, prov)
 	assert.Equal(t, "openaicompat", endpoint)
@@ -44,7 +45,7 @@ func TestBuildProvider_DefaultOpenAICompat(t *testing.T) {
 // TestBuildProvider_UnknownProviderErrors asserts an unrecognized provider kind
 // fails fast (NFR-OPS-04) rather than silently picking a default.
 func TestBuildProvider_UnknownProviderErrors(t *testing.T) {
-	_, _, err := buildProvider(context.Background(), gatewaySettings{Provider: "wat"}, secrettest.NewFakeSecrets(nil))
+	_, _, err := buildProvider(context.Background(), gatewaySettings{Provider: "wat"}, secrettest.NewFakeSecrets(nil), capabilities.NewRegistry(nil))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "wat")
 }
@@ -54,7 +55,7 @@ func TestBuildProvider_UnknownProviderErrors(t *testing.T) {
 // returned. The endpoint name "stub" is returned for capability resolution.
 func TestBuildProvider_StubRequiresNoKey(t *testing.T) {
 	gw := gatewaySettings{Provider: "stub"}
-	prov, endpoint, err := buildProvider(context.Background(), gw, secrettest.NewFakeSecrets(nil))
+	prov, endpoint, err := buildProvider(context.Background(), gw, secrettest.NewFakeSecrets(nil), capabilities.NewRegistry(nil))
 	require.NoError(t, err)
 	require.NotNil(t, prov)
 	assert.Equal(t, "stub", endpoint)
@@ -70,7 +71,7 @@ func TestBuildProvider_AnthropicResolvesKey(t *testing.T) {
 	t.Run("key present", func(t *testing.T) {
 		prov, endpoint, err := buildProvider(context.Background(),
 			gatewaySettings{Provider: "anthropic", APIKeyEnv: keyEnv},
-			secrettest.NewFakeSecrets(map[string]string{keyEnv: "sk-test"}))
+			secrettest.NewFakeSecrets(map[string]string{keyEnv: "sk-test"}), capabilities.NewRegistry(nil))
 		require.NoError(t, err)
 		require.NotNil(t, prov)
 		assert.Equal(t, "anthropic", endpoint)
@@ -79,7 +80,7 @@ func TestBuildProvider_AnthropicResolvesKey(t *testing.T) {
 	t.Run("key missing errors", func(t *testing.T) {
 		_, _, err := buildProvider(context.Background(),
 			gatewaySettings{Provider: "anthropic", APIKeyEnv: keyEnv},
-			secrettest.NewFakeSecrets(nil))
+			secrettest.NewFakeSecrets(nil), capabilities.NewRegistry(nil))
 		require.Error(t, err)
 	})
 }

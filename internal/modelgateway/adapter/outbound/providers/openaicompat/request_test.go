@@ -13,7 +13,7 @@ import (
 // without a live endpoint.
 func marshalParams(t *testing.T, req llm.Request) map[string]any {
 	t.Helper()
-	params, err := buildParams(req)
+	params, err := buildParams(req, llm.Capabilities{})
 	if err != nil {
 		t.Fatalf("buildParams: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestBuildParams_ToolChoiceWired(t *testing.T) {
 
 func TestBuildParams_TemperatureAndMaxTokens(t *testing.T) {
 	temp := 0.4
-	params, err := buildParams(llm.Request{Model: "llama3", MaxTokens: 256, Temperature: &temp})
+	params, err := buildParams(llm.Request{Model: "llama3", MaxTokens: 256, Temperature: &temp}, llm.Capabilities{})
 	if err != nil {
 		t.Fatalf("buildParams: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestBuildParams_BadToolSchema_InvalidRequest(t *testing.T) {
 	_, err := buildParams(llm.Request{
 		Model: "llama3",
 		Tools: []llm.ToolDef{{Name: "bad", JSONSchema: json.RawMessage(`{not json`)}},
-	})
+	}, llm.Capabilities{})
 	assertProviderErrorKind(t, err, llm.ErrInvalidRequest)
 }
 
@@ -248,7 +248,7 @@ func TestConvertMessage_UnsupportedRole_InvalidRequest(t *testing.T) {
 	_, err := buildParams(llm.Request{
 		Model:    "llama3",
 		Messages: []llm.Message{{Role: llm.Role("system")}},
-	})
+	}, llm.Capabilities{})
 	assertProviderErrorKind(t, err, llm.ErrInvalidRequest)
 }
 
@@ -289,7 +289,7 @@ func TestConvertMessage_UnmarshalableToolArgs_InvalidRequest(t *testing.T) {
 				{ToolCall: &llm.ToolCall{ID: "c1", Name: "bad", Args: map[string]any{"f": func() {}}}},
 			}},
 		},
-	})
+	}, llm.Capabilities{})
 	assertProviderErrorKind(t, err, llm.ErrInvalidRequest)
 }
 

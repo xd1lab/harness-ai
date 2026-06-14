@@ -41,6 +41,22 @@ func objectSchema(props map[string]any, required ...string) map[string]any {
 	return s
 }
 
+// objectSchemaBytes validates that an inline output_schema is a JSON object (the
+// only shape a JSON Schema document takes) and returns its raw bytes. An
+// empty/omitted/null value yields (nil, true) — free-form, no error. A non-object
+// (number/array/string/bool) yields (nil, false) so the caller rejects it with a
+// JSON-RPC InvalidParams before any run starts.
+func objectSchemaBytes(raw json.RawMessage) (schema []byte, ok bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, true
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, false
+	}
+	return []byte(raw), true
+}
+
 // toolCatalog returns the 5 v1 tools (create_session, run, get_session, control,
 // fork), each with a non-empty description and inputSchema; run additionally
 // declares an outputSchema (the synthesized completed result). The set and shape
@@ -67,9 +83,11 @@ func toolCatalog() []toolDescriptor {
 			Name:        "run",
 			Description: "Submit a user turn (or a pure resume) and drive the agent loop, streaming progress on an open SSE leg until a terminal result. Risk-tier approvals are surfaced in-band as a progress notification and resolved by a concurrent 'control' call while this call stays open. Send a _meta.progressToken to receive progress (including the in-band approval).",
 			InputSchema: objectSchema(map[string]any{
-				"session_id": map[string]any{"type": "string", "description": "Target session id."},
-				"text":       map[string]any{"type": "string", "description": "The user message. Empty = pure resume from after_seq."},
-				"after_seq":  map[string]any{"type": "integer", "description": "Resume cursor: only events with seq > after_seq are streamed."},
+				"session_id":    map[string]any{"type": "string", "description": "Target session id."},
+				"text":          map[string]any{"type": "string", "description": "The user message. Empty = pure resume from after_seq."},
+				"after_seq":     map[string]any{"type": "integer", "description": "Resume cursor: only events with seq > after_seq are streamed."},
+				"output_schema": map[string]any{"type": "object", "description": "JSON Schema constraining the final result. Omit for free-form output."},
+				"strict":        map[string]any{"type": "boolean", "description": "Request native strict schema enforcement where supported; otherwise validate-and-retry."},
 			}, "session_id"),
 			OutputSchema: objectSchema(map[string]any{
 				"status":     map[string]any{"type": "string", "enum": []string{"completed"}},
@@ -123,6 +141,13 @@ type runArgs struct {
 	SessionID string `json:"session_id"`
 	Text      string `json:"text"`
 	AfterSeq  int64  `json:"after_seq"`
+	// OutputSchema is an OPTIONAL JSON Schema object constraining the final result.
+	// It is received as inline JSON and marshaled to bytes onto
+	// RunRequest.output_schema; a non-object value is a JSON-RPC InvalidParams.
+	OutputSchema json.RawMessage `json:"output_schema"`
+	// Strict requests native strict schema enforcement where supported; otherwise
+	// the loop validates and retries. Meaningful only with output_schema.
+	Strict bool `json:"strict"`
 }
 
 // getSessionArgs is the get_session tool arguments.

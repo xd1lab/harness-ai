@@ -22,7 +22,13 @@ import (
 //
 // It returns a [*llm.ProviderError] of kind [llm.ErrInvalidRequest] when a tool
 // schema, tool-call arguments, or a continuation blob cannot be decoded.
-func buildParams(req llm.Request) (responses.ResponseNewParams, error) {
+//
+// caps is the per-(endpoint, model) capability set resolved by the provider for
+// req.Model (the central capability table is authoritative). When req.OutputSchema
+// is set AND caps.SupportsJSONSchemaStrict, native structured output is requested
+// via text.format=json_schema; otherwise no native response_format is sent and the
+// loop's validate-and-retry remains the correctness backstop.
+func buildParams(req llm.Request, caps llm.Capabilities) (responses.ResponseNewParams, error) {
 	params := responses.ResponseNewParams{
 		Model: shared.ResponsesModel(req.Model),
 		// Stateless Item-passing: never persist server-side conversation state.
@@ -67,7 +73,27 @@ func buildParams(req llm.Request) (responses.ResponseNewParams, error) {
 		params.ToolChoice = tc
 	}
 
+	// Native structured output: gated on a non-empty schema AND the central caps.
+	// This is independent of tool-schema strict (convertTools sets that false; the
+	// loop validates tool args). On an undecodable/non-object schema we silently
+	// skip native output — the loop still validates against the same schema.
+	if useNativeStructuredOutput(req, caps) {
+		if schema, err := decodeSchema(req.OutputSchema); err == nil && len(schema) > 0 {
+			format := responses.ResponseFormatTextConfigParamOfJSONSchema("output", schema)
+			format.OfJSONSchema.Strict = param.NewOpt(req.Strict && caps.SupportsJSONSchemaStrict)
+			params.Text = responses.ResponseTextConfigParam{Format: format}
+		}
+	}
+
 	return params, nil
+}
+
+// useNativeStructuredOutput reports whether the provider should request native
+// structured output for this request: a non-empty OutputSchema and a model whose
+// central caps enable strict JSON-Schema enforcement. The uniform gate shared by
+// all native-capable adapters (Feature S).
+func useNativeStructuredOutput(req llm.Request, caps llm.Capabilities) bool {
+	return len(req.OutputSchema) > 0 && caps.SupportsJSONSchemaStrict
 }
 
 // convertMessage translates one normalized [llm.Message] into Responses input

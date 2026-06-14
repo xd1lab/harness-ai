@@ -38,9 +38,17 @@ func (h *Handler) toolRun(w http.ResponseWriter, r *http.Request, req *rpcReques
 		return
 	}
 
-	runReq := &genproto.RunRequest{SessionId: args.SessionID, AfterSeq: args.AfterSeq}
+	runReq := &genproto.RunRequest{SessionId: args.SessionID, AfterSeq: args.AfterSeq, Strict: args.Strict}
 	if args.Text != "" {
 		runReq.Message = userTextMessage(args.Text)
+	}
+	// A non-object output_schema is a JSON-RPC InvalidParams (-32602) BEFORE any run
+	// starts (fail-closed-early); the loop only accepts a JSON Schema object.
+	if schema, ok := objectSchemaBytes(args.OutputSchema); ok {
+		runReq.OutputSchema = schema
+	} else if len(args.OutputSchema) > 0 {
+		writeJSON(w, http.StatusOK, errorResponse(req.ID, codeInvalidParams, "output_schema must be a JSON object", nil))
+		return
 	}
 
 	if len(p.Meta.ProgressToken) > 0 {

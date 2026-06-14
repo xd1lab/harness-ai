@@ -23,26 +23,33 @@ type LoopRunner struct {
 	// per-run; the rest is shared.
 	deps agent.Deps
 	// cfg is the base loop config template (model, caps, tool defs). The run's
-	// Mode is overlaid per-run.
+	// Mode, OutputSchema, and Strict are overlaid per-run; the rest is shared.
 	cfg agent.Config
 }
 
 // NewLoopRunner returns a [LoopRunner] over the given base loop dependencies and
 // config template. The Sink field of deps is ignored (each run supplies its own
-// via [RunSpec]); the Mode field of cfg is ignored (each run supplies its own).
+// via [RunSpec]); the Mode, OutputSchema, and Strict fields of cfg are ignored
+// (each run supplies its own).
 func NewLoopRunner(deps agent.Deps, cfg agent.Config) *LoopRunner {
 	return &LoopRunner{deps: deps, cfg: cfg}
 }
 
-// Run constructs a per-run [agent.Loop] with spec.Sink and spec.Mode overlaid on
-// the template, runs it, and returns the terminal [RunOutcome] including the
-// final assistant text folded from the session log.
+// Run constructs a per-run [agent.Loop] with spec.Sink, spec.Mode, and the run's
+// structured-output config (spec.OutputSchema/spec.Strict) overlaid on the
+// template, runs it, and returns the terminal [RunOutcome] including the final
+// assistant text folded from the session log.
 func (lr *LoopRunner) Run(ctx context.Context, spec RunSpec) (RunOutcome, error) {
 	deps := lr.deps
 	deps.Sink = adaptSink(spec.Sink)
 
 	cfg := lr.cfg
 	cfg.Mode = spec.Mode
+	// Per-run structured-output overlay: a single session may run with or without
+	// a schema across turns, so the schema/strict ride the per-run spec (the same
+	// idiom as cfg.Mode), never the shared template.
+	cfg.OutputSchema = spec.OutputSchema
+	cfg.Strict = spec.Strict
 
 	loop := agent.NewLoop(deps, cfg)
 	res, err := loop.Run(ctx, agent.RunInput{

@@ -43,7 +43,17 @@ type modelsAPI interface {
 // Provider is the Gemini implementation of [llm.Provider]. It is stateless apart from
 // the underlying genai client and is safe for concurrent use.
 type Provider struct {
-	models modelsAPI
+	models   modelsAPI
+	resolver capabilityResolver // non-nil => resolve per-model caps centrally
+	endpoint string             // registry endpoint name (used with resolver)
+}
+
+// capabilityResolver is the narrow consumer-side port the provider uses to obtain
+// per-(endpoint, model) capabilities. The central *capabilities.Registry satisfies
+// it; the provider depends only on this interface so the concrete registry is
+// injected from wiring and tests can supply a fake.
+type capabilityResolver interface {
+	Resolve(endpoint, model string) llm.Capabilities
 }
 
 // Config configures a Gemini [Provider].
@@ -51,6 +61,14 @@ type Config struct {
 	// APIKey is the Gemini Developer API key. When empty, the SDK falls back to the
 	// GEMINI_API_KEY / GOOGLE_API_KEY environment variables.
 	APIKey string
+	// Capabilities, when non-nil, resolves per-(endpoint, model) capabilities from
+	// the central registry at request-build time so the native structured-output gate
+	// reads the authoritative table rather than the adapter's hard-coded self-report.
+	// A nil value disables native structured output (conservative fallback to loop).
+	Capabilities capabilityResolver
+	// Endpoint is the registry endpoint name this provider is bound to (e.g.
+	// "gemini"); used with Capabilities to resolve per-model caps.
+	Endpoint string
 }
 
 // New constructs a Gemini [Provider] backed by a genai client on the Gemini Developer
@@ -64,7 +82,18 @@ func New(ctx context.Context, cfg Config) (*Provider, error) {
 	if err != nil {
 		return nil, normalizeError(err)
 	}
-	return &Provider{models: client.Models}, nil
+	return &Provider{models: client.Models, resolver: cfg.Capabilities, endpoint: cfg.Endpoint}, nil
+}
+
+// resolveCaps returns the capabilities used to gate native structured output for
+// model. With a central resolver injected it is authoritative; otherwise it returns
+// the conservative zero value so native output is never sent (the adapter's own
+// hard-coded Capabilities() self-report is deliberately NOT the gate).
+func (p *Provider) resolveCaps(model string) llm.Capabilities {
+	if p.resolver != nil {
+		return p.resolver.Resolve(p.endpoint, model)
+	}
+	return llm.Capabilities{}
 }
 
 // Generate runs a single non-streaming generation and returns the aggregated
@@ -74,7 +103,7 @@ func (p *Provider) Generate(ctx context.Context, req llm.Request) (*llm.Response
 	if err != nil {
 		return nil, &llm.ProviderError{Kind: llm.ErrInvalidRequest, Raw: err}
 	}
-	cfg, err := buildConfig(req)
+	cfg, err := buildConfig(req, p.resolveCaps(req.Model))
 	if err != nil {
 		return nil, &llm.ProviderError{Kind: llm.ErrInvalidRequest, Raw: err}
 	}
@@ -94,7 +123,7 @@ func (p *Provider) Stream(ctx context.Context, req llm.Request) (llm.StreamReade
 	if err != nil {
 		return nil, &llm.ProviderError{Kind: llm.ErrInvalidRequest, Raw: err}
 	}
-	cfg, err := buildConfig(req)
+	cfg, err := buildConfig(req, p.resolveCaps(req.Model))
 	if err != nil {
 		return nil, &llm.ProviderError{Kind: llm.ErrInvalidRequest, Raw: err}
 	}
@@ -255,7 +284,14 @@ func signatureBytes(sig string) []byte {
 
 // buildConfig maps the normalized [llm.Request] fields (System, Tools, ToolChoice,
 // MaxTokens, Temperature) onto a *genai.GenerateContentConfig.
-func buildConfig(req llm.Request) (*genai.GenerateContentConfig, error) {
+//
+// caps is the per-(endpoint, model) capability set resolved by the provider. When
+// req.OutputSchema is set AND caps.SupportsJSONSchemaStrict, native structured
+// output is requested via ResponseMIMEType=application/json + ResponseJsonSchema;
+// otherwise neither is set and the loop's validate-and-retry is the backstop. The
+// gate reads these THREADED central caps, not the adapter's hard-coded
+// Capabilities() self-report.
+func buildConfig(req llm.Request, caps llm.Capabilities) (*genai.GenerateContentConfig, error) {
 	cfg := &genai.GenerateContentConfig{}
 
 	if req.System != "" {
@@ -284,6 +320,20 @@ func buildConfig(req llm.Request) (*genai.GenerateContentConfig, error) {
 
 	if tc := toolConfig(req.ToolChoice); tc != nil {
 		cfg.ToolConfig = tc
+	}
+
+	// Native structured output: gated on a non-empty schema AND the central caps.
+	// The decoded schema is sent verbatim via ResponseJsonSchema (genai accepts a
+	// JSON Schema document directly). An undecodable/non-object schema silently
+	// skips native output — the loop still validates against the same schema.
+	if len(req.OutputSchema) > 0 && caps.SupportsJSONSchemaStrict {
+		var schema any
+		if err := json.Unmarshal(req.OutputSchema, &schema); err == nil {
+			if _, ok := schema.(map[string]any); ok {
+				cfg.ResponseMIMEType = "application/json"
+				cfg.ResponseJsonSchema = schema
+			}
+		}
 	}
 
 	return cfg, nil
