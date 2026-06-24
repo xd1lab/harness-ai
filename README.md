@@ -202,11 +202,19 @@ Every SSE frame carries its durable event seq as the `id:` field, so reconnectin
 
 **Python, zero SDK:** [examples/python/run_task.py](examples/python/run_task.py) is a complete ~100-line client (`pip install requests`) that creates a session, streams a run, and answers approval prompts interactively.
 
-Routes: `POST /v1/sessions` · `GET /v1/sessions` · `GET /v1/sessions/{id}` · `GET /v1/sessions/{id}/usage` · `POST /v1/sessions/{id}/run` (SSE) · `POST /v1/sessions/{id}/control` · `POST /v1/sessions/{id}/fork`.
+Routes: `POST /v1/sessions` · `GET /v1/sessions` · `GET /v1/sessions/{id}` · `GET /v1/sessions/{id}/usage` · `GET /v1/sessions/{id}/events` · `GET /v1/sessions/{id}/state` · `GET /v1/sessions/{id}/cost` · `GET /v1/cost` · `POST /v1/sessions/{id}/run` (SSE) · `POST /v1/sessions/{id}/control` · `POST /v1/sessions/{id}/fork`.
 
 ### Admin/tenant session management
 
 `GET /v1/sessions` lists your tenant's sessions — filter by `?status=active&status=failed` (repeatable) and a half-open `[created_after_ms, created_before_ms)` window, page with an opaque `page_token` (keyset on `(created_at, id)`, `page_size` defaults to 50 and is capped at 200), and sort newest-first with `?descending=true`. It returns the control/lineage projection only (status, mode, head_seq, lineage, timestamps) — no usage/cost and no event payloads. `GET /v1/sessions/{id}/usage` returns one session's accumulated usage/cost/turns folded from the event log (an interrupted run's partial is included, never re-billed), tagged with its provenance. **Stop** a running session by reusing the existing control route — `POST /v1/sessions/{id}/control` with `{"action":"interrupt"}` — which cooperatively aborts a live run (resumable) and is an idempotent no-op on an already-finished session; no separate kill endpoint exists. Everything is RLS-scoped to your tenant: the request never carries a `tenant_id` filter, and cross-tenant/global-admin views are intentionally out of scope ([ADR-0027](docs/decisions/0027-admin-session-api.md)).
+
+### Event-log read + time-travel
+
+`GET /v1/sessions/{id}/events` lists a session's events as **redacted descriptors** — seq, type, actor, timestamps, blob metadata, and a bounded summary — keyset-paginated on `?after_seq=` (`page_size` defaults to 100, capped at 1000). Sensitive payloads never leak: `provider_raw` and the system prompt are always omitted (even with `?include_payload=true`), streaming crash-checkpoints are never exposed, and large tool output stays a blob reference. `GET /v1/sessions/{id}/state?at_seq=N` is **time-travel**: it reconstructs the folded control/billing projection at sequence `N` via Load-then-fold — it creates no session and re-bills nothing (`at_seq` past head clamps to head) ([ADR-0025](docs/decisions/0025-event-log-read-and-time-travel.md)).
+
+### Session/tenant cost
+
+`GET /v1/sessions/{id}/cost` returns a session's cost broken down **per model** (sorted by cost; an uncorrelated model is the `unknown` bucket) plus the session total; `GET /v1/cost` returns your tenant's per-model aggregate, the tenant total, and the count of distinct sessions carrying cost. The rollup is persisted by `projectord` into a rebuildable `session_cost_events` projection — idempotent over the projection cursor (keyed on each event's `global_id`), with the per-model attribution correlated at write time (`TurnStarted.Model` ⋈ the terminal turn by `TurnID`). The event log stays the billing authority; the projection is fully rebuildable. Both endpoints are RLS-scoped to your tenant ([ADR-0026](docs/decisions/0026-session-tenant-cost-read.md)).
 
 ---
 
@@ -221,8 +229,9 @@ The endpoint is `POST /mcp` on the **same** HTTP listener as the REST facade and
 curl -fsS -X POST localhost:8080/mcp -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
 
-# 2. tools/list — the 7 tools: create_session, run, get_session, control, fork,
-#    list_sessions, get_session_usage (the last two are the admin/tenant read tools).
+# 2. tools/list — the 11 tools: create_session, run, get_session, control, fork,
+#    list_sessions, get_session_usage (admin reads), list_session_events,
+#    get_state_at_seq (event reads), get_session_cost, get_tenant_cost (cost reads).
 # 3. tools/call run with _meta.progressToken — the reply streams back on a
 #    text/event-stream leg as notifications/progress, then the terminal result.
 ```
