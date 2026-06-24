@@ -4,7 +4,9 @@ package main
 
 import (
 	"context"
+	"sort"
 	"sync"
+	"time"
 
 	igrpc "github.com/xd1lab/harness-ai/internal/orchestrator/adapter/inbound/grpc"
 	"github.com/xd1lab/harness-ai/internal/orchestrator/app"
@@ -217,6 +219,68 @@ func (s *Store) Subscribe(ctx context.Context, sessionID string, fromSeq int64) 
 		}
 	}()
 	return out, nil
+}
+
+// ListSessions returns the dev store's session aggregates matching q (status
+// OR-filter, half-open created_at window, (created_at, id) keyset, descending,
+// limit), mirroring the production store's keyset query (Feature I / ADR-0027).
+// Dev mode is single-process and single-tenant (K-2: no RLS), so it lists every
+// stored aggregate that passes the filters — there is no tenant scoping to apply.
+func (s *Store) ListSessions(_ context.Context, q igrpc.ListSessionsQuery) ([]domain.Session, error) {
+	s.mu.Lock()
+	rows := make([]domain.Session, 0, len(s.aggregates))
+	statusSet := map[domain.SessionStatus]bool{}
+	for _, st := range q.Statuses {
+		statusSet[st] = true
+	}
+	for _, agg := range s.aggregates {
+		sess := *agg
+		if len(statusSet) > 0 && !statusSet[sess.Status] {
+			continue
+		}
+		if !q.CreatedAfter.IsZero() && sess.CreatedAt.Before(q.CreatedAfter) {
+			continue
+		}
+		if !q.CreatedBefore.IsZero() && !sess.CreatedAt.Before(q.CreatedBefore) {
+			continue // half-open [after, before): before is exclusive
+		}
+		rows = append(rows, sess)
+	}
+	s.mu.Unlock()
+
+	less := func(a, b domain.Session) bool {
+		if !a.CreatedAt.Equal(b.CreatedAt) {
+			return a.CreatedAt.Before(b.CreatedAt)
+		}
+		return a.ID < b.ID // (created_at, id) total order
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if q.Descending {
+			return less(rows[j], rows[i])
+		}
+		return less(rows[i], rows[j])
+	})
+
+	// Keyset cursor: keep rows strictly after the cursor in sort order.
+	if q.Cursor.ID != "" {
+		cur := domain.Session{ID: q.Cursor.ID, CreatedAt: time.UnixMilli(q.Cursor.CreatedAtMs).UTC()}
+		filtered := rows[:0:0]
+		for _, sess := range rows {
+			after := less(cur, sess)
+			if q.Descending {
+				after = less(sess, cur)
+			}
+			if after {
+				filtered = append(filtered, sess)
+			}
+		}
+		rows = filtered
+	}
+
+	if q.Limit > 0 && len(rows) > q.Limit {
+		rows = rows[:q.Limit]
+	}
+	return rows, nil
 }
 
 // unsubscribe removes tail from sessionID's subscriber set.

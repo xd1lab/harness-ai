@@ -36,6 +36,15 @@ type EventStore interface {
 	// head_seq 0->1. mode has already been verified by the caller (client-supplied
 	// bypass is rejected before this).
 	CreateSession(ctx context.Context, sessionID string, mode domain.PermissionMode) (domain.Session, error)
+
+	// ListSessions returns the caller-tenant's sessions matching q (status
+	// OR-filter, half-open created_at window) in (created_at, id) order, after the
+	// keyset cursor, capped at q.Limit. It is a READ-ONLY admin/management surface
+	// (Feature I / ADR-0027) deliberately outside the frozen [app.EventLogPort]:
+	// the row set is RLS-scoped to the context's tenant by the store, so the SQL
+	// carries no tenant filter. It returns the control/lineage projection only (no
+	// usage/cost; per-session usage is the separate GetSessionUsage path).
+	ListSessions(ctx context.Context, q ListSessionsQuery) ([]domain.Session, error)
 }
 
 // RunSpec is the input the [Server] hands a [Runner] to drive one Run. It is the
