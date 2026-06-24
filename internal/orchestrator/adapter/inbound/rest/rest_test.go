@@ -194,6 +194,52 @@ func (f *fakeStore) ListSessions(_ context.Context, q igrpc.ListSessionsQuery) (
 	return rows, nil
 }
 
+// LoadRange returns sessionID's events with seq > afterSeq, oldest first, capped
+// at limit (the M read-superset method; the REST facade never exercises it but the
+// fake must satisfy the igrpc.EventStore interface).
+func (f *fakeStore) LoadRange(_ context.Context, sessionID string, afterSeq int64, limit int) ([]domain.EventEnvelope, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []domain.EventEnvelope
+	for _, e := range f.events[sessionID] {
+		if e.Seq > afterSeq {
+			out = append(out, e)
+			if limit > 0 && len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+// LoadUpTo returns sessionID's events with seq <= atSeq, oldest first.
+func (f *fakeStore) LoadUpTo(_ context.Context, sessionID string, atSeq int64) ([]domain.EventEnvelope, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []domain.EventEnvelope
+	for _, e := range f.events[sessionID] {
+		if e.Seq <= atSeq {
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
+// SessionCostByModel/TenantCostByModel/TenantSessionCostCount are the O cost-read
+// superset methods; the REST facade never exercises them but the fake must satisfy
+// the interface. They return empty rollups over the fake's empty cost projection.
+func (f *fakeStore) SessionCostByModel(_ context.Context, _ string) ([]igrpc.ModelCostRow, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) TenantCostByModel(_ context.Context) ([]igrpc.ModelCostRow, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) TenantSessionCostCount(_ context.Context) (int64, error) {
+	return 0, nil
+}
+
 // seed inserts a session directly (bypassing CreateSession).
 func (f *fakeStore) seed(s domain.Session) {
 	f.mu.Lock()

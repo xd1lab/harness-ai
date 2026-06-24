@@ -115,7 +115,7 @@ func (c *fakeConn) Query(_ context.Context, sql string, args ...any) (pgx.Rows, 
 			continue
 		}
 		cols = append(cols, []any{
-			uint64ToText(e.TransactionID), e.GlobalID, e.TenantID, e.SessionID, string(e.Type), e.Payload,
+			uint64ToText(e.TransactionID), e.GlobalID, e.Seq, e.TenantID, e.SessionID, string(e.Type), e.Payload,
 		})
 		if len(cols) >= limit {
 			break

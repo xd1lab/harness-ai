@@ -77,7 +77,7 @@ const saveCursorSQL = `
 // lower-id transaction is simply not yet below xmin and is read on a later poll —
 // delayed, never skipped (NFR-REL-04).
 const fetchBatchSQL = `
-	SELECT transaction_id::text, global_id, tenant_id, session_id, event_type, payload
+	SELECT transaction_id::text, global_id, seq, tenant_id, session_id, event_type, payload
 	  FROM events
 	 WHERE (transaction_id, global_id) > ($1::text::xid8, $2)
 	   AND transaction_id < pg_snapshot_xmin(pg_current_snapshot())
@@ -157,12 +157,13 @@ func (s *Source) FetchBatch(ctx context.Context, cur Cursor, limit int) ([]Event
 		var (
 			txnText   string
 			gid       int64
+			seq       int64
 			tenantID  string
 			sessionID string
 			eventType string
 			payload   []byte
 		)
-		if err := rows.Scan(&txnText, &gid, &tenantID, &sessionID, &eventType, &payload); err != nil {
+		if err := rows.Scan(&txnText, &gid, &seq, &tenantID, &sessionID, &eventType, &payload); err != nil {
 			return nil, fmt.Errorf("projection: scanning event row: %w", err)
 		}
 		txn, perr := textToUint64(txnText)
@@ -172,6 +173,7 @@ func (s *Source) FetchBatch(ctx context.Context, cur Cursor, limit int) ([]Event
 		out = append(out, EventRow{
 			TransactionID: txn,
 			GlobalID:      gid,
+			Seq:           seq,
 			TenantID:      tenantID,
 			SessionID:     sessionID,
 			Type:          domain.EventType(eventType),

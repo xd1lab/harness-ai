@@ -52,6 +52,11 @@ type EventRow struct {
 	TransactionID uint64
 	// GlobalID is the events.global_id — the cursor tie-breaker.
 	GlobalID int64
+	// Seq is the per-session sequence number (events.seq). It is carried so the
+	// CostProjector's slow-path model recovery can bound the TurnStarted point
+	// lookup by `seq < $2` (Feature O / cost-read). The in-memory RollupFold ignores
+	// it; it is an additive field that does not affect the cost fold.
+	Seq int64
 	// TenantID is the owning tenant (events.tenant_id).
 	TenantID string
 	// SessionID is the session stream (events.session_id).

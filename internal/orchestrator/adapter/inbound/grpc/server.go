@@ -45,6 +45,32 @@ type EventStore interface {
 	// carries no tenant filter. It returns the control/lineage projection only (no
 	// usage/cost; per-session usage is the separate GetSessionUsage path).
 	ListSessions(ctx context.Context, q ListSessionsQuery) ([]domain.Session, error)
+
+	// LoadRange returns sessionID's events with seq strictly greater than afterSeq,
+	// oldest first, capped at limit (a keyset page). It backs ListSessionEvents
+	// (Feature M / event-read), RLS-scoped to the context's tenant, read-only and
+	// side-effect-free (it is deliberately NOT on the frozen [app.EventLogPort]).
+	LoadRange(ctx context.Context, sessionID string, afterSeq int64, limit int) ([]domain.EventEnvelope, error)
+
+	// LoadUpTo returns sessionID's events with seq <= atSeq, oldest first — the
+	// bounded fold window for at-seq state reconstruction (Feature M / event-read).
+	// It backs GetStateAtSeq via Load-then-fold (never Fork), RLS-scoped, read-only.
+	LoadUpTo(ctx context.Context, sessionID string, atSeq int64) ([]domain.EventEnvelope, error)
+
+	// SessionCostByModel returns the per-model cost/usage/turns rollup for one
+	// session from the persisted cost projection (Feature O / cost-read), RLS-scoped
+	// to the context's tenant. Model "" is the uncorrelated bucket. Read-only.
+	SessionCostByModel(ctx context.Context, sessionID string) ([]ModelCostRow, error)
+
+	// TenantCostByModel returns the per-model cost/usage/turns rollup aggregated
+	// across every session of the context's tenant (Feature O / cost-read),
+	// RLS-scoped. Read-only.
+	TenantCostByModel(ctx context.Context) ([]ModelCostRow, error)
+
+	// TenantSessionCostCount returns the number of distinct sessions of the context's
+	// tenant carrying cost — the source of GetTenantCostResponse.session_count
+	// (Feature O / cost-read), RLS-scoped. Read-only.
+	TenantSessionCostCount(ctx context.Context) (int64, error)
 }
 
 // RunSpec is the input the [Server] hands a [Runner] to drive one Run. It is the

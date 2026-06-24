@@ -243,6 +243,14 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, r *http.Request, req *r
 		h.toolListSessions(w, r, req, params)
 	case "get_session_usage":
 		h.toolGetSessionUsage(w, r, req, params)
+	case "list_session_events":
+		h.toolListSessionEvents(w, r, req, params)
+	case "get_state_at_seq":
+		h.toolGetStateAtSeq(w, r, req, params)
+	case "get_session_cost":
+		h.toolGetSessionCost(w, r, req, params)
+	case "get_tenant_cost":
+		h.toolGetTenantCost(w, r, req, params)
 	default:
 		writeJSON(w, http.StatusOK, errorResponse(req.ID, codeInvalidParams, "unknown tool: "+params.Name, nil))
 	}
@@ -405,6 +413,107 @@ func (h *Handler) toolGetSessionUsage(w http.ResponseWriter, r *http.Request, re
 	}
 	result := textResult("session "+args.SessionID+" usage", out)
 	writeJSON(w, http.StatusOK, resultResponse(req.ID, result))
+}
+
+// toolListSessionEvents maps the list_session_events tool onto the shared
+// ListSessionEvents (Feature M / event-read): redacted event descriptors,
+// keyset-paginated on seq.
+func (h *Handler) toolListSessionEvents(w http.ResponseWriter, r *http.Request, req *rpcRequest, p toolCallParams) {
+	var args listSessionEventsArgs
+	if !decodeArgs(w, req, p.Arguments, &args) {
+		return
+	}
+	if args.SessionID == "" {
+		writeJSON(w, http.StatusOK, errorResponse(req.ID, codeInvalidParams, "session_id is required", nil))
+		return
+	}
+	resp, err := h.grpc.ListSessionEvents(r.Context(), &genproto.ListSessionEventsRequest{
+		SessionId:      args.SessionID,
+		AfterSeq:       args.AfterSeq,
+		PageSize:       args.PageSize,
+		IncludePayload: args.IncludePayload,
+	})
+	if err != nil {
+		h.writeToolStatusError(w, req, err)
+		return
+	}
+	out, err := protoToMap(resp)
+	if err != nil {
+		writeJSON(w, http.StatusOK, errorResponse(req.ID, codeInternalError, "encode events: "+err.Error(), nil))
+		return
+	}
+	writeJSON(w, http.StatusOK, resultResponse(req.ID, textResult("session "+args.SessionID+" events", out)))
+}
+
+// toolGetStateAtSeq maps the get_state_at_seq tool onto the shared GetStateAtSeq
+// (Feature M / event-read): the folded control/billing projection at at_seq.
+func (h *Handler) toolGetStateAtSeq(w http.ResponseWriter, r *http.Request, req *rpcRequest, p toolCallParams) {
+	var args getStateAtSeqArgs
+	if !decodeArgs(w, req, p.Arguments, &args) {
+		return
+	}
+	if args.SessionID == "" {
+		writeJSON(w, http.StatusOK, errorResponse(req.ID, codeInvalidParams, "session_id is required", nil))
+		return
+	}
+	resp, err := h.grpc.GetStateAtSeq(r.Context(), &genproto.GetStateAtSeqRequest{
+		SessionId: args.SessionID,
+		AtSeq:     args.AtSeq,
+	})
+	if err != nil {
+		h.writeToolStatusError(w, req, err)
+		return
+	}
+	out, err := protoToMap(resp)
+	if err != nil {
+		writeJSON(w, http.StatusOK, errorResponse(req.ID, codeInternalError, "encode state: "+err.Error(), nil))
+		return
+	}
+	writeJSON(w, http.StatusOK, resultResponse(req.ID, textResult("session "+args.SessionID+" state", out)))
+}
+
+// toolGetSessionCost maps the get_session_cost tool onto the shared GetSessionCost
+// (Feature O / cost-read): the session's per-model cost rollup plus the total.
+func (h *Handler) toolGetSessionCost(w http.ResponseWriter, r *http.Request, req *rpcRequest, p toolCallParams) {
+	var args getSessionCostArgs
+	if !decodeArgs(w, req, p.Arguments, &args) {
+		return
+	}
+	if args.SessionID == "" {
+		writeJSON(w, http.StatusOK, errorResponse(req.ID, codeInvalidParams, "session_id is required", nil))
+		return
+	}
+	resp, err := h.grpc.GetSessionCost(r.Context(), &genproto.GetSessionCostRequest{SessionId: args.SessionID})
+	if err != nil {
+		h.writeToolStatusError(w, req, err)
+		return
+	}
+	out, err := protoToMap(resp)
+	if err != nil {
+		writeJSON(w, http.StatusOK, errorResponse(req.ID, codeInternalError, "encode session cost: "+err.Error(), nil))
+		return
+	}
+	writeJSON(w, http.StatusOK, resultResponse(req.ID, textResult("session "+args.SessionID+" cost", out)))
+}
+
+// toolGetTenantCost maps the get_tenant_cost tool onto the shared GetTenantCost
+// (Feature O / cost-read): the authenticated tenant's per-model cost aggregate.
+func (h *Handler) toolGetTenantCost(w http.ResponseWriter, r *http.Request, req *rpcRequest, p toolCallParams) {
+	var args getTenantCostArgs
+	if !decodeArgs(w, req, p.Arguments, &args) {
+		return
+	}
+	resp, err := h.grpc.GetTenantCost(r.Context(), &genproto.GetTenantCostRequest{})
+	if err != nil {
+		h.writeToolStatusError(w, req, err)
+		return
+	}
+	out, err := protoToMap(resp)
+	if err != nil {
+		writeJSON(w, http.StatusOK, errorResponse(req.ID, codeInternalError, "encode tenant cost: "+err.Error(), nil))
+		return
+	}
+	writeJSON(w, http.StatusOK, resultResponse(req.ID, textResult("tenant cost", out)))
 }
 
 // parseStatuses maps the list_sessions status string OR-filter (active|finished|

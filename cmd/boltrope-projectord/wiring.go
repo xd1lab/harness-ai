@@ -180,6 +180,14 @@ func (w *worker) runOnce(ctx context.Context) error {
 	opts := []projection.RunnerOption{
 		projection.WithMetrics(w.metrics),
 		projection.WithLogger(w.log),
+		// Persist the per-turn cost rollup into session_cost_events as the worker
+		// tails the feed (Feature O / cost-read; ADR-0026). The projector shares the
+		// worker's operator-tier connection: it reads the GLOBAL feed (via the source)
+		// and writes the per-tenant cost rows, scoping each write to the source row's
+		// tenant. Writes are idempotent over the xmin cursor (ON CONFLICT global_id),
+		// so a crash re-read never double-counts; the GetSessionCost/GetTenantCost read
+		// path serves this same table, RLS-scoped.
+		projection.WithCostProjector(projection.NewCostProjector(conn)),
 	}
 	cfg := projection.Config{Subscription: w.settings.Subscription}
 	if w.settings.SweepInterval > 0 {

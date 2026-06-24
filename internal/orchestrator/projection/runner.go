@@ -72,6 +72,7 @@ type Runner struct {
 	src     *Source
 	sweeper *Sweeper // nil when SweepInterval == 0
 	metrics MetricSink
+	cost    *CostProjector // nil when no persistent cost projection is attached
 	log     *slog.Logger
 	now     func() time.Time
 
@@ -93,6 +94,14 @@ func WithSweeper(sw *Sweeper) RunnerOption { return func(r *Runner) { r.sweeper 
 // WithMetrics sets the metric sink ([MetricSink]). When unset the runner
 // still functions; metric publishes are no-ops.
 func WithMetrics(m MetricSink) RunnerOption { return func(r *Runner) { r.metrics = m } }
+
+// WithCostProjector attaches a persistent [CostProjector] sink (Feature O /
+// cost-read; ADR-0026). When set, each folded batch is also written to
+// session_cost_events (idempotently, keyed on global_id) before the cursor is
+// saved — so a crash before the save re-reads the batch and the ON CONFLICT insert
+// makes the re-read a no-op. When unset the runner keeps its in-memory rollup +
+// cost counter only (the persistent table is simply not maintained).
+func WithCostProjector(p *CostProjector) RunnerOption { return func(r *Runner) { r.cost = p } }
 
 // WithLogger sets the structured logger. When unset a discarding logger is used.
 func WithLogger(l *slog.Logger) RunnerOption {
@@ -237,6 +246,19 @@ func (r *Runner) foldAndAdvance(ctx context.Context, rows []EventRow) error {
 	r.totals, err = RollupFold(r.totals, rows)
 	if err != nil {
 		return err
+	}
+
+	// Persist the batch's per-turn cost rows BEFORE saving the cursor (when a cost
+	// projector is attached). The order is load-bearing for idempotency: a crash
+	// after the inserts but before the save re-reads the batch, and the projector's
+	// ON CONFLICT (global_id) DO NOTHING makes the re-insert a no-op — so the
+	// persistent rollup never double-counts despite the at-least-once cursor. A
+	// projector error aborts BEFORE the save, so the cursor does not advance past an
+	// unwritten batch.
+	if r.cost != nil {
+		if err := r.cost.Project(ctx, rows); err != nil {
+			return err
+		}
 	}
 
 	cursorRows := make([]rowCursor, len(rows))

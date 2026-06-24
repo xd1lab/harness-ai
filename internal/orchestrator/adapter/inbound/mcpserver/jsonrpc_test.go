@@ -171,12 +171,13 @@ func TestInitialize_ServerInfoAndCaps(t *testing.T) {
 // T-5 — tools/list (AC-3)
 // ---------------------------------------------------------------------------
 
-// TestToolsList_ReturnsSevenTools pins AC-3 (updated for Feature I / ADR-0027):
-// exactly 7 tools whose names are the expected set — the original 5 plus the
-// admin/tenant read tools list_sessions + get_session_usage — each with a
-// non-empty description + an inputSchema object, and run additionally has an
-// outputSchema.
-func TestToolsList_ReturnsSevenTools(t *testing.T) {
+// TestToolsList_ReturnsElevenTools pins AC-3 (updated for the wave-2 read plane):
+// exactly 11 tools whose names are the expected set — the original 5, the Feature I
+// admin reads (list_sessions + get_session_usage), the Feature M event reads
+// (list_session_events + get_state_at_seq), and the Feature O cost reads
+// (get_session_cost + get_tenant_cost) — each with a non-empty description + an
+// inputSchema object, and run additionally has an outputSchema.
+func TestToolsList_ReturnsElevenTools(t *testing.T) {
 	h := devHarness(t)
 	env, _ := h.doRPC(t, "", "tools/list", map[string]any{})
 	require.Nil(t, env.Error)
@@ -190,11 +191,13 @@ func TestToolsList_ReturnsSevenTools(t *testing.T) {
 		} `json:"tools"`
 	}
 	require.NoError(t, json.Unmarshal(env.Result, &result))
-	require.Len(t, result.Tools, 7, "v1 returns exactly 7 tools (5 original + list_sessions + get_session_usage)")
+	require.Len(t, result.Tools, 11, "v1 returns exactly 11 tools (5 original + I/M/O read tools)")
 
 	want := map[string]bool{
 		"create_session": false, "run": false, "get_session": false, "control": false, "fork": false,
 		"list_sessions": false, "get_session_usage": false,
+		"list_session_events": false, "get_state_at_seq": false,
+		"get_session_cost": false, "get_tenant_cost": false,
 	}
 	for _, tool := range result.Tools {
 		_, known := want[tool.Name]

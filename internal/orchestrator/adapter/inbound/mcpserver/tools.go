@@ -57,13 +57,15 @@ func objectSchemaBytes(raw json.RawMessage) (schema []byte, ok bool) {
 	return []byte(raw), true
 }
 
-// toolCatalog returns the 7 v1 tools (create_session, run, get_session, control,
-// fork, list_sessions, get_session_usage), each with a non-empty description and
+// toolCatalog returns the 11 v1 tools (create_session, run, get_session, control,
+// fork, list_sessions, get_session_usage, list_session_events, get_state_at_seq,
+// get_session_cost, get_tenant_cost), each with a non-empty description and
 // inputSchema; run additionally declares an outputSchema (the synthesized
-// completed result). The set and shape are pinned by TestToolsList_ReturnsSevenTools
-// (the admin/tenant read tools list_sessions + get_session_usage are the Feature I /
-// ADR-0027 additions; the control tool's description documents that interrupt is
-// the admin STOP).
+// completed result). The set and shape are pinned by TestToolsList_ReturnsElevenTools
+// (list_sessions + get_session_usage are the Feature I / ADR-0027 admin reads;
+// list_session_events + get_state_at_seq are Feature M / event-read;
+// get_session_cost + get_tenant_cost are Feature O / cost-read; the control tool's
+// description documents that interrupt is the admin STOP).
 func toolCatalog() []toolDescriptor {
 	return []toolDescriptor{
 		{
@@ -151,6 +153,36 @@ func toolCatalog() []toolDescriptor {
 				"session_id": map[string]any{"type": "string", "description": "Target session id."},
 			}, "session_id"),
 		},
+		{
+			Name:        "list_session_events",
+			Description: "List an owned session's events as redacted descriptors (seq, type, actor, timestamps, blob metadata, a bounded summary), keyset-paginated on seq. Sensitive payloads are never returned: provider_raw and the system prompt are always omitted, streaming checkpoints are never exposed, and large tool output stays a blob reference.",
+			InputSchema: objectSchema(map[string]any{
+				"session_id":      map[string]any{"type": "string", "description": "Target session id."},
+				"after_seq":       map[string]any{"type": "integer", "description": "Keyset cursor: only events with seq > after_seq are returned."},
+				"page_size":       map[string]any{"type": "integer", "description": "Max descriptors per page; <=0 defaults to 100, capped at 1000."},
+				"include_payload": map[string]any{"type": "boolean", "description": "Widen summaries to (truncated) payload text; provider_raw and the system prompt stay omitted even when true."},
+			}, "session_id"),
+		},
+		{
+			Name:        "get_state_at_seq",
+			Description: "Reconstruct an owned session's folded control/billing projection at a sequence point (time-travel) via Load-then-fold — it creates no session and re-bills nothing. at_seq<=0 yields the empty state; at_seq beyond head is clamped to head.",
+			InputSchema: objectSchema(map[string]any{
+				"session_id": map[string]any{"type": "string", "description": "Target session id."},
+				"at_seq":     map[string]any{"type": "integer", "description": "Inclusive upper seq bound to reconstruct to."},
+			}, "session_id"),
+		},
+		{
+			Name:        "get_session_cost",
+			Description: "Read an owned session's cost: a per-model breakdown (sorted by cost descending; an uncorrelated model is the 'unknown' bucket) plus the session total, from the persisted cost-rollup projection.",
+			InputSchema: objectSchema(map[string]any{
+				"session_id": map[string]any{"type": "string", "description": "Target session id."},
+			}, "session_id"),
+		},
+		{
+			Name:        "get_tenant_cost",
+			Description: "Read the authenticated tenant's cost: a per-model breakdown, the tenant total, and the count of distinct sessions carrying cost. The tenant is the authenticated principal (no tenant_id arg).",
+			InputSchema: objectSchema(map[string]any{}),
+		},
 	}
 }
 
@@ -211,6 +243,29 @@ type listSessionsArgs struct {
 type getSessionUsageArgs struct {
 	SessionID string `json:"session_id"`
 }
+
+// listSessionEventsArgs is the list_session_events tool arguments (Feature M).
+type listSessionEventsArgs struct {
+	SessionID      string `json:"session_id"`
+	AfterSeq       int64  `json:"after_seq"`
+	PageSize       int32  `json:"page_size"`
+	IncludePayload bool   `json:"include_payload"`
+}
+
+// getStateAtSeqArgs is the get_state_at_seq tool arguments (Feature M).
+type getStateAtSeqArgs struct {
+	SessionID string `json:"session_id"`
+	AtSeq     int64  `json:"at_seq"`
+}
+
+// getSessionCostArgs is the get_session_cost tool arguments (Feature O).
+type getSessionCostArgs struct {
+	SessionID string `json:"session_id"`
+}
+
+// getTenantCostArgs is the get_tenant_cost tool arguments (Feature O). No fields:
+// the tenant is the authenticated principal.
+type getTenantCostArgs struct{}
 
 // ---- CallToolResult ---------------------------------------------------------
 

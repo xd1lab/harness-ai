@@ -70,6 +70,12 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/sessions", h.withAuth(h.listSessions))
 	mux.HandleFunc("GET /v1/sessions/{id}", h.withAuth(h.getSession))
 	mux.HandleFunc("GET /v1/sessions/{id}/usage", h.withAuth(h.getSessionUsage))
+	// Feature M (event-read): redacted event listing + at-seq time-travel.
+	mux.HandleFunc("GET /v1/sessions/{id}/events", h.withAuth(h.listSessionEvents))
+	mux.HandleFunc("GET /v1/sessions/{id}/state", h.withAuth(h.getStateAtSeq))
+	// Feature O (cost-read): per-session + per-tenant cost rollups.
+	mux.HandleFunc("GET /v1/sessions/{id}/cost", h.withAuth(h.getSessionCost))
+	mux.HandleFunc("GET /v1/cost", h.withAuth(h.getTenantCost))
 	mux.HandleFunc("POST /v1/sessions/{id}/run", h.withAuth(h.run))
 	// POST /v1/sessions/{id}/control with {"action":"interrupt"} is the admin STOP:
 	// it cooperatively interrupts a live run (resumable) and is an idempotent no-op
@@ -247,6 +253,86 @@ func (h *Handler) getSessionUsage(w http.ResponseWriter, r *http.Request) {
 	resp, err := h.grpc.GetSessionUsage(r.Context(), &genproto.GetSessionUsageRequest{
 		SessionId: r.PathValue("id"),
 	})
+	if err != nil {
+		writeStatusError(w, err)
+		return
+	}
+	writeProto(w, resp)
+}
+
+// listSessionEvents maps GET /v1/sessions/{id}/events onto the shared
+// ListSessionEvents (Feature M / event-read): redacted event descriptors,
+// keyset-paginated on seq. Query params: after_seq / page_size (decimal),
+// include_payload (bool). The response is protojson of ListSessionEventsResponse.
+func (h *Handler) listSessionEvents(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	afterSeq, err := parseOptionalInt64(q.Get("after_seq"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, codes.InvalidArgument, "after_seq must be a decimal integer")
+		return
+	}
+	pageSize, err := parseOptionalPageSize(q.Get("page_size"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, codes.InvalidArgument, "page_size must be a decimal integer")
+		return
+	}
+	includePayload, err := parseOptionalBool(q.Get("include_payload"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, codes.InvalidArgument, "include_payload must be true or false")
+		return
+	}
+	resp, err := h.grpc.ListSessionEvents(r.Context(), &genproto.ListSessionEventsRequest{
+		SessionId:      r.PathValue("id"),
+		AfterSeq:       afterSeq,
+		PageSize:       pageSize,
+		IncludePayload: includePayload,
+	})
+	if err != nil {
+		writeStatusError(w, err)
+		return
+	}
+	writeProto(w, resp)
+}
+
+// getStateAtSeq maps GET /v1/sessions/{id}/state onto the shared GetStateAtSeq
+// (Feature M / event-read): the folded control/billing projection at at_seq,
+// reconstructed via Load-then-fold (never Fork). Query param: at_seq (decimal).
+func (h *Handler) getStateAtSeq(w http.ResponseWriter, r *http.Request) {
+	atSeq, err := parseOptionalInt64(r.URL.Query().Get("at_seq"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, codes.InvalidArgument, "at_seq must be a decimal integer")
+		return
+	}
+	resp, err := h.grpc.GetStateAtSeq(r.Context(), &genproto.GetStateAtSeqRequest{
+		SessionId: r.PathValue("id"),
+		AtSeq:     atSeq,
+	})
+	if err != nil {
+		writeStatusError(w, err)
+		return
+	}
+	writeProto(w, resp)
+}
+
+// getSessionCost maps GET /v1/sessions/{id}/cost onto the shared GetSessionCost
+// (Feature O / cost-read): the session's per-model cost rollup plus the total.
+func (h *Handler) getSessionCost(w http.ResponseWriter, r *http.Request) {
+	resp, err := h.grpc.GetSessionCost(r.Context(), &genproto.GetSessionCostRequest{
+		SessionId: r.PathValue("id"),
+	})
+	if err != nil {
+		writeStatusError(w, err)
+		return
+	}
+	writeProto(w, resp)
+}
+
+// getTenantCost maps GET /v1/cost onto the shared GetTenantCost (Feature O /
+// cost-read): the authenticated tenant's per-model cost aggregate, the total, and
+// the distinct-session count. It carries NO tenant_id param (the tenant is the
+// authenticated principal).
+func (h *Handler) getTenantCost(w http.ResponseWriter, r *http.Request) {
+	resp, err := h.grpc.GetTenantCost(r.Context(), &genproto.GetTenantCostRequest{})
 	if err != nil {
 		writeStatusError(w, err)
 		return
