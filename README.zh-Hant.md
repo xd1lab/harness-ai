@@ -202,7 +202,11 @@ curl -fsS -X POST "localhost:8080/v1/sessions/$SESSION/control" \
 
 **Python,零 SDK:** [examples/python/run_task.py](examples/python/run_task.py) 是一個完整的約 100 行客戶端(`pip install requests`),會建立會話、串流一次執行,並互動式回答核可提示。
 
-路由:`POST /v1/sessions` · `GET /v1/sessions/{id}` · `POST /v1/sessions/{id}/run`(SSE)· `POST /v1/sessions/{id}/control` · `POST /v1/sessions/{id}/fork`。
+路由:`POST /v1/sessions` · `GET /v1/sessions` · `GET /v1/sessions/{id}` · `GET /v1/sessions/{id}/usage` · `POST /v1/sessions/{id}/run`(SSE)· `POST /v1/sessions/{id}/control` · `POST /v1/sessions/{id}/fork`。
+
+### 管理/租戶會話管理
+
+`GET /v1/sessions` 列出你租戶的會話——可用 `?status=active&status=failed`(可重複)與半開區間 `[created_after_ms, created_before_ms)` 過濾,以不透明的 `page_token` 分頁(在 `(created_at, id)` 上 keyset 分頁,`page_size` 預設 50、上限 200),並以 `?descending=true` 由新到舊排序。它只回傳控制/血緣投影(status、mode、head_seq、血緣、時間戳),不含用量/成本,也不含任何事件酬載。`GET /v1/sessions/{id}/usage` 回傳單一會話從事件日誌折算出的累計用量/成本/回合數(被中斷之執行的部分用量已計入,絕不重複計費),並標注其來源。要**停止**一個執行中的會話,沿用既有的 control 路由——`POST /v1/sessions/{id}/control` 帶 `{"action":"interrupt"}`——它會協作式中止仍在執行的迴圈(可續傳),對已結束的會話則是冪等的 no-op;不存在另一個 kill 端點。一切皆以 RLS 限定於你的租戶:請求從不攜帶 `tenant_id` 過濾鍵,跨租戶/全域管理視圖刻意不在範圍內([ADR-0027](docs/decisions/0027-admin-session-api.md))。
 
 ---
 
@@ -217,7 +221,8 @@ Boltrope 也把**自己**暴露為一個 [Model Context Protocol](https://modelc
 curl -fsS -X POST localhost:8080/mcp -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
 
-# 2. tools/list — 5 個工具:create_session、run、get_session、control、fork。
+# 2. tools/list — 7 個工具:create_session、run、get_session、control、fork、
+#    list_sessions、get_session_usage(後兩者為管理/租戶讀取工具)。
 # 3. tools/call run 帶 _meta.progressToken — 回覆會以 text/event-stream 串流為
 #    notifications/progress,最後送終局 result。
 ```

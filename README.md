@@ -202,7 +202,11 @@ Every SSE frame carries its durable event seq as the `id:` field, so reconnectin
 
 **Python, zero SDK:** [examples/python/run_task.py](examples/python/run_task.py) is a complete ~100-line client (`pip install requests`) that creates a session, streams a run, and answers approval prompts interactively.
 
-Routes: `POST /v1/sessions` · `GET /v1/sessions/{id}` · `POST /v1/sessions/{id}/run` (SSE) · `POST /v1/sessions/{id}/control` · `POST /v1/sessions/{id}/fork`.
+Routes: `POST /v1/sessions` · `GET /v1/sessions` · `GET /v1/sessions/{id}` · `GET /v1/sessions/{id}/usage` · `POST /v1/sessions/{id}/run` (SSE) · `POST /v1/sessions/{id}/control` · `POST /v1/sessions/{id}/fork`.
+
+### Admin/tenant session management
+
+`GET /v1/sessions` lists your tenant's sessions — filter by `?status=active&status=failed` (repeatable) and a half-open `[created_after_ms, created_before_ms)` window, page with an opaque `page_token` (keyset on `(created_at, id)`, `page_size` defaults to 50 and is capped at 200), and sort newest-first with `?descending=true`. It returns the control/lineage projection only (status, mode, head_seq, lineage, timestamps) — no usage/cost and no event payloads. `GET /v1/sessions/{id}/usage` returns one session's accumulated usage/cost/turns folded from the event log (an interrupted run's partial is included, never re-billed), tagged with its provenance. **Stop** a running session by reusing the existing control route — `POST /v1/sessions/{id}/control` with `{"action":"interrupt"}` — which cooperatively aborts a live run (resumable) and is an idempotent no-op on an already-finished session; no separate kill endpoint exists. Everything is RLS-scoped to your tenant: the request never carries a `tenant_id` filter, and cross-tenant/global-admin views are intentionally out of scope ([ADR-0027](docs/decisions/0027-admin-session-api.md)).
 
 ---
 
@@ -217,7 +221,8 @@ The endpoint is `POST /mcp` on the **same** HTTP listener as the REST facade and
 curl -fsS -X POST localhost:8080/mcp -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
 
-# 2. tools/list — the 5 tools: create_session, run, get_session, control, fork.
+# 2. tools/list — the 7 tools: create_session, run, get_session, control, fork,
+#    list_sessions, get_session_usage (the last two are the admin/tenant read tools).
 # 3. tools/call run with _meta.progressToken — the reply streams back on a
 #    text/event-stream leg as notifications/progress, then the terminal result.
 ```
