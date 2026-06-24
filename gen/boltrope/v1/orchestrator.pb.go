@@ -809,6 +809,806 @@ func (x *GetSessionUsageResponse) GetSource() UsageSource {
 	return UsageSource_USAGE_SOURCE_UNSPECIFIED
 }
 
+// ListSessionEventsRequest lists an owned session's events as redacted
+// descriptors with keyset pagination (Feature M / event-read).
+type ListSessionEventsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// tenant_id is a GUARD: when non-empty it MUST match the authenticated principal.
+	TenantId string `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	// session_id is the owned session whose events to list.
+	SessionId string `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// after_seq is the keyset cursor: only events with seq strictly greater than it
+	// are returned (zero starts from the beginning). It mirrors RunRequest.after_seq.
+	AfterSeq int64 `protobuf:"varint,3,opt,name=after_seq,json=afterSeq,proto3" json:"after_seq,omitempty"`
+	// page_size is the maximum descriptors to return. A value <= 0 resolves to the
+	// default of 100; a value above 1000 is clamped to 1000 (never rejected).
+	PageSize int32 `protobuf:"varint,4,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	// include_payload opts into payload-bearing summaries. Even when true, provider_raw
+	// and SessionStarted.SystemPrompt are never returned and AssistantMessageDelta is
+	// never exposed; text is still truncated and large tool output stays a blob ref.
+	IncludePayload bool `protobuf:"varint,5,opt,name=include_payload,json=includePayload,proto3" json:"include_payload,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *ListSessionEventsRequest) Reset() {
+	*x = ListSessionEventsRequest{}
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSessionEventsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSessionEventsRequest) ProtoMessage() {}
+
+func (x *ListSessionEventsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSessionEventsRequest.ProtoReflect.Descriptor instead.
+func (*ListSessionEventsRequest) Descriptor() ([]byte, []int) {
+	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *ListSessionEventsRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *ListSessionEventsRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *ListSessionEventsRequest) GetAfterSeq() int64 {
+	if x != nil {
+		return x.AfterSeq
+	}
+	return 0
+}
+
+func (x *ListSessionEventsRequest) GetPageSize() int32 {
+	if x != nil {
+		return x.PageSize
+	}
+	return 0
+}
+
+func (x *ListSessionEventsRequest) GetIncludePayload() bool {
+	if x != nil {
+		return x.IncludePayload
+	}
+	return false
+}
+
+// EventDescriptor is the safe, redacted view of one event for ListSessionEvents:
+// envelope coordinates plus a bounded summary and blob metadata — never the raw
+// sensitive payload (Feature M / event-read).
+type EventDescriptor struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// seq is the event's per-session sequence number.
+	Seq int64 `protobuf:"varint,1,opt,name=seq,proto3" json:"seq,omitempty"`
+	// event_type is the event discriminator (domain.EventType string).
+	EventType string `protobuf:"bytes,2,opt,name=event_type,json=eventType,proto3" json:"event_type,omitempty"`
+	// actor is the event's actor (user/assistant/tool/system).
+	Actor string `protobuf:"bytes,3,opt,name=actor,proto3" json:"actor,omitempty"`
+	// schema_version is the event payload's schema version.
+	SchemaVersion int32 `protobuf:"varint,4,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	// request_id is the idempotency request id the event was written under.
+	RequestId string `protobuf:"bytes,5,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	// created_at_ms is the event's created_at as Unix epoch ms.
+	CreatedAtMs int64 `protobuf:"varint,6,opt,name=created_at_ms,json=createdAtMs,proto3" json:"created_at_ms,omitempty"`
+	// has_blob reports whether the event references a blob (e.g. an offloaded
+	// ToolResult); the bytes are fetched on demand, never inlined here.
+	HasBlob bool `protobuf:"varint,7,opt,name=has_blob,json=hasBlob,proto3" json:"has_blob,omitempty"`
+	// blob_media_type is the referenced blob's media type (from blob metadata) when
+	// has_blob; empty otherwise.
+	BlobMediaType string `protobuf:"bytes,8,opt,name=blob_media_type,json=blobMediaType,proto3" json:"blob_media_type,omitempty"`
+	// blob_size_bytes is the referenced blob's size in bytes when has_blob; zero
+	// otherwise.
+	BlobSizeBytes int64 `protobuf:"varint,9,opt,name=blob_size_bytes,json=blobSizeBytes,proto3" json:"blob_size_bytes,omitempty"`
+	// redacted reports whether any field was omitted or truncated in this descriptor.
+	Redacted bool `protobuf:"varint,10,opt,name=redacted,proto3" json:"redacted,omitempty"`
+	// summary is a bounded, safe summary (e.g. a truncated text prefix); never raw
+	// provider bytes or the system prompt.
+	Summary       string `protobuf:"bytes,11,opt,name=summary,proto3" json:"summary,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EventDescriptor) Reset() {
+	*x = EventDescriptor{}
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EventDescriptor) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EventDescriptor) ProtoMessage() {}
+
+func (x *EventDescriptor) ProtoReflect() protoreflect.Message {
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EventDescriptor.ProtoReflect.Descriptor instead.
+func (*EventDescriptor) Descriptor() ([]byte, []int) {
+	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *EventDescriptor) GetSeq() int64 {
+	if x != nil {
+		return x.Seq
+	}
+	return 0
+}
+
+func (x *EventDescriptor) GetEventType() string {
+	if x != nil {
+		return x.EventType
+	}
+	return ""
+}
+
+func (x *EventDescriptor) GetActor() string {
+	if x != nil {
+		return x.Actor
+	}
+	return ""
+}
+
+func (x *EventDescriptor) GetSchemaVersion() int32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *EventDescriptor) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *EventDescriptor) GetCreatedAtMs() int64 {
+	if x != nil {
+		return x.CreatedAtMs
+	}
+	return 0
+}
+
+func (x *EventDescriptor) GetHasBlob() bool {
+	if x != nil {
+		return x.HasBlob
+	}
+	return false
+}
+
+func (x *EventDescriptor) GetBlobMediaType() string {
+	if x != nil {
+		return x.BlobMediaType
+	}
+	return ""
+}
+
+func (x *EventDescriptor) GetBlobSizeBytes() int64 {
+	if x != nil {
+		return x.BlobSizeBytes
+	}
+	return 0
+}
+
+func (x *EventDescriptor) GetRedacted() bool {
+	if x != nil {
+		return x.Redacted
+	}
+	return false
+}
+
+func (x *EventDescriptor) GetSummary() string {
+	if x != nil {
+		return x.Summary
+	}
+	return ""
+}
+
+// ListSessionEventsResponse is one keyset page of event descriptors.
+type ListSessionEventsResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// events is the page of descriptors in ascending seq order.
+	Events []*EventDescriptor `protobuf:"bytes,1,rep,name=events,proto3" json:"events,omitempty"`
+	// next_after_seq is the keyset cursor for the next page (the last returned seq).
+	NextAfterSeq int64 `protobuf:"varint,2,opt,name=next_after_seq,json=nextAfterSeq,proto3" json:"next_after_seq,omitempty"`
+	// has_more reports whether more events remain after this page.
+	HasMore       bool `protobuf:"varint,3,opt,name=has_more,json=hasMore,proto3" json:"has_more,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSessionEventsResponse) Reset() {
+	*x = ListSessionEventsResponse{}
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSessionEventsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSessionEventsResponse) ProtoMessage() {}
+
+func (x *ListSessionEventsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSessionEventsResponse.ProtoReflect.Descriptor instead.
+func (*ListSessionEventsResponse) Descriptor() ([]byte, []int) {
+	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ListSessionEventsResponse) GetEvents() []*EventDescriptor {
+	if x != nil {
+		return x.Events
+	}
+	return nil
+}
+
+func (x *ListSessionEventsResponse) GetNextAfterSeq() int64 {
+	if x != nil {
+		return x.NextAfterSeq
+	}
+	return 0
+}
+
+func (x *ListSessionEventsResponse) GetHasMore() bool {
+	if x != nil {
+		return x.HasMore
+	}
+	return false
+}
+
+// GetStateAtSeqRequest reconstructs an owned session's state at a sequence point.
+type GetStateAtSeqRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// tenant_id is a GUARD: when non-empty it MUST match the authenticated principal.
+	TenantId string `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	// session_id is the owned session to reconstruct.
+	SessionId string `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// at_seq is the (inclusive) upper sequence bound to fold up to; <= 0 yields the
+	// empty state, beyond head is clamped to head.
+	AtSeq         int64 `protobuf:"varint,3,opt,name=at_seq,json=atSeq,proto3" json:"at_seq,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetStateAtSeqRequest) Reset() {
+	*x = GetStateAtSeqRequest{}
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetStateAtSeqRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetStateAtSeqRequest) ProtoMessage() {}
+
+func (x *GetStateAtSeqRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetStateAtSeqRequest.ProtoReflect.Descriptor instead.
+func (*GetStateAtSeqRequest) Descriptor() ([]byte, []int) {
+	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *GetStateAtSeqRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *GetStateAtSeqRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *GetStateAtSeqRequest) GetAtSeq() int64 {
+	if x != nil {
+		return x.AtSeq
+	}
+	return 0
+}
+
+// GetStateAtSeqResponse is the folded control/billing projection at at_seq.
+type GetStateAtSeqResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// session is the materialized projection folded over the [1..at_seq] window.
+	Session *Session `protobuf:"bytes,1,opt,name=session,proto3" json:"session,omitempty"`
+	// at_seq is the sequence the state was actually reconstructed to (clamped to head).
+	AtSeq         int64 `protobuf:"varint,2,opt,name=at_seq,json=atSeq,proto3" json:"at_seq,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetStateAtSeqResponse) Reset() {
+	*x = GetStateAtSeqResponse{}
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetStateAtSeqResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetStateAtSeqResponse) ProtoMessage() {}
+
+func (x *GetStateAtSeqResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetStateAtSeqResponse.ProtoReflect.Descriptor instead.
+func (*GetStateAtSeqResponse) Descriptor() ([]byte, []int) {
+	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *GetStateAtSeqResponse) GetSession() *Session {
+	if x != nil {
+		return x.Session
+	}
+	return nil
+}
+
+func (x *GetStateAtSeqResponse) GetAtSeq() int64 {
+	if x != nil {
+		return x.AtSeq
+	}
+	return 0
+}
+
+// ModelCost is one (tenant|session) x model cost bucket (Feature O / cost-read).
+type ModelCost struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// model is the TurnStarted.Model the terminal turns correlated to; "unknown" when
+	// it could not be correlated (never the empty string on the wire).
+	Model string `protobuf:"bytes,1,opt,name=model,proto3" json:"model,omitempty"`
+	// cost_usd is the accumulated cost for this model (SQL-side NUMERIC sum -> double).
+	CostUsd float64 `protobuf:"fixed64,2,opt,name=cost_usd,json=costUsd,proto3" json:"cost_usd,omitempty"`
+	// usage is the accumulated token usage for this model.
+	Usage *Usage `protobuf:"bytes,3,opt,name=usage,proto3" json:"usage,omitempty"`
+	// turns is the number of cost-bearing terminal events folded into this model.
+	Turns         int64 `protobuf:"varint,4,opt,name=turns,proto3" json:"turns,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ModelCost) Reset() {
+	*x = ModelCost{}
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ModelCost) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ModelCost) ProtoMessage() {}
+
+func (x *ModelCost) ProtoReflect() protoreflect.Message {
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ModelCost.ProtoReflect.Descriptor instead.
+func (*ModelCost) Descriptor() ([]byte, []int) {
+	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *ModelCost) GetModel() string {
+	if x != nil {
+		return x.Model
+	}
+	return ""
+}
+
+func (x *ModelCost) GetCostUsd() float64 {
+	if x != nil {
+		return x.CostUsd
+	}
+	return 0
+}
+
+func (x *ModelCost) GetUsage() *Usage {
+	if x != nil {
+		return x.Usage
+	}
+	return nil
+}
+
+func (x *ModelCost) GetTurns() int64 {
+	if x != nil {
+		return x.Turns
+	}
+	return 0
+}
+
+// CostTotals is a (tenant|session) cost total — equal to the sum of by_model.
+type CostTotals struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// cost_usd is the summed cost in USD.
+	CostUsd float64 `protobuf:"fixed64,1,opt,name=cost_usd,json=costUsd,proto3" json:"cost_usd,omitempty"`
+	// usage is the summed token usage.
+	Usage *Usage `protobuf:"bytes,2,opt,name=usage,proto3" json:"usage,omitempty"`
+	// turns is the number of cost-bearing terminal events folded.
+	Turns         int64 `protobuf:"varint,3,opt,name=turns,proto3" json:"turns,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CostTotals) Reset() {
+	*x = CostTotals{}
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CostTotals) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CostTotals) ProtoMessage() {}
+
+func (x *CostTotals) ProtoReflect() protoreflect.Message {
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CostTotals.ProtoReflect.Descriptor instead.
+func (*CostTotals) Descriptor() ([]byte, []int) {
+	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *CostTotals) GetCostUsd() float64 {
+	if x != nil {
+		return x.CostUsd
+	}
+	return 0
+}
+
+func (x *CostTotals) GetUsage() *Usage {
+	if x != nil {
+		return x.Usage
+	}
+	return nil
+}
+
+func (x *CostTotals) GetTurns() int64 {
+	if x != nil {
+		return x.Turns
+	}
+	return 0
+}
+
+// GetSessionCostRequest identifies the owned session whose cost to read.
+type GetSessionCostRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// tenant_id is a GUARD: when non-empty it MUST match the authenticated principal.
+	TenantId string `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	// session_id is the owned session to read cost for.
+	SessionId     string `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetSessionCostRequest) Reset() {
+	*x = GetSessionCostRequest{}
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetSessionCostRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSessionCostRequest) ProtoMessage() {}
+
+func (x *GetSessionCostRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSessionCostRequest.ProtoReflect.Descriptor instead.
+func (*GetSessionCostRequest) Descriptor() ([]byte, []int) {
+	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *GetSessionCostRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *GetSessionCostRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+// GetSessionCostResponse is one session's cost total plus the per-model breakdown.
+type GetSessionCostResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// session_id is echoed from the request.
+	SessionId string `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// tenant_id is the verified principal tenant.
+	TenantId string `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	// total is the session's cost total (= sum of by_model).
+	Total *CostTotals `protobuf:"bytes,3,opt,name=total,proto3" json:"total,omitempty"`
+	// by_model is the per-model breakdown, sorted by cost_usd descending.
+	ByModel       []*ModelCost `protobuf:"bytes,4,rep,name=by_model,json=byModel,proto3" json:"by_model,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetSessionCostResponse) Reset() {
+	*x = GetSessionCostResponse{}
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetSessionCostResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSessionCostResponse) ProtoMessage() {}
+
+func (x *GetSessionCostResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSessionCostResponse.ProtoReflect.Descriptor instead.
+func (*GetSessionCostResponse) Descriptor() ([]byte, []int) {
+	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *GetSessionCostResponse) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *GetSessionCostResponse) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *GetSessionCostResponse) GetTotal() *CostTotals {
+	if x != nil {
+		return x.Total
+	}
+	return nil
+}
+
+func (x *GetSessionCostResponse) GetByModel() []*ModelCost {
+	if x != nil {
+		return x.ByModel
+	}
+	return nil
+}
+
+// GetTenantCostRequest reads the authenticated tenant's aggregate cost.
+type GetTenantCostRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// tenant_id is a GUARD only (must match the principal when non-empty); the
+	// authority is the authenticated principal, never this field.
+	TenantId      string `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetTenantCostRequest) Reset() {
+	*x = GetTenantCostRequest{}
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetTenantCostRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetTenantCostRequest) ProtoMessage() {}
+
+func (x *GetTenantCostRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetTenantCostRequest.ProtoReflect.Descriptor instead.
+func (*GetTenantCostRequest) Descriptor() ([]byte, []int) {
+	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *GetTenantCostRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+// GetTenantCostResponse is the tenant's cost total, per-model breakdown, and the
+// count of distinct sessions carrying cost.
+type GetTenantCostResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// tenant_id is the verified principal tenant.
+	TenantId string `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	// total is the tenant's cost total (= sum of by_model).
+	Total *CostTotals `protobuf:"bytes,2,opt,name=total,proto3" json:"total,omitempty"`
+	// by_model is the per-model breakdown, sorted by cost_usd descending.
+	ByModel []*ModelCost `protobuf:"bytes,3,rep,name=by_model,json=byModel,proto3" json:"by_model,omitempty"`
+	// session_count is the number of distinct sessions of the tenant that carry cost.
+	SessionCount  int64 `protobuf:"varint,4,opt,name=session_count,json=sessionCount,proto3" json:"session_count,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetTenantCostResponse) Reset() {
+	*x = GetTenantCostResponse{}
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetTenantCostResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetTenantCostResponse) ProtoMessage() {}
+
+func (x *GetTenantCostResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetTenantCostResponse.ProtoReflect.Descriptor instead.
+func (*GetTenantCostResponse) Descriptor() ([]byte, []int) {
+	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *GetTenantCostResponse) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *GetTenantCostResponse) GetTotal() *CostTotals {
+	if x != nil {
+		return x.Total
+	}
+	return nil
+}
+
+func (x *GetTenantCostResponse) GetByModel() []*ModelCost {
+	if x != nil {
+		return x.ByModel
+	}
+	return nil
+}
+
+func (x *GetTenantCostResponse) GetSessionCount() int64 {
+	if x != nil {
+		return x.SessionCount
+	}
+	return 0
+}
+
 // CreateSessionRequest creates a new session.
 type CreateSessionRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -828,7 +1628,7 @@ type CreateSessionRequest struct {
 
 func (x *CreateSessionRequest) Reset() {
 	*x = CreateSessionRequest{}
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[5]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -840,7 +1640,7 @@ func (x *CreateSessionRequest) String() string {
 func (*CreateSessionRequest) ProtoMessage() {}
 
 func (x *CreateSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[5]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -853,7 +1653,7 @@ func (x *CreateSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateSessionRequest.ProtoReflect.Descriptor instead.
 func (*CreateSessionRequest) Descriptor() ([]byte, []int) {
-	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{5}
+	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *CreateSessionRequest) GetTenantId() string {
@@ -888,7 +1688,7 @@ type CreateSessionResponse struct {
 
 func (x *CreateSessionResponse) Reset() {
 	*x = CreateSessionResponse{}
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[6]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -900,7 +1700,7 @@ func (x *CreateSessionResponse) String() string {
 func (*CreateSessionResponse) ProtoMessage() {}
 
 func (x *CreateSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[6]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -913,7 +1713,7 @@ func (x *CreateSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateSessionResponse.ProtoReflect.Descriptor instead.
 func (*CreateSessionResponse) Descriptor() ([]byte, []int) {
-	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{6}
+	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *CreateSessionResponse) GetSessionId() string {
@@ -936,7 +1736,7 @@ type GetSessionRequest struct {
 
 func (x *GetSessionRequest) Reset() {
 	*x = GetSessionRequest{}
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[7]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -948,7 +1748,7 @@ func (x *GetSessionRequest) String() string {
 func (*GetSessionRequest) ProtoMessage() {}
 
 func (x *GetSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[7]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -961,7 +1761,7 @@ func (x *GetSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSessionRequest.ProtoReflect.Descriptor instead.
 func (*GetSessionRequest) Descriptor() ([]byte, []int) {
-	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{7}
+	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *GetSessionRequest) GetTenantId() string {
@@ -1011,7 +1811,7 @@ type Session struct {
 
 func (x *Session) Reset() {
 	*x = Session{}
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[8]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1023,7 +1823,7 @@ func (x *Session) String() string {
 func (*Session) ProtoMessage() {}
 
 func (x *Session) ProtoReflect() protoreflect.Message {
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[8]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1036,7 +1836,7 @@ func (x *Session) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Session.ProtoReflect.Descriptor instead.
 func (*Session) Descriptor() ([]byte, []int) {
-	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{8}
+	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *Session) GetSessionId() string {
@@ -1120,7 +1920,7 @@ type GetSessionResponse struct {
 
 func (x *GetSessionResponse) Reset() {
 	*x = GetSessionResponse{}
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[9]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1132,7 +1932,7 @@ func (x *GetSessionResponse) String() string {
 func (*GetSessionResponse) ProtoMessage() {}
 
 func (x *GetSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[9]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1145,7 +1945,7 @@ func (x *GetSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSessionResponse.ProtoReflect.Descriptor instead.
 func (*GetSessionResponse) Descriptor() ([]byte, []int) {
-	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{9}
+	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *GetSessionResponse) GetSession() *Session {
@@ -1191,7 +1991,7 @@ type RunRequest struct {
 
 func (x *RunRequest) Reset() {
 	*x = RunRequest{}
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[10]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1203,7 +2003,7 @@ func (x *RunRequest) String() string {
 func (*RunRequest) ProtoMessage() {}
 
 func (x *RunRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[10]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1216,7 +2016,7 @@ func (x *RunRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunRequest.ProtoReflect.Descriptor instead.
 func (*RunRequest) Descriptor() ([]byte, []int) {
-	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{10}
+	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *RunRequest) GetTenantId() string {
@@ -1283,7 +2083,7 @@ type ApprovalRequest struct {
 
 func (x *ApprovalRequest) Reset() {
 	*x = ApprovalRequest{}
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[11]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1295,7 +2095,7 @@ func (x *ApprovalRequest) String() string {
 func (*ApprovalRequest) ProtoMessage() {}
 
 func (x *ApprovalRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[11]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1308,7 +2108,7 @@ func (x *ApprovalRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApprovalRequest.ProtoReflect.Descriptor instead.
 func (*ApprovalRequest) Descriptor() ([]byte, []int) {
-	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{11}
+	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ApprovalRequest) GetCallId() string {
@@ -1361,7 +2161,7 @@ type RunResult struct {
 
 func (x *RunResult) Reset() {
 	*x = RunResult{}
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[12]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1373,7 +2173,7 @@ func (x *RunResult) String() string {
 func (*RunResult) ProtoMessage() {}
 
 func (x *RunResult) ProtoReflect() protoreflect.Message {
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[12]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1386,7 +2186,7 @@ func (x *RunResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunResult.ProtoReflect.Descriptor instead.
 func (*RunResult) Descriptor() ([]byte, []int) {
-	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{12}
+	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *RunResult) GetSubtype() TerminationSubtype {
@@ -1450,7 +2250,7 @@ type RunEvent struct {
 
 func (x *RunEvent) Reset() {
 	*x = RunEvent{}
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[13]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1462,7 +2262,7 @@ func (x *RunEvent) String() string {
 func (*RunEvent) ProtoMessage() {}
 
 func (x *RunEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[13]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1475,7 +2275,7 @@ func (x *RunEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunEvent.ProtoReflect.Descriptor instead.
 func (*RunEvent) Descriptor() ([]byte, []int) {
-	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{13}
+	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *RunEvent) GetSeq() int64 {
@@ -1588,7 +2388,7 @@ type ApproveAction struct {
 
 func (x *ApproveAction) Reset() {
 	*x = ApproveAction{}
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[14]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1600,7 +2400,7 @@ func (x *ApproveAction) String() string {
 func (*ApproveAction) ProtoMessage() {}
 
 func (x *ApproveAction) ProtoReflect() protoreflect.Message {
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[14]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1613,7 +2413,7 @@ func (x *ApproveAction) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApproveAction.ProtoReflect.Descriptor instead.
 func (*ApproveAction) Descriptor() ([]byte, []int) {
-	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{14}
+	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *ApproveAction) GetCallId() string {
@@ -1638,7 +2438,7 @@ type DenyAction struct {
 
 func (x *DenyAction) Reset() {
 	*x = DenyAction{}
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[15]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1650,7 +2450,7 @@ func (x *DenyAction) String() string {
 func (*DenyAction) ProtoMessage() {}
 
 func (x *DenyAction) ProtoReflect() protoreflect.Message {
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[15]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1663,7 +2463,7 @@ func (x *DenyAction) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DenyAction.ProtoReflect.Descriptor instead.
 func (*DenyAction) Descriptor() ([]byte, []int) {
-	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{15}
+	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *DenyAction) GetCallId() string {
@@ -1691,7 +2491,7 @@ type InterruptAction struct {
 
 func (x *InterruptAction) Reset() {
 	*x = InterruptAction{}
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[16]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1703,7 +2503,7 @@ func (x *InterruptAction) String() string {
 func (*InterruptAction) ProtoMessage() {}
 
 func (x *InterruptAction) ProtoReflect() protoreflect.Message {
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[16]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1716,7 +2516,7 @@ func (x *InterruptAction) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InterruptAction.ProtoReflect.Descriptor instead.
 func (*InterruptAction) Descriptor() ([]byte, []int) {
-	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{16}
+	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{27}
 }
 
 // ReattachAction re-opens delivery for a session after a disconnect, replaying
@@ -1734,7 +2534,7 @@ type ReattachAction struct {
 
 func (x *ReattachAction) Reset() {
 	*x = ReattachAction{}
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[17]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1746,7 +2546,7 @@ func (x *ReattachAction) String() string {
 func (*ReattachAction) ProtoMessage() {}
 
 func (x *ReattachAction) ProtoReflect() protoreflect.Message {
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[17]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1759,7 +2559,7 @@ func (x *ReattachAction) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReattachAction.ProtoReflect.Descriptor instead.
 func (*ReattachAction) Descriptor() ([]byte, []int) {
-	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{17}
+	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ReattachAction) GetFromSeq() int64 {
@@ -1793,7 +2593,7 @@ type ControlRequest struct {
 
 func (x *ControlRequest) Reset() {
 	*x = ControlRequest{}
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[18]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1805,7 +2605,7 @@ func (x *ControlRequest) String() string {
 func (*ControlRequest) ProtoMessage() {}
 
 func (x *ControlRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[18]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1818,7 +2618,7 @@ func (x *ControlRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ControlRequest.ProtoReflect.Descriptor instead.
 func (*ControlRequest) Descriptor() ([]byte, []int) {
-	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{18}
+	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *ControlRequest) GetTenantId() string {
@@ -1923,7 +2723,7 @@ type ControlResponse struct {
 
 func (x *ControlResponse) Reset() {
 	*x = ControlResponse{}
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[19]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1935,7 +2735,7 @@ func (x *ControlResponse) String() string {
 func (*ControlResponse) ProtoMessage() {}
 
 func (x *ControlResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[19]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1948,7 +2748,7 @@ func (x *ControlResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ControlResponse.ProtoReflect.Descriptor instead.
 func (*ControlResponse) Descriptor() ([]byte, []int) {
-	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{19}
+	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *ControlResponse) GetHeadSeq() int64 {
@@ -1975,7 +2775,7 @@ type ForkRequest struct {
 
 func (x *ForkRequest) Reset() {
 	*x = ForkRequest{}
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[20]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1987,7 +2787,7 @@ func (x *ForkRequest) String() string {
 func (*ForkRequest) ProtoMessage() {}
 
 func (x *ForkRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[20]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2000,7 +2800,7 @@ func (x *ForkRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForkRequest.ProtoReflect.Descriptor instead.
 func (*ForkRequest) Descriptor() ([]byte, []int) {
-	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{20}
+	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *ForkRequest) GetTenantId() string {
@@ -2035,7 +2835,7 @@ type ForkResponse struct {
 
 func (x *ForkResponse) Reset() {
 	*x = ForkResponse{}
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[21]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2047,7 +2847,7 @@ func (x *ForkResponse) String() string {
 func (*ForkResponse) ProtoMessage() {}
 
 func (x *ForkResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[21]
+	mi := &file_boltrope_v1_orchestrator_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2060,7 +2860,7 @@ func (x *ForkResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForkResponse.ProtoReflect.Descriptor instead.
 func (*ForkResponse) Descriptor() ([]byte, []int) {
-	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{21}
+	return file_boltrope_v1_orchestrator_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *ForkResponse) GetSessionId() string {
@@ -2113,7 +2913,68 @@ const file_boltrope_v1_orchestrator_proto_rawDesc = "" +
 	"\x05usage\x18\x03 \x01(\v2\x12.boltrope.v1.UsageR\x05usage\x12\x19\n" +
 	"\bcost_usd\x18\x04 \x01(\x01R\acostUsd\x12\x1b\n" +
 	"\tnum_turns\x18\x05 \x01(\x03R\bnumTurns\x120\n" +
-	"\x06source\x18\x06 \x01(\x0e2\x18.boltrope.v1.UsageSourceR\x06source\"\xee\x01\n" +
+	"\x06source\x18\x06 \x01(\x0e2\x18.boltrope.v1.UsageSourceR\x06source\"\xb9\x01\n" +
+	"\x18ListSessionEventsRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x02 \x01(\tR\tsessionId\x12\x1b\n" +
+	"\tafter_seq\x18\x03 \x01(\x03R\bafterSeq\x12\x1b\n" +
+	"\tpage_size\x18\x04 \x01(\x05R\bpageSize\x12'\n" +
+	"\x0finclude_payload\x18\x05 \x01(\bR\x0eincludePayload\"\xe3\x02\n" +
+	"\x0fEventDescriptor\x12\x10\n" +
+	"\x03seq\x18\x01 \x01(\x03R\x03seq\x12\x1d\n" +
+	"\n" +
+	"event_type\x18\x02 \x01(\tR\teventType\x12\x14\n" +
+	"\x05actor\x18\x03 \x01(\tR\x05actor\x12%\n" +
+	"\x0eschema_version\x18\x04 \x01(\x05R\rschemaVersion\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x05 \x01(\tR\trequestId\x12\"\n" +
+	"\rcreated_at_ms\x18\x06 \x01(\x03R\vcreatedAtMs\x12\x19\n" +
+	"\bhas_blob\x18\a \x01(\bR\ahasBlob\x12&\n" +
+	"\x0fblob_media_type\x18\b \x01(\tR\rblobMediaType\x12&\n" +
+	"\x0fblob_size_bytes\x18\t \x01(\x03R\rblobSizeBytes\x12\x1a\n" +
+	"\bredacted\x18\n" +
+	" \x01(\bR\bredacted\x12\x18\n" +
+	"\asummary\x18\v \x01(\tR\asummary\"\x92\x01\n" +
+	"\x19ListSessionEventsResponse\x124\n" +
+	"\x06events\x18\x01 \x03(\v2\x1c.boltrope.v1.EventDescriptorR\x06events\x12$\n" +
+	"\x0enext_after_seq\x18\x02 \x01(\x03R\fnextAfterSeq\x12\x19\n" +
+	"\bhas_more\x18\x03 \x01(\bR\ahasMore\"i\n" +
+	"\x14GetStateAtSeqRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x02 \x01(\tR\tsessionId\x12\x15\n" +
+	"\x06at_seq\x18\x03 \x01(\x03R\x05atSeq\"^\n" +
+	"\x15GetStateAtSeqResponse\x12.\n" +
+	"\asession\x18\x01 \x01(\v2\x14.boltrope.v1.SessionR\asession\x12\x15\n" +
+	"\x06at_seq\x18\x02 \x01(\x03R\x05atSeq\"|\n" +
+	"\tModelCost\x12\x14\n" +
+	"\x05model\x18\x01 \x01(\tR\x05model\x12\x19\n" +
+	"\bcost_usd\x18\x02 \x01(\x01R\acostUsd\x12(\n" +
+	"\x05usage\x18\x03 \x01(\v2\x12.boltrope.v1.UsageR\x05usage\x12\x14\n" +
+	"\x05turns\x18\x04 \x01(\x03R\x05turns\"g\n" +
+	"\n" +
+	"CostTotals\x12\x19\n" +
+	"\bcost_usd\x18\x01 \x01(\x01R\acostUsd\x12(\n" +
+	"\x05usage\x18\x02 \x01(\v2\x12.boltrope.v1.UsageR\x05usage\x12\x14\n" +
+	"\x05turns\x18\x03 \x01(\x03R\x05turns\"S\n" +
+	"\x15GetSessionCostRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x02 \x01(\tR\tsessionId\"\xb6\x01\n" +
+	"\x16GetSessionCostResponse\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1b\n" +
+	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12-\n" +
+	"\x05total\x18\x03 \x01(\v2\x17.boltrope.v1.CostTotalsR\x05total\x121\n" +
+	"\bby_model\x18\x04 \x03(\v2\x16.boltrope.v1.ModelCostR\abyModel\"3\n" +
+	"\x14GetTenantCostRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\"\xbb\x01\n" +
+	"\x15GetTenantCostResponse\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12-\n" +
+	"\x05total\x18\x02 \x01(\v2\x17.boltrope.v1.CostTotalsR\x05total\x121\n" +
+	"\bby_model\x18\x03 \x03(\v2\x16.boltrope.v1.ModelCostR\abyModel\x12#\n" +
+	"\rsession_count\x18\x04 \x01(\x03R\fsessionCount\"\xee\x01\n" +
 	"\x14CreateSessionRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12/\n" +
 	"\x04mode\x18\x02 \x01(\x0e2\x1b.boltrope.v1.PermissionModeR\x04mode\x12K\n" +
@@ -2227,7 +3088,7 @@ const file_boltrope_v1_orchestrator_proto_rawDesc = "" +
 	"(TERMINATION_SUBTYPE_ERROR_MAX_BUDGET_USD\x10\x03\x12.\n" +
 	"*TERMINATION_SUBTYPE_ERROR_DURING_EXECUTION\x10\x04\x12;\n" +
 	"7TERMINATION_SUBTYPE_ERROR_MAX_STRUCTURED_OUTPUT_RETRIES\x10\x05\x12\x1f\n" +
-	"\x1bTERMINATION_SUBTYPE_REFUSAL\x10\x062\xab\x04\n" +
+	"\x1bTERMINATION_SUBTYPE_REFUSAL\x10\x062\x9a\a\n" +
 	"\x13OrchestratorService\x12V\n" +
 	"\rCreateSession\x12!.boltrope.v1.CreateSessionRequest\x1a\".boltrope.v1.CreateSessionResponse\x12M\n" +
 	"\n" +
@@ -2236,7 +3097,11 @@ const file_boltrope_v1_orchestrator_proto_rawDesc = "" +
 	"\aControl\x12\x1b.boltrope.v1.ControlRequest\x1a\x1c.boltrope.v1.ControlResponse\x12;\n" +
 	"\x04Fork\x12\x18.boltrope.v1.ForkRequest\x1a\x19.boltrope.v1.ForkResponse\x12S\n" +
 	"\fListSessions\x12 .boltrope.v1.ListSessionsRequest\x1a!.boltrope.v1.ListSessionsResponse\x12\\\n" +
-	"\x0fGetSessionUsage\x12#.boltrope.v1.GetSessionUsageRequest\x1a$.boltrope.v1.GetSessionUsageResponseB\xaa\x01\n" +
+	"\x0fGetSessionUsage\x12#.boltrope.v1.GetSessionUsageRequest\x1a$.boltrope.v1.GetSessionUsageResponse\x12b\n" +
+	"\x11ListSessionEvents\x12%.boltrope.v1.ListSessionEventsRequest\x1a&.boltrope.v1.ListSessionEventsResponse\x12V\n" +
+	"\rGetStateAtSeq\x12!.boltrope.v1.GetStateAtSeqRequest\x1a\".boltrope.v1.GetStateAtSeqResponse\x12Y\n" +
+	"\x0eGetSessionCost\x12\".boltrope.v1.GetSessionCostRequest\x1a#.boltrope.v1.GetSessionCostResponse\x12V\n" +
+	"\rGetTenantCost\x12!.boltrope.v1.GetTenantCostRequest\x1a\".boltrope.v1.GetTenantCostResponseB\xaa\x01\n" +
 	"\x0fcom.boltrope.v1B\x11OrchestratorProtoP\x01Z7github.com/xd1lab/harness-ai/gen/boltrope/v1;boltropev1\xa2\x02\x03BXX\xaa\x02\vBoltrope.V1\xca\x02\vBoltrope\\V1\xe2\x02\x17Boltrope\\V1\\GPBMetadata\xea\x02\fBoltrope::V1b\x06proto3"
 
 var (
@@ -2252,86 +3117,113 @@ func file_boltrope_v1_orchestrator_proto_rawDescGZIP() []byte {
 }
 
 var file_boltrope_v1_orchestrator_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_boltrope_v1_orchestrator_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
+var file_boltrope_v1_orchestrator_proto_msgTypes = make([]protoimpl.MessageInfo, 34)
 var file_boltrope_v1_orchestrator_proto_goTypes = []any{
-	(SessionSortField)(0),           // 0: boltrope.v1.SessionSortField
-	(UsageSource)(0),                // 1: boltrope.v1.UsageSource
-	(PermissionMode)(0),             // 2: boltrope.v1.PermissionMode
-	(SessionStatus)(0),              // 3: boltrope.v1.SessionStatus
-	(TerminationSubtype)(0),         // 4: boltrope.v1.TerminationSubtype
-	(*ListSessionsRequest)(nil),     // 5: boltrope.v1.ListSessionsRequest
-	(*SessionSummary)(nil),          // 6: boltrope.v1.SessionSummary
-	(*ListSessionsResponse)(nil),    // 7: boltrope.v1.ListSessionsResponse
-	(*GetSessionUsageRequest)(nil),  // 8: boltrope.v1.GetSessionUsageRequest
-	(*GetSessionUsageResponse)(nil), // 9: boltrope.v1.GetSessionUsageResponse
-	(*CreateSessionRequest)(nil),    // 10: boltrope.v1.CreateSessionRequest
-	(*CreateSessionResponse)(nil),   // 11: boltrope.v1.CreateSessionResponse
-	(*GetSessionRequest)(nil),       // 12: boltrope.v1.GetSessionRequest
-	(*Session)(nil),                 // 13: boltrope.v1.Session
-	(*GetSessionResponse)(nil),      // 14: boltrope.v1.GetSessionResponse
-	(*RunRequest)(nil),              // 15: boltrope.v1.RunRequest
-	(*ApprovalRequest)(nil),         // 16: boltrope.v1.ApprovalRequest
-	(*RunResult)(nil),               // 17: boltrope.v1.RunResult
-	(*RunEvent)(nil),                // 18: boltrope.v1.RunEvent
-	(*ApproveAction)(nil),           // 19: boltrope.v1.ApproveAction
-	(*DenyAction)(nil),              // 20: boltrope.v1.DenyAction
-	(*InterruptAction)(nil),         // 21: boltrope.v1.InterruptAction
-	(*ReattachAction)(nil),          // 22: boltrope.v1.ReattachAction
-	(*ControlRequest)(nil),          // 23: boltrope.v1.ControlRequest
-	(*ControlResponse)(nil),         // 24: boltrope.v1.ControlResponse
-	(*ForkRequest)(nil),             // 25: boltrope.v1.ForkRequest
-	(*ForkResponse)(nil),            // 26: boltrope.v1.ForkResponse
-	nil,                             // 27: boltrope.v1.CreateSessionRequest.MetadataEntry
-	(*Usage)(nil),                   // 28: boltrope.v1.Usage
-	(*Message)(nil),                 // 29: boltrope.v1.Message
-	(*TextDelta)(nil),               // 30: boltrope.v1.TextDelta
-	(*ThinkingDelta)(nil),           // 31: boltrope.v1.ThinkingDelta
-	(*ToolProgress)(nil),            // 32: boltrope.v1.ToolProgress
+	(SessionSortField)(0),             // 0: boltrope.v1.SessionSortField
+	(UsageSource)(0),                  // 1: boltrope.v1.UsageSource
+	(PermissionMode)(0),               // 2: boltrope.v1.PermissionMode
+	(SessionStatus)(0),                // 3: boltrope.v1.SessionStatus
+	(TerminationSubtype)(0),           // 4: boltrope.v1.TerminationSubtype
+	(*ListSessionsRequest)(nil),       // 5: boltrope.v1.ListSessionsRequest
+	(*SessionSummary)(nil),            // 6: boltrope.v1.SessionSummary
+	(*ListSessionsResponse)(nil),      // 7: boltrope.v1.ListSessionsResponse
+	(*GetSessionUsageRequest)(nil),    // 8: boltrope.v1.GetSessionUsageRequest
+	(*GetSessionUsageResponse)(nil),   // 9: boltrope.v1.GetSessionUsageResponse
+	(*ListSessionEventsRequest)(nil),  // 10: boltrope.v1.ListSessionEventsRequest
+	(*EventDescriptor)(nil),           // 11: boltrope.v1.EventDescriptor
+	(*ListSessionEventsResponse)(nil), // 12: boltrope.v1.ListSessionEventsResponse
+	(*GetStateAtSeqRequest)(nil),      // 13: boltrope.v1.GetStateAtSeqRequest
+	(*GetStateAtSeqResponse)(nil),     // 14: boltrope.v1.GetStateAtSeqResponse
+	(*ModelCost)(nil),                 // 15: boltrope.v1.ModelCost
+	(*CostTotals)(nil),                // 16: boltrope.v1.CostTotals
+	(*GetSessionCostRequest)(nil),     // 17: boltrope.v1.GetSessionCostRequest
+	(*GetSessionCostResponse)(nil),    // 18: boltrope.v1.GetSessionCostResponse
+	(*GetTenantCostRequest)(nil),      // 19: boltrope.v1.GetTenantCostRequest
+	(*GetTenantCostResponse)(nil),     // 20: boltrope.v1.GetTenantCostResponse
+	(*CreateSessionRequest)(nil),      // 21: boltrope.v1.CreateSessionRequest
+	(*CreateSessionResponse)(nil),     // 22: boltrope.v1.CreateSessionResponse
+	(*GetSessionRequest)(nil),         // 23: boltrope.v1.GetSessionRequest
+	(*Session)(nil),                   // 24: boltrope.v1.Session
+	(*GetSessionResponse)(nil),        // 25: boltrope.v1.GetSessionResponse
+	(*RunRequest)(nil),                // 26: boltrope.v1.RunRequest
+	(*ApprovalRequest)(nil),           // 27: boltrope.v1.ApprovalRequest
+	(*RunResult)(nil),                 // 28: boltrope.v1.RunResult
+	(*RunEvent)(nil),                  // 29: boltrope.v1.RunEvent
+	(*ApproveAction)(nil),             // 30: boltrope.v1.ApproveAction
+	(*DenyAction)(nil),                // 31: boltrope.v1.DenyAction
+	(*InterruptAction)(nil),           // 32: boltrope.v1.InterruptAction
+	(*ReattachAction)(nil),            // 33: boltrope.v1.ReattachAction
+	(*ControlRequest)(nil),            // 34: boltrope.v1.ControlRequest
+	(*ControlResponse)(nil),           // 35: boltrope.v1.ControlResponse
+	(*ForkRequest)(nil),               // 36: boltrope.v1.ForkRequest
+	(*ForkResponse)(nil),              // 37: boltrope.v1.ForkResponse
+	nil,                               // 38: boltrope.v1.CreateSessionRequest.MetadataEntry
+	(*Usage)(nil),                     // 39: boltrope.v1.Usage
+	(*Message)(nil),                   // 40: boltrope.v1.Message
+	(*TextDelta)(nil),                 // 41: boltrope.v1.TextDelta
+	(*ThinkingDelta)(nil),             // 42: boltrope.v1.ThinkingDelta
+	(*ToolProgress)(nil),              // 43: boltrope.v1.ToolProgress
 }
 var file_boltrope_v1_orchestrator_proto_depIdxs = []int32{
 	3,  // 0: boltrope.v1.ListSessionsRequest.status:type_name -> boltrope.v1.SessionStatus
 	3,  // 1: boltrope.v1.SessionSummary.status:type_name -> boltrope.v1.SessionStatus
 	2,  // 2: boltrope.v1.SessionSummary.mode:type_name -> boltrope.v1.PermissionMode
 	6,  // 3: boltrope.v1.ListSessionsResponse.sessions:type_name -> boltrope.v1.SessionSummary
-	28, // 4: boltrope.v1.GetSessionUsageResponse.usage:type_name -> boltrope.v1.Usage
+	39, // 4: boltrope.v1.GetSessionUsageResponse.usage:type_name -> boltrope.v1.Usage
 	1,  // 5: boltrope.v1.GetSessionUsageResponse.source:type_name -> boltrope.v1.UsageSource
-	2,  // 6: boltrope.v1.CreateSessionRequest.mode:type_name -> boltrope.v1.PermissionMode
-	27, // 7: boltrope.v1.CreateSessionRequest.metadata:type_name -> boltrope.v1.CreateSessionRequest.MetadataEntry
-	3,  // 8: boltrope.v1.Session.status:type_name -> boltrope.v1.SessionStatus
-	2,  // 9: boltrope.v1.Session.mode:type_name -> boltrope.v1.PermissionMode
-	28, // 10: boltrope.v1.Session.total_usage:type_name -> boltrope.v1.Usage
-	13, // 11: boltrope.v1.GetSessionResponse.session:type_name -> boltrope.v1.Session
-	29, // 12: boltrope.v1.RunRequest.message:type_name -> boltrope.v1.Message
-	4,  // 13: boltrope.v1.RunResult.subtype:type_name -> boltrope.v1.TerminationSubtype
-	28, // 14: boltrope.v1.RunResult.usage:type_name -> boltrope.v1.Usage
-	30, // 15: boltrope.v1.RunEvent.text_delta:type_name -> boltrope.v1.TextDelta
-	31, // 16: boltrope.v1.RunEvent.thinking_delta:type_name -> boltrope.v1.ThinkingDelta
-	32, // 17: boltrope.v1.RunEvent.tool_progress:type_name -> boltrope.v1.ToolProgress
-	16, // 18: boltrope.v1.RunEvent.approval_request:type_name -> boltrope.v1.ApprovalRequest
-	17, // 19: boltrope.v1.RunEvent.result:type_name -> boltrope.v1.RunResult
-	19, // 20: boltrope.v1.ControlRequest.approve:type_name -> boltrope.v1.ApproveAction
-	20, // 21: boltrope.v1.ControlRequest.deny:type_name -> boltrope.v1.DenyAction
-	21, // 22: boltrope.v1.ControlRequest.interrupt:type_name -> boltrope.v1.InterruptAction
-	22, // 23: boltrope.v1.ControlRequest.reattach:type_name -> boltrope.v1.ReattachAction
-	10, // 24: boltrope.v1.OrchestratorService.CreateSession:input_type -> boltrope.v1.CreateSessionRequest
-	12, // 25: boltrope.v1.OrchestratorService.GetSession:input_type -> boltrope.v1.GetSessionRequest
-	15, // 26: boltrope.v1.OrchestratorService.Run:input_type -> boltrope.v1.RunRequest
-	23, // 27: boltrope.v1.OrchestratorService.Control:input_type -> boltrope.v1.ControlRequest
-	25, // 28: boltrope.v1.OrchestratorService.Fork:input_type -> boltrope.v1.ForkRequest
-	5,  // 29: boltrope.v1.OrchestratorService.ListSessions:input_type -> boltrope.v1.ListSessionsRequest
-	8,  // 30: boltrope.v1.OrchestratorService.GetSessionUsage:input_type -> boltrope.v1.GetSessionUsageRequest
-	11, // 31: boltrope.v1.OrchestratorService.CreateSession:output_type -> boltrope.v1.CreateSessionResponse
-	14, // 32: boltrope.v1.OrchestratorService.GetSession:output_type -> boltrope.v1.GetSessionResponse
-	18, // 33: boltrope.v1.OrchestratorService.Run:output_type -> boltrope.v1.RunEvent
-	24, // 34: boltrope.v1.OrchestratorService.Control:output_type -> boltrope.v1.ControlResponse
-	26, // 35: boltrope.v1.OrchestratorService.Fork:output_type -> boltrope.v1.ForkResponse
-	7,  // 36: boltrope.v1.OrchestratorService.ListSessions:output_type -> boltrope.v1.ListSessionsResponse
-	9,  // 37: boltrope.v1.OrchestratorService.GetSessionUsage:output_type -> boltrope.v1.GetSessionUsageResponse
-	31, // [31:38] is the sub-list for method output_type
-	24, // [24:31] is the sub-list for method input_type
-	24, // [24:24] is the sub-list for extension type_name
-	24, // [24:24] is the sub-list for extension extendee
-	0,  // [0:24] is the sub-list for field type_name
+	11, // 6: boltrope.v1.ListSessionEventsResponse.events:type_name -> boltrope.v1.EventDescriptor
+	24, // 7: boltrope.v1.GetStateAtSeqResponse.session:type_name -> boltrope.v1.Session
+	39, // 8: boltrope.v1.ModelCost.usage:type_name -> boltrope.v1.Usage
+	39, // 9: boltrope.v1.CostTotals.usage:type_name -> boltrope.v1.Usage
+	16, // 10: boltrope.v1.GetSessionCostResponse.total:type_name -> boltrope.v1.CostTotals
+	15, // 11: boltrope.v1.GetSessionCostResponse.by_model:type_name -> boltrope.v1.ModelCost
+	16, // 12: boltrope.v1.GetTenantCostResponse.total:type_name -> boltrope.v1.CostTotals
+	15, // 13: boltrope.v1.GetTenantCostResponse.by_model:type_name -> boltrope.v1.ModelCost
+	2,  // 14: boltrope.v1.CreateSessionRequest.mode:type_name -> boltrope.v1.PermissionMode
+	38, // 15: boltrope.v1.CreateSessionRequest.metadata:type_name -> boltrope.v1.CreateSessionRequest.MetadataEntry
+	3,  // 16: boltrope.v1.Session.status:type_name -> boltrope.v1.SessionStatus
+	2,  // 17: boltrope.v1.Session.mode:type_name -> boltrope.v1.PermissionMode
+	39, // 18: boltrope.v1.Session.total_usage:type_name -> boltrope.v1.Usage
+	24, // 19: boltrope.v1.GetSessionResponse.session:type_name -> boltrope.v1.Session
+	40, // 20: boltrope.v1.RunRequest.message:type_name -> boltrope.v1.Message
+	4,  // 21: boltrope.v1.RunResult.subtype:type_name -> boltrope.v1.TerminationSubtype
+	39, // 22: boltrope.v1.RunResult.usage:type_name -> boltrope.v1.Usage
+	41, // 23: boltrope.v1.RunEvent.text_delta:type_name -> boltrope.v1.TextDelta
+	42, // 24: boltrope.v1.RunEvent.thinking_delta:type_name -> boltrope.v1.ThinkingDelta
+	43, // 25: boltrope.v1.RunEvent.tool_progress:type_name -> boltrope.v1.ToolProgress
+	27, // 26: boltrope.v1.RunEvent.approval_request:type_name -> boltrope.v1.ApprovalRequest
+	28, // 27: boltrope.v1.RunEvent.result:type_name -> boltrope.v1.RunResult
+	30, // 28: boltrope.v1.ControlRequest.approve:type_name -> boltrope.v1.ApproveAction
+	31, // 29: boltrope.v1.ControlRequest.deny:type_name -> boltrope.v1.DenyAction
+	32, // 30: boltrope.v1.ControlRequest.interrupt:type_name -> boltrope.v1.InterruptAction
+	33, // 31: boltrope.v1.ControlRequest.reattach:type_name -> boltrope.v1.ReattachAction
+	21, // 32: boltrope.v1.OrchestratorService.CreateSession:input_type -> boltrope.v1.CreateSessionRequest
+	23, // 33: boltrope.v1.OrchestratorService.GetSession:input_type -> boltrope.v1.GetSessionRequest
+	26, // 34: boltrope.v1.OrchestratorService.Run:input_type -> boltrope.v1.RunRequest
+	34, // 35: boltrope.v1.OrchestratorService.Control:input_type -> boltrope.v1.ControlRequest
+	36, // 36: boltrope.v1.OrchestratorService.Fork:input_type -> boltrope.v1.ForkRequest
+	5,  // 37: boltrope.v1.OrchestratorService.ListSessions:input_type -> boltrope.v1.ListSessionsRequest
+	8,  // 38: boltrope.v1.OrchestratorService.GetSessionUsage:input_type -> boltrope.v1.GetSessionUsageRequest
+	10, // 39: boltrope.v1.OrchestratorService.ListSessionEvents:input_type -> boltrope.v1.ListSessionEventsRequest
+	13, // 40: boltrope.v1.OrchestratorService.GetStateAtSeq:input_type -> boltrope.v1.GetStateAtSeqRequest
+	17, // 41: boltrope.v1.OrchestratorService.GetSessionCost:input_type -> boltrope.v1.GetSessionCostRequest
+	19, // 42: boltrope.v1.OrchestratorService.GetTenantCost:input_type -> boltrope.v1.GetTenantCostRequest
+	22, // 43: boltrope.v1.OrchestratorService.CreateSession:output_type -> boltrope.v1.CreateSessionResponse
+	25, // 44: boltrope.v1.OrchestratorService.GetSession:output_type -> boltrope.v1.GetSessionResponse
+	29, // 45: boltrope.v1.OrchestratorService.Run:output_type -> boltrope.v1.RunEvent
+	35, // 46: boltrope.v1.OrchestratorService.Control:output_type -> boltrope.v1.ControlResponse
+	37, // 47: boltrope.v1.OrchestratorService.Fork:output_type -> boltrope.v1.ForkResponse
+	7,  // 48: boltrope.v1.OrchestratorService.ListSessions:output_type -> boltrope.v1.ListSessionsResponse
+	9,  // 49: boltrope.v1.OrchestratorService.GetSessionUsage:output_type -> boltrope.v1.GetSessionUsageResponse
+	12, // 50: boltrope.v1.OrchestratorService.ListSessionEvents:output_type -> boltrope.v1.ListSessionEventsResponse
+	14, // 51: boltrope.v1.OrchestratorService.GetStateAtSeq:output_type -> boltrope.v1.GetStateAtSeqResponse
+	18, // 52: boltrope.v1.OrchestratorService.GetSessionCost:output_type -> boltrope.v1.GetSessionCostResponse
+	20, // 53: boltrope.v1.OrchestratorService.GetTenantCost:output_type -> boltrope.v1.GetTenantCostResponse
+	43, // [43:54] is the sub-list for method output_type
+	32, // [32:43] is the sub-list for method input_type
+	32, // [32:32] is the sub-list for extension type_name
+	32, // [32:32] is the sub-list for extension extendee
+	0,  // [0:32] is the sub-list for field type_name
 }
 
 func init() { file_boltrope_v1_orchestrator_proto_init() }
@@ -2340,14 +3232,14 @@ func file_boltrope_v1_orchestrator_proto_init() {
 		return
 	}
 	file_boltrope_v1_common_proto_init()
-	file_boltrope_v1_orchestrator_proto_msgTypes[13].OneofWrappers = []any{
+	file_boltrope_v1_orchestrator_proto_msgTypes[24].OneofWrappers = []any{
 		(*RunEvent_TextDelta)(nil),
 		(*RunEvent_ThinkingDelta)(nil),
 		(*RunEvent_ToolProgress)(nil),
 		(*RunEvent_ApprovalRequest)(nil),
 		(*RunEvent_Result)(nil),
 	}
-	file_boltrope_v1_orchestrator_proto_msgTypes[18].OneofWrappers = []any{
+	file_boltrope_v1_orchestrator_proto_msgTypes[29].OneofWrappers = []any{
 		(*ControlRequest_Approve)(nil),
 		(*ControlRequest_Deny)(nil),
 		(*ControlRequest_Interrupt)(nil),
@@ -2359,7 +3251,7 @@ func file_boltrope_v1_orchestrator_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_boltrope_v1_orchestrator_proto_rawDesc), len(file_boltrope_v1_orchestrator_proto_rawDesc)),
 			NumEnums:      5,
-			NumMessages:   23,
+			NumMessages:   34,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

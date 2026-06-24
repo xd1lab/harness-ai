@@ -36,13 +36,17 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	OrchestratorService_CreateSession_FullMethodName   = "/boltrope.v1.OrchestratorService/CreateSession"
-	OrchestratorService_GetSession_FullMethodName      = "/boltrope.v1.OrchestratorService/GetSession"
-	OrchestratorService_Run_FullMethodName             = "/boltrope.v1.OrchestratorService/Run"
-	OrchestratorService_Control_FullMethodName         = "/boltrope.v1.OrchestratorService/Control"
-	OrchestratorService_Fork_FullMethodName            = "/boltrope.v1.OrchestratorService/Fork"
-	OrchestratorService_ListSessions_FullMethodName    = "/boltrope.v1.OrchestratorService/ListSessions"
-	OrchestratorService_GetSessionUsage_FullMethodName = "/boltrope.v1.OrchestratorService/GetSessionUsage"
+	OrchestratorService_CreateSession_FullMethodName     = "/boltrope.v1.OrchestratorService/CreateSession"
+	OrchestratorService_GetSession_FullMethodName        = "/boltrope.v1.OrchestratorService/GetSession"
+	OrchestratorService_Run_FullMethodName               = "/boltrope.v1.OrchestratorService/Run"
+	OrchestratorService_Control_FullMethodName           = "/boltrope.v1.OrchestratorService/Control"
+	OrchestratorService_Fork_FullMethodName              = "/boltrope.v1.OrchestratorService/Fork"
+	OrchestratorService_ListSessions_FullMethodName      = "/boltrope.v1.OrchestratorService/ListSessions"
+	OrchestratorService_GetSessionUsage_FullMethodName   = "/boltrope.v1.OrchestratorService/GetSessionUsage"
+	OrchestratorService_ListSessionEvents_FullMethodName = "/boltrope.v1.OrchestratorService/ListSessionEvents"
+	OrchestratorService_GetStateAtSeq_FullMethodName     = "/boltrope.v1.OrchestratorService/GetStateAtSeq"
+	OrchestratorService_GetSessionCost_FullMethodName    = "/boltrope.v1.OrchestratorService/GetSessionCost"
+	OrchestratorService_GetTenantCost_FullMethodName     = "/boltrope.v1.OrchestratorService/GetTenantCost"
 )
 
 // OrchestratorServiceClient is the client API for OrchestratorService service.
@@ -91,6 +95,31 @@ type OrchestratorServiceClient interface {
 	// USAGE_SOURCE_EVENT_FOLD; USAGE_SOURCE_COST_ROLLUP is reserved for a future
 	// cost-rollup projection. Cross-tenant -> PERMISSION_DENIED, missing -> NOT_FOUND.
 	GetSessionUsage(ctx context.Context, in *GetSessionUsageRequest, opts ...grpc.CallOption) (*GetSessionUsageResponse, error)
+	// ListSessionEvents lists an owned session's events as redacted descriptors,
+	// keyset-paginated on seq (after_seq + page_size), tenant-scoped via the shared
+	// ownership path (Feature M / event-read). With include_payload unset (default)
+	// it returns descriptor-only views (no raw payload); provider_raw and
+	// SessionStarted.SystemPrompt are NEVER returned even with include_payload=true,
+	// AssistantMessageDelta crash checkpoints are never exposed, and a blob-bearing
+	// ToolResult returns only blob metadata. Cross-tenant -> PERMISSION_DENIED.
+	ListSessionEvents(ctx context.Context, in *ListSessionEventsRequest, opts ...grpc.CallOption) (*ListSessionEventsResponse, error)
+	// GetStateAtSeq reconstructs an owned session's folded control/billing projection
+	// at at_seq via Load-then-fold over the [1..at_seq] window — NEVER via Fork, so
+	// it creates no session row and re-bills nothing (Feature M / event-read). at_seq
+	// <= 0 yields an empty state; at_seq beyond head is clamped to head.
+	GetStateAtSeq(ctx context.Context, in *GetStateAtSeqRequest, opts ...grpc.CallOption) (*GetStateAtSeqResponse, error)
+	// GetSessionCost returns an owned session's per-model cost/usage/turns rollup plus
+	// the session total, read from the persisted cost-rollup projection (Feature O /
+	// cost-read). by_model is sorted by cost_usd descending and partitions the total;
+	// an uncorrelated model lands in the "unknown" bucket. Cross-tenant ->
+	// PERMISSION_DENIED, missing -> NOT_FOUND.
+	GetSessionCost(ctx context.Context, in *GetSessionCostRequest, opts ...grpc.CallOption) (*GetSessionCostResponse, error)
+	// GetTenantCost returns the authenticated tenant's per-model cost/usage/turns
+	// aggregate plus the tenant total and the count of distinct sessions carrying
+	// cost (Feature O / cost-read). The request tenant_id is a GUARD only (must match
+	// the principal when non-empty), never a filter key — the result is RLS-scoped to
+	// the principal's tenant.
+	GetTenantCost(ctx context.Context, in *GetTenantCostRequest, opts ...grpc.CallOption) (*GetTenantCostResponse, error)
 }
 
 type orchestratorServiceClient struct {
@@ -180,6 +209,46 @@ func (c *orchestratorServiceClient) GetSessionUsage(ctx context.Context, in *Get
 	return out, nil
 }
 
+func (c *orchestratorServiceClient) ListSessionEvents(ctx context.Context, in *ListSessionEventsRequest, opts ...grpc.CallOption) (*ListSessionEventsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListSessionEventsResponse)
+	err := c.cc.Invoke(ctx, OrchestratorService_ListSessionEvents_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *orchestratorServiceClient) GetStateAtSeq(ctx context.Context, in *GetStateAtSeqRequest, opts ...grpc.CallOption) (*GetStateAtSeqResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetStateAtSeqResponse)
+	err := c.cc.Invoke(ctx, OrchestratorService_GetStateAtSeq_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *orchestratorServiceClient) GetSessionCost(ctx context.Context, in *GetSessionCostRequest, opts ...grpc.CallOption) (*GetSessionCostResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetSessionCostResponse)
+	err := c.cc.Invoke(ctx, OrchestratorService_GetSessionCost_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *orchestratorServiceClient) GetTenantCost(ctx context.Context, in *GetTenantCostRequest, opts ...grpc.CallOption) (*GetTenantCostResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetTenantCostResponse)
+	err := c.cc.Invoke(ctx, OrchestratorService_GetTenantCost_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // OrchestratorServiceServer is the server API for OrchestratorService service.
 // All implementations must embed UnimplementedOrchestratorServiceServer
 // for forward compatibility.
@@ -226,6 +295,31 @@ type OrchestratorServiceServer interface {
 	// USAGE_SOURCE_EVENT_FOLD; USAGE_SOURCE_COST_ROLLUP is reserved for a future
 	// cost-rollup projection. Cross-tenant -> PERMISSION_DENIED, missing -> NOT_FOUND.
 	GetSessionUsage(context.Context, *GetSessionUsageRequest) (*GetSessionUsageResponse, error)
+	// ListSessionEvents lists an owned session's events as redacted descriptors,
+	// keyset-paginated on seq (after_seq + page_size), tenant-scoped via the shared
+	// ownership path (Feature M / event-read). With include_payload unset (default)
+	// it returns descriptor-only views (no raw payload); provider_raw and
+	// SessionStarted.SystemPrompt are NEVER returned even with include_payload=true,
+	// AssistantMessageDelta crash checkpoints are never exposed, and a blob-bearing
+	// ToolResult returns only blob metadata. Cross-tenant -> PERMISSION_DENIED.
+	ListSessionEvents(context.Context, *ListSessionEventsRequest) (*ListSessionEventsResponse, error)
+	// GetStateAtSeq reconstructs an owned session's folded control/billing projection
+	// at at_seq via Load-then-fold over the [1..at_seq] window — NEVER via Fork, so
+	// it creates no session row and re-bills nothing (Feature M / event-read). at_seq
+	// <= 0 yields an empty state; at_seq beyond head is clamped to head.
+	GetStateAtSeq(context.Context, *GetStateAtSeqRequest) (*GetStateAtSeqResponse, error)
+	// GetSessionCost returns an owned session's per-model cost/usage/turns rollup plus
+	// the session total, read from the persisted cost-rollup projection (Feature O /
+	// cost-read). by_model is sorted by cost_usd descending and partitions the total;
+	// an uncorrelated model lands in the "unknown" bucket. Cross-tenant ->
+	// PERMISSION_DENIED, missing -> NOT_FOUND.
+	GetSessionCost(context.Context, *GetSessionCostRequest) (*GetSessionCostResponse, error)
+	// GetTenantCost returns the authenticated tenant's per-model cost/usage/turns
+	// aggregate plus the tenant total and the count of distinct sessions carrying
+	// cost (Feature O / cost-read). The request tenant_id is a GUARD only (must match
+	// the principal when non-empty), never a filter key — the result is RLS-scoped to
+	// the principal's tenant.
+	GetTenantCost(context.Context, *GetTenantCostRequest) (*GetTenantCostResponse, error)
 	mustEmbedUnimplementedOrchestratorServiceServer()
 }
 
@@ -256,6 +350,18 @@ func (UnimplementedOrchestratorServiceServer) ListSessions(context.Context, *Lis
 }
 func (UnimplementedOrchestratorServiceServer) GetSessionUsage(context.Context, *GetSessionUsageRequest) (*GetSessionUsageResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetSessionUsage not implemented")
+}
+func (UnimplementedOrchestratorServiceServer) ListSessionEvents(context.Context, *ListSessionEventsRequest) (*ListSessionEventsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListSessionEvents not implemented")
+}
+func (UnimplementedOrchestratorServiceServer) GetStateAtSeq(context.Context, *GetStateAtSeqRequest) (*GetStateAtSeqResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetStateAtSeq not implemented")
+}
+func (UnimplementedOrchestratorServiceServer) GetSessionCost(context.Context, *GetSessionCostRequest) (*GetSessionCostResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetSessionCost not implemented")
+}
+func (UnimplementedOrchestratorServiceServer) GetTenantCost(context.Context, *GetTenantCostRequest) (*GetTenantCostResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetTenantCost not implemented")
 }
 func (UnimplementedOrchestratorServiceServer) mustEmbedUnimplementedOrchestratorServiceServer() {}
 func (UnimplementedOrchestratorServiceServer) testEmbeddedByValue()                             {}
@@ -397,6 +503,78 @@ func _OrchestratorService_GetSessionUsage_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
+func _OrchestratorService_ListSessionEvents_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListSessionEventsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OrchestratorServiceServer).ListSessionEvents(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OrchestratorService_ListSessionEvents_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OrchestratorServiceServer).ListSessionEvents(ctx, req.(*ListSessionEventsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _OrchestratorService_GetStateAtSeq_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetStateAtSeqRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OrchestratorServiceServer).GetStateAtSeq(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OrchestratorService_GetStateAtSeq_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OrchestratorServiceServer).GetStateAtSeq(ctx, req.(*GetStateAtSeqRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _OrchestratorService_GetSessionCost_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSessionCostRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OrchestratorServiceServer).GetSessionCost(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OrchestratorService_GetSessionCost_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OrchestratorServiceServer).GetSessionCost(ctx, req.(*GetSessionCostRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _OrchestratorService_GetTenantCost_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetTenantCostRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OrchestratorServiceServer).GetTenantCost(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OrchestratorService_GetTenantCost_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OrchestratorServiceServer).GetTenantCost(ctx, req.(*GetTenantCostRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // OrchestratorService_ServiceDesc is the grpc.ServiceDesc for OrchestratorService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -427,6 +605,22 @@ var OrchestratorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetSessionUsage",
 			Handler:    _OrchestratorService_GetSessionUsage_Handler,
+		},
+		{
+			MethodName: "ListSessionEvents",
+			Handler:    _OrchestratorService_ListSessionEvents_Handler,
+		},
+		{
+			MethodName: "GetStateAtSeq",
+			Handler:    _OrchestratorService_GetStateAtSeq_Handler,
+		},
+		{
+			MethodName: "GetSessionCost",
+			Handler:    _OrchestratorService_GetSessionCost_Handler,
+		},
+		{
+			MethodName: "GetTenantCost",
+			Handler:    _OrchestratorService_GetTenantCost_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

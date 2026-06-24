@@ -68,6 +68,35 @@ service OrchestratorService {
   // USAGE_SOURCE_EVENT_FOLD; USAGE_SOURCE_COST_ROLLUP is reserved for a future
   // cost-rollup projection. Cross-tenant -> PERMISSION_DENIED, missing -> NOT_FOUND.
   rpc GetSessionUsage(GetSessionUsageRequest) returns (GetSessionUsageResponse);
+
+  // ListSessionEvents lists an owned session's events as redacted descriptors,
+  // keyset-paginated on seq (after_seq + page_size), tenant-scoped via the shared
+  // ownership path (Feature M / event-read). With include_payload unset (default)
+  // it returns descriptor-only views (no raw payload); provider_raw and
+  // SessionStarted.SystemPrompt are NEVER returned even with include_payload=true,
+  // AssistantMessageDelta crash checkpoints are never exposed, and a blob-bearing
+  // ToolResult returns only blob metadata. Cross-tenant -> PERMISSION_DENIED.
+  rpc ListSessionEvents(ListSessionEventsRequest) returns (ListSessionEventsResponse);
+
+  // GetStateAtSeq reconstructs an owned session's folded control/billing projection
+  // at at_seq via Load-then-fold over the [1..at_seq] window — NEVER via Fork, so
+  // it creates no session row and re-bills nothing (Feature M / event-read). at_seq
+  // <= 0 yields an empty state; at_seq beyond head is clamped to head.
+  rpc GetStateAtSeq(GetStateAtSeqRequest) returns (GetStateAtSeqResponse);
+
+  // GetSessionCost returns an owned session's per-model cost/usage/turns rollup plus
+  // the session total, read from the persisted cost-rollup projection (Feature O /
+  // cost-read). by_model is sorted by cost_usd descending and partitions the total;
+  // an uncorrelated model lands in the "unknown" bucket. Cross-tenant ->
+  // PERMISSION_DENIED, missing -> NOT_FOUND.
+  rpc GetSessionCost(GetSessionCostRequest) returns (GetSessionCostResponse);
+
+  // GetTenantCost returns the authenticated tenant's per-model cost/usage/turns
+  // aggregate plus the tenant total and the count of distinct sessions carrying
+  // cost (Feature O / cost-read). The request tenant_id is a GUARD only (must match
+  // the principal when non-empty), never a filter key — the result is RLS-scoped to
+  // the principal's tenant.
+  rpc GetTenantCost(GetTenantCostRequest) returns (GetTenantCostResponse);
 }
 
 // SessionSortField names the sort key for ListSessions. v1 sorts by created_at
@@ -188,6 +217,149 @@ message GetSessionUsageResponse {
   int64 num_turns = 5;
   // source is the provenance of these totals; v1 is always USAGE_SOURCE_EVENT_FOLD.
   UsageSource source = 6;
+}
+
+// ListSessionEventsRequest lists an owned session's events as redacted
+// descriptors with keyset pagination (Feature M / event-read).
+message ListSessionEventsRequest {
+  // tenant_id is a GUARD: when non-empty it MUST match the authenticated principal.
+  string tenant_id = 1;
+  // session_id is the owned session whose events to list.
+  string session_id = 2;
+  // after_seq is the keyset cursor: only events with seq strictly greater than it
+  // are returned (zero starts from the beginning). It mirrors RunRequest.after_seq.
+  int64 after_seq = 3;
+  // page_size is the maximum descriptors to return. A value <= 0 resolves to the
+  // default of 100; a value above 1000 is clamped to 1000 (never rejected).
+  int32 page_size = 4;
+  // include_payload opts into payload-bearing summaries. Even when true, provider_raw
+  // and SessionStarted.SystemPrompt are never returned and AssistantMessageDelta is
+  // never exposed; text is still truncated and large tool output stays a blob ref.
+  bool include_payload = 5;
+}
+
+// EventDescriptor is the safe, redacted view of one event for ListSessionEvents:
+// envelope coordinates plus a bounded summary and blob metadata — never the raw
+// sensitive payload (Feature M / event-read).
+message EventDescriptor {
+  // seq is the event's per-session sequence number.
+  int64 seq = 1;
+  // event_type is the event discriminator (domain.EventType string).
+  string event_type = 2;
+  // actor is the event's actor (user/assistant/tool/system).
+  string actor = 3;
+  // schema_version is the event payload's schema version.
+  int32 schema_version = 4;
+  // request_id is the idempotency request id the event was written under.
+  string request_id = 5;
+  // created_at_ms is the event's created_at as Unix epoch ms.
+  int64 created_at_ms = 6;
+  // has_blob reports whether the event references a blob (e.g. an offloaded
+  // ToolResult); the bytes are fetched on demand, never inlined here.
+  bool has_blob = 7;
+  // blob_media_type is the referenced blob's media type (from blob metadata) when
+  // has_blob; empty otherwise.
+  string blob_media_type = 8;
+  // blob_size_bytes is the referenced blob's size in bytes when has_blob; zero
+  // otherwise.
+  int64 blob_size_bytes = 9;
+  // redacted reports whether any field was omitted or truncated in this descriptor.
+  bool redacted = 10;
+  // summary is a bounded, safe summary (e.g. a truncated text prefix); never raw
+  // provider bytes or the system prompt.
+  string summary = 11;
+}
+
+// ListSessionEventsResponse is one keyset page of event descriptors.
+message ListSessionEventsResponse {
+  // events is the page of descriptors in ascending seq order.
+  repeated EventDescriptor events = 1;
+  // next_after_seq is the keyset cursor for the next page (the last returned seq).
+  int64 next_after_seq = 2;
+  // has_more reports whether more events remain after this page.
+  bool has_more = 3;
+}
+
+// GetStateAtSeqRequest reconstructs an owned session's state at a sequence point.
+message GetStateAtSeqRequest {
+  // tenant_id is a GUARD: when non-empty it MUST match the authenticated principal.
+  string tenant_id = 1;
+  // session_id is the owned session to reconstruct.
+  string session_id = 2;
+  // at_seq is the (inclusive) upper sequence bound to fold up to; <= 0 yields the
+  // empty state, beyond head is clamped to head.
+  int64 at_seq = 3;
+}
+
+// GetStateAtSeqResponse is the folded control/billing projection at at_seq.
+message GetStateAtSeqResponse {
+  // session is the materialized projection folded over the [1..at_seq] window.
+  Session session = 1;
+  // at_seq is the sequence the state was actually reconstructed to (clamped to head).
+  int64 at_seq = 2;
+}
+
+// ModelCost is one (tenant|session) x model cost bucket (Feature O / cost-read).
+message ModelCost {
+  // model is the TurnStarted.Model the terminal turns correlated to; "unknown" when
+  // it could not be correlated (never the empty string on the wire).
+  string model = 1;
+  // cost_usd is the accumulated cost for this model (SQL-side NUMERIC sum -> double).
+  double cost_usd = 2;
+  // usage is the accumulated token usage for this model.
+  Usage usage = 3;
+  // turns is the number of cost-bearing terminal events folded into this model.
+  int64 turns = 4;
+}
+
+// CostTotals is a (tenant|session) cost total — equal to the sum of by_model.
+message CostTotals {
+  // cost_usd is the summed cost in USD.
+  double cost_usd = 1;
+  // usage is the summed token usage.
+  Usage usage = 2;
+  // turns is the number of cost-bearing terminal events folded.
+  int64 turns = 3;
+}
+
+// GetSessionCostRequest identifies the owned session whose cost to read.
+message GetSessionCostRequest {
+  // tenant_id is a GUARD: when non-empty it MUST match the authenticated principal.
+  string tenant_id = 1;
+  // session_id is the owned session to read cost for.
+  string session_id = 2;
+}
+
+// GetSessionCostResponse is one session's cost total plus the per-model breakdown.
+message GetSessionCostResponse {
+  // session_id is echoed from the request.
+  string session_id = 1;
+  // tenant_id is the verified principal tenant.
+  string tenant_id = 2;
+  // total is the session's cost total (= sum of by_model).
+  CostTotals total = 3;
+  // by_model is the per-model breakdown, sorted by cost_usd descending.
+  repeated ModelCost by_model = 4;
+}
+
+// GetTenantCostRequest reads the authenticated tenant's aggregate cost.
+message GetTenantCostRequest {
+  // tenant_id is a GUARD only (must match the principal when non-empty); the
+  // authority is the authenticated principal, never this field.
+  string tenant_id = 1;
+}
+
+// GetTenantCostResponse is the tenant's cost total, per-model breakdown, and the
+// count of distinct sessions carrying cost.
+message GetTenantCostResponse {
+  // tenant_id is the verified principal tenant.
+  string tenant_id = 1;
+  // total is the tenant's cost total (= sum of by_model).
+  CostTotals total = 2;
+  // by_model is the per-model breakdown, sorted by cost_usd descending.
+  repeated ModelCost by_model = 3;
+  // session_count is the number of distinct sessions of the tenant that carry cost.
+  int64 session_count = 4;
 }
 
 // PermissionMode is the session's operating mode for the allow/deny/ask pipeline,
