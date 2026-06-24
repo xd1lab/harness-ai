@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -135,6 +136,62 @@ func (f *fakeStore) Fork(_ context.Context, parentID string, atSeq int64, newSes
 	child := domain.Session{ID: newSessionID, TenantID: p.TenantID, ParentID: parentID, ForkedFromSeq: atSeq}
 	f.sessions[newSessionID] = child
 	return child, nil
+}
+
+// ListSessions applies the status/time/keyset filter over the in-memory sessions,
+// mirroring the production store so the REST facade's ListSessions route exercises
+// the real igrpc.Server query path (clamp, opaque token, summary mapping).
+func (f *fakeStore) ListSessions(_ context.Context, q igrpc.ListSessionsQuery) ([]domain.Session, error) {
+	f.mu.Lock()
+	rows := make([]domain.Session, 0, len(f.sessions))
+	statusSet := map[domain.SessionStatus]bool{}
+	for _, st := range q.Statuses {
+		statusSet[st] = true
+	}
+	for _, s := range f.sessions {
+		if len(statusSet) > 0 && !statusSet[s.Status] {
+			continue
+		}
+		if !q.CreatedAfter.IsZero() && s.CreatedAt.Before(q.CreatedAfter) {
+			continue
+		}
+		if !q.CreatedBefore.IsZero() && !s.CreatedAt.Before(q.CreatedBefore) {
+			continue
+		}
+		rows = append(rows, s)
+	}
+	f.mu.Unlock()
+
+	less := func(a, b domain.Session) bool {
+		if !a.CreatedAt.Equal(b.CreatedAt) {
+			return a.CreatedAt.Before(b.CreatedAt)
+		}
+		return a.ID < b.ID
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if q.Descending {
+			return less(rows[j], rows[i])
+		}
+		return less(rows[i], rows[j])
+	})
+	if q.Cursor.ID != "" {
+		cur := domain.Session{ID: q.Cursor.ID, CreatedAt: time.UnixMilli(q.Cursor.CreatedAtMs).UTC()}
+		filtered := rows[:0:0]
+		for _, s := range rows {
+			after := less(cur, s)
+			if q.Descending {
+				after = less(s, cur)
+			}
+			if after {
+				filtered = append(filtered, s)
+			}
+		}
+		rows = filtered
+	}
+	if q.Limit > 0 && len(rows) > q.Limit {
+		rows = rows[:q.Limit]
+	}
+	return rows, nil
 }
 
 // seed inserts a session directly (bypassing CreateSession).
@@ -517,4 +574,100 @@ func TestGetSession_ReturnsProjection(t *testing.T) {
 	sess, _ := body["session"].(map[string]any)
 	require.NotNil(t, sess, "response must carry the session projection")
 	assert.Equal(t, "s7", sess["sessionId"])
+}
+
+// ---------------------------------------------------------------------------
+// Admin/tenant session-management (Feature I / ADR-0027): ListSessions +
+// GetSessionUsage thin REST facades over the shared igrpc.Server.
+// ---------------------------------------------------------------------------
+
+// TestListSessions_ReturnsTenantSessions pins the GET /v1/sessions route: it calls
+// the shared server (no tenant_id query param — the tenant is the principal),
+// returns protojson of ListSessionsResponse, and projects the summary fields.
+func TestListSessions_ReturnsTenantSessions(t *testing.T) {
+	h := devHarness(t)
+	base := time.UnixMilli(1_000_000).UTC()
+	h.store.seed(domain.Session{ID: "s-a", TenantID: igrpc.DevTenantID, Status: domain.StatusActive, HeadSeq: 1, CreatedAt: base})
+	h.store.seed(domain.Session{ID: "s-b", TenantID: igrpc.DevTenantID, Status: domain.StatusFinished, HeadSeq: 1, CreatedAt: base.Add(time.Second)})
+
+	resp := h.doJSON(t, http.MethodGet, "/v1/sessions?page_size=100", "", "")
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	body := decodeJSON(t, resp)
+	sessions, _ := body["sessions"].([]any)
+	require.Len(t, sessions, 2, "both dev-tenant sessions are listed (protojson)")
+}
+
+// TestListSessions_StatusFilterAndDescending pins query-param parsing: a repeated
+// ?status= OR-filter and ?descending=true are forwarded to the shared server.
+func TestListSessions_StatusFilterAndDescending(t *testing.T) {
+	h := devHarness(t)
+	base := time.UnixMilli(2_000_000).UTC()
+	h.store.seed(domain.Session{ID: "act-1", TenantID: igrpc.DevTenantID, Status: domain.StatusActive, CreatedAt: base})
+	h.store.seed(domain.Session{ID: "fin-1", TenantID: igrpc.DevTenantID, Status: domain.StatusFinished, CreatedAt: base.Add(time.Second)})
+	h.store.seed(domain.Session{ID: "act-2", TenantID: igrpc.DevTenantID, Status: domain.StatusActive, CreatedAt: base.Add(2 * time.Second)})
+
+	resp := h.doJSON(t, http.MethodGet, "/v1/sessions?status=active&page_size=100&descending=true", "", "")
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	body := decodeJSON(t, resp)
+	sessions, _ := body["sessions"].([]any)
+	require.Len(t, sessions, 2, "status=active returns only the active sessions")
+	first, _ := sessions[0].(map[string]any)
+	assert.Equal(t, "act-2", first["sessionId"], "descending=true returns newest-first")
+}
+
+// TestListSessions_BadQueryParamIs400 pins the fail-closed-early edge: an
+// unparseable numeric / status / descending is a typed 400 before any store call.
+func TestListSessions_BadQueryParamIs400(t *testing.T) {
+	h := devHarness(t)
+	for _, q := range []string{
+		"/v1/sessions?page_size=abc",
+		"/v1/sessions?created_after_ms=notanum",
+		"/v1/sessions?descending=maybe",
+		"/v1/sessions?status=bogus",
+	} {
+		resp := h.doJSON(t, http.MethodGet, q, "", "")
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode, "bad query %q must be 400", q)
+		_ = resp.Body.Close()
+	}
+}
+
+// TestGetSessionUsage_FoldsTotals pins the GET /v1/sessions/{id}/usage route: it
+// folds the session's TurnFinished totals and tags the source EVENT_FOLD.
+func TestGetSessionUsage_FoldsTotals(t *testing.T) {
+	h := devHarness(t)
+	h.store.seed(domain.Session{ID: "u-1", TenantID: igrpc.DevTenantID, Status: domain.StatusActive, HeadSeq: 1})
+	_, err := h.store.Append(db.WithTenant(context.Background(), igrpc.DevTenantID), "u-1", 0, 0, "r1", app.AppendInput{
+		Event: domain.TurnFinished{TurnID: "t1", Reason: domain.Success, Usage: llm.Usage{InputTokens: 100, OutputTokens: 20}, CostUSD: 0.10, NumTurns: 1},
+		Actor: domain.ActorSystem,
+	})
+	require.NoError(t, err)
+
+	resp := h.doJSON(t, http.MethodGet, "/v1/sessions/u-1/usage", "", "")
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	body := decodeJSON(t, resp)
+	assert.Equal(t, "u-1", body["sessionId"])
+	assert.InDelta(t, 0.10, body["costUsd"], 1e-9)
+	assert.Equal(t, "USAGE_SOURCE_EVENT_FOLD", body["source"])
+}
+
+// TestGetSessionUsage_ForeignTenantIs403 pins the ownership error matrix at the
+// REST edge: a session owned by another tenant maps PermissionDenied -> 403.
+func TestGetSessionUsage_ForeignTenantIs403(t *testing.T) {
+	h := devHarness(t)
+	h.store.seed(domain.Session{ID: "alien", TenantID: "99999999-9999-4999-8999-999999999999", Status: domain.StatusActive})
+
+	resp := h.doJSON(t, http.MethodGet, "/v1/sessions/alien/usage", "", "")
+	defer func() { _ = resp.Body.Close() }()
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode, "foreign-tenant usage read is 403")
+}
+
+// TestGetSessionUsage_MissingIs404 pins the missing-session edge: NotFound -> 404.
+func TestGetSessionUsage_MissingIs404(t *testing.T) {
+	h := devHarness(t)
+	resp := h.doJSON(t, http.MethodGet, "/v1/sessions/nope/usage", "", "")
+	defer func() { _ = resp.Body.Close() }()
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode, "missing session usage is 404")
 }

@@ -57,10 +57,13 @@ func objectSchemaBytes(raw json.RawMessage) (schema []byte, ok bool) {
 	return []byte(raw), true
 }
 
-// toolCatalog returns the 5 v1 tools (create_session, run, get_session, control,
-// fork), each with a non-empty description and inputSchema; run additionally
-// declares an outputSchema (the synthesized completed result). The set and shape
-// are pinned by TestToolsList_ReturnsFiveTools (AC-3).
+// toolCatalog returns the 7 v1 tools (create_session, run, get_session, control,
+// fork, list_sessions, get_session_usage), each with a non-empty description and
+// inputSchema; run additionally declares an outputSchema (the synthesized
+// completed result). The set and shape are pinned by TestToolsList_ReturnsSevenTools
+// (the admin/tenant read tools list_sessions + get_session_usage are the Feature I /
+// ADR-0027 additions; the control tool's description documents that interrupt is
+// the admin STOP).
 func toolCatalog() []toolDescriptor {
 	return []toolDescriptor{
 		{
@@ -108,7 +111,7 @@ func toolCatalog() []toolDescriptor {
 		},
 		{
 			Name:        "control",
-			Description: "Approve or deny a pending risky tool call (the human-in-the-loop decision that unblocks a paused run), or interrupt/reattach a session. Called concurrently with an open 'run' call on a separate connection.",
+			Description: "Approve or deny a pending risky tool call (the human-in-the-loop decision that unblocks a paused run), or interrupt/reattach a session. Called concurrently with an open 'run' call on a separate connection. interrupt = admin stop (cooperative, resumable, idempotent no-op when the session is already finished).",
 			InputSchema: objectSchema(map[string]any{
 				"session_id": map[string]any{"type": "string", "description": "Target session id."},
 				"action":     map[string]any{"type": "string", "enum": []string{"approve", "deny", "interrupt", "reattach"}},
@@ -123,6 +126,29 @@ func toolCatalog() []toolDescriptor {
 			InputSchema: objectSchema(map[string]any{
 				"session_id": map[string]any{"type": "string", "description": "Parent session id."},
 				"at_seq":     map[string]any{"type": "integer", "description": "Parent seq to branch at; the child continues from at_seq+1."},
+			}, "session_id"),
+		},
+		{
+			Name:        "list_sessions",
+			Description: "List the caller-tenant's sessions (control/lineage projection: status, mode, head_seq, lineage, timestamps — no usage/cost) with an optional status OR-filter and a half-open created_at window, keyset-paginated via an opaque page_token. The tenant is the authenticated principal (no tenant_id arg). Use get_session_usage for per-session usage/cost.",
+			InputSchema: objectSchema(map[string]any{
+				"status": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "string", "enum": []string{"active", "finished", "failed"}},
+					"description": "Status OR-filter; omit for all statuses.",
+				},
+				"created_after_ms":  map[string]any{"type": "integer", "description": "Keep created_at >= this Unix epoch ms (inclusive). Omit for no lower bound."},
+				"created_before_ms": map[string]any{"type": "integer", "description": "Keep created_at < this Unix epoch ms (exclusive, half-open). Omit for no upper bound."},
+				"page_token":        map[string]any{"type": "string", "description": "Opaque cursor from a prior page's next_page_token; omit for the first page."},
+				"page_size":         map[string]any{"type": "integer", "description": "Max sessions per page; <=0 defaults to 50, capped at 200."},
+				"descending":        map[string]any{"type": "boolean", "description": "Newest-first when true (direction is carried in the page_token across pages)."},
+			}),
+		},
+		{
+			Name:        "get_session_usage",
+			Description: "Read accumulated per-session usage/cost/turns for an owned session, folded from the event log (includes any interrupted partial; never re-billed). The 'source' field tags provenance (USAGE_SOURCE_EVENT_FOLD in v1).",
+			InputSchema: objectSchema(map[string]any{
+				"session_id": map[string]any{"type": "string", "description": "Target session id."},
 			}, "session_id"),
 		},
 	}
@@ -168,6 +194,22 @@ type controlArgs struct {
 type forkArgs struct {
 	SessionID string `json:"session_id"`
 	AtSeq     int64  `json:"at_seq"`
+}
+
+// listSessionsArgs is the list_sessions tool arguments (Feature I / ADR-0027). No
+// tenant_id field: the tenant is the authenticated principal.
+type listSessionsArgs struct {
+	Status          []string `json:"status"`
+	CreatedAfterMs  int64    `json:"created_after_ms"`
+	CreatedBeforeMs int64    `json:"created_before_ms"`
+	PageToken       string   `json:"page_token"`
+	PageSize        int32    `json:"page_size"`
+	Descending      bool     `json:"descending"`
+}
+
+// getSessionUsageArgs is the get_session_usage tool arguments.
+type getSessionUsageArgs struct {
+	SessionID string `json:"session_id"`
 }
 
 // ---- CallToolResult ---------------------------------------------------------

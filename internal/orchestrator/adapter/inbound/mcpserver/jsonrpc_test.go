@@ -171,10 +171,12 @@ func TestInitialize_ServerInfoAndCaps(t *testing.T) {
 // T-5 — tools/list (AC-3)
 // ---------------------------------------------------------------------------
 
-// TestToolsList_ReturnsFiveTools pins AC-3: exactly 5 tools whose names are the
-// expected set, each with a non-empty description + an inputSchema object, and
-// run additionally has an outputSchema.
-func TestToolsList_ReturnsFiveTools(t *testing.T) {
+// TestToolsList_ReturnsSevenTools pins AC-3 (updated for Feature I / ADR-0027):
+// exactly 7 tools whose names are the expected set — the original 5 plus the
+// admin/tenant read tools list_sessions + get_session_usage — each with a
+// non-empty description + an inputSchema object, and run additionally has an
+// outputSchema.
+func TestToolsList_ReturnsSevenTools(t *testing.T) {
 	h := devHarness(t)
 	env, _ := h.doRPC(t, "", "tools/list", map[string]any{})
 	require.Nil(t, env.Error)
@@ -188,9 +190,12 @@ func TestToolsList_ReturnsFiveTools(t *testing.T) {
 		} `json:"tools"`
 	}
 	require.NoError(t, json.Unmarshal(env.Result, &result))
-	require.Len(t, result.Tools, 5, "v1 returns exactly 5 tools")
+	require.Len(t, result.Tools, 7, "v1 returns exactly 7 tools (5 original + list_sessions + get_session_usage)")
 
-	want := map[string]bool{"create_session": false, "run": false, "get_session": false, "control": false, "fork": false}
+	want := map[string]bool{
+		"create_session": false, "run": false, "get_session": false, "control": false, "fork": false,
+		"list_sessions": false, "get_session_usage": false,
+	}
 	for _, tool := range result.Tools {
 		_, known := want[tool.Name]
 		require.True(t, known, "unexpected tool %q", tool.Name)

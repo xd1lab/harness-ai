@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -147,6 +148,62 @@ func (f *fakeStore) Fork(_ context.Context, parentID string, atSeq int64, newSes
 	child := domain.Session{ID: newSessionID, TenantID: p.TenantID, ParentID: parentID, ForkedFromSeq: atSeq}
 	f.sessions[newSessionID] = child
 	return child, nil
+}
+
+// ListSessions applies the status/time/keyset filter over the in-memory sessions,
+// mirroring the production store so the MCP list_sessions tool exercises the real
+// igrpc.Server query path (Feature I / ADR-0027).
+func (f *fakeStore) ListSessions(_ context.Context, q igrpc.ListSessionsQuery) ([]domain.Session, error) {
+	f.mu.Lock()
+	rows := make([]domain.Session, 0, len(f.sessions))
+	statusSet := map[domain.SessionStatus]bool{}
+	for _, st := range q.Statuses {
+		statusSet[st] = true
+	}
+	for _, s := range f.sessions {
+		if len(statusSet) > 0 && !statusSet[s.Status] {
+			continue
+		}
+		if !q.CreatedAfter.IsZero() && s.CreatedAt.Before(q.CreatedAfter) {
+			continue
+		}
+		if !q.CreatedBefore.IsZero() && !s.CreatedAt.Before(q.CreatedBefore) {
+			continue
+		}
+		rows = append(rows, s)
+	}
+	f.mu.Unlock()
+
+	less := func(a, b domain.Session) bool {
+		if !a.CreatedAt.Equal(b.CreatedAt) {
+			return a.CreatedAt.Before(b.CreatedAt)
+		}
+		return a.ID < b.ID
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if q.Descending {
+			return less(rows[j], rows[i])
+		}
+		return less(rows[i], rows[j])
+	})
+	if q.Cursor.ID != "" {
+		cur := domain.Session{ID: q.Cursor.ID, CreatedAt: time.UnixMilli(q.Cursor.CreatedAtMs).UTC()}
+		filtered := rows[:0:0]
+		for _, s := range rows {
+			after := less(cur, s)
+			if q.Descending {
+				after = less(s, cur)
+			}
+			if after {
+				filtered = append(filtered, s)
+			}
+		}
+		rows = filtered
+	}
+	if q.Limit > 0 && len(rows) > q.Limit {
+		rows = rows[:q.Limit]
+	}
+	return rows, nil
 }
 
 // seed inserts a session directly (bypassing CreateSession).

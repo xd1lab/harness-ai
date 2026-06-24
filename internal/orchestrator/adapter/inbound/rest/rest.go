@@ -67,8 +67,14 @@ func NewHandler(srv *igrpc.Server, auth *igrpc.Authenticator) *Handler {
 // each wrapped in the auth middleware.
 func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/sessions", h.withAuth(h.createSession))
+	mux.HandleFunc("GET /v1/sessions", h.withAuth(h.listSessions))
 	mux.HandleFunc("GET /v1/sessions/{id}", h.withAuth(h.getSession))
+	mux.HandleFunc("GET /v1/sessions/{id}/usage", h.withAuth(h.getSessionUsage))
 	mux.HandleFunc("POST /v1/sessions/{id}/run", h.withAuth(h.run))
+	// POST /v1/sessions/{id}/control with {"action":"interrupt"} is the admin STOP:
+	// it cooperatively interrupts a live run (resumable) and is an idempotent no-op
+	// success on an already-finished/idle session (Feature I / ADR-0027 — STOP reuses
+	// the existing Control interrupt, no new route).
 	mux.HandleFunc("POST /v1/sessions/{id}/control", h.withAuth(h.control))
 	mux.HandleFunc("POST /v1/sessions/{id}/fork", h.withAuth(h.fork))
 }
@@ -174,6 +180,71 @@ func (h *Handler) createSession(w http.ResponseWriter, r *http.Request) {
 // getSession maps GET /v1/sessions/{id} onto the shared GetSession.
 func (h *Handler) getSession(w http.ResponseWriter, r *http.Request) {
 	resp, err := h.grpc.GetSession(r.Context(), &genproto.GetSessionRequest{
+		SessionId: r.PathValue("id"),
+	})
+	if err != nil {
+		writeStatusError(w, err)
+		return
+	}
+	writeProto(w, resp)
+}
+
+// listSessions maps GET /v1/sessions onto the shared ListSessions (Feature I /
+// ADR-0027). It carries NO tenant_id query param (the tenant is the authenticated
+// principal); query params: status (repeated; active|finished|failed),
+// created_after_ms / created_before_ms / page_size (decimal), page_token (opaque),
+// descending (bool). An unparseable numeric/status/descending is a typed 400
+// BEFORE any store call. The response is protojson of ListSessionsResponse.
+func (h *Handler) listSessions(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+
+	statuses, err := parseStatuses(q["status"])
+	if err != nil {
+		writeError(w, http.StatusBadRequest, codes.InvalidArgument, err.Error())
+		return
+	}
+	createdAfterMs, err := parseOptionalInt64(q.Get("created_after_ms"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, codes.InvalidArgument, "created_after_ms must be a decimal Unix epoch ms")
+		return
+	}
+	createdBeforeMs, err := parseOptionalInt64(q.Get("created_before_ms"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, codes.InvalidArgument, "created_before_ms must be a decimal Unix epoch ms")
+		return
+	}
+	pageSize, err := parseOptionalPageSize(q.Get("page_size"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, codes.InvalidArgument, "page_size must be a decimal integer")
+		return
+	}
+	descending, err := parseOptionalBool(q.Get("descending"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, codes.InvalidArgument, "descending must be true or false")
+		return
+	}
+
+	resp, err := h.grpc.ListSessions(r.Context(), &genproto.ListSessionsRequest{
+		Status:          statuses,
+		CreatedAfterMs:  createdAfterMs,
+		CreatedBeforeMs: createdBeforeMs,
+		PageToken:       q.Get("page_token"),
+		PageSize:        pageSize,
+		Descending:      descending,
+	})
+	if err != nil {
+		writeStatusError(w, err)
+		return
+	}
+	writeProto(w, resp)
+}
+
+// getSessionUsage maps GET /v1/sessions/{id}/usage onto the shared GetSessionUsage
+// (Feature I / ADR-0027): per-session accumulated usage/cost/turns folded from the
+// event log, tagged with its provenance. Returns protojson of
+// GetSessionUsageResponse.
+func (h *Handler) getSessionUsage(w http.ResponseWriter, r *http.Request) {
+	resp, err := h.grpc.GetSessionUsage(r.Context(), &genproto.GetSessionUsageRequest{
 		SessionId: r.PathValue("id"),
 	})
 	if err != nil {
@@ -307,6 +378,65 @@ func normalizeOutputSchema(raw json.RawMessage) (schema []byte, ok bool) {
 		return nil, false
 	}
 	return []byte(raw), true
+}
+
+// parseStatuses maps the repeated ?status= query tokens (active|finished|failed,
+// case-insensitive) onto the proto SessionStatus OR-filter for ListSessions. An
+// empty list yields nil (all statuses); an unknown token is a typed error the
+// caller maps to a 400.
+func parseStatuses(raw []string) ([]genproto.SessionStatus, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	out := make([]genproto.SessionStatus, 0, len(raw))
+	for _, s := range raw {
+		switch strings.ToLower(strings.TrimSpace(s)) {
+		case "":
+			continue
+		case "active":
+			out = append(out, genproto.SessionStatus_SESSION_STATUS_ACTIVE)
+		case "finished":
+			out = append(out, genproto.SessionStatus_SESSION_STATUS_FINISHED)
+		case "failed":
+			out = append(out, genproto.SessionStatus_SESSION_STATUS_FAILED)
+		default:
+			return nil, fmt.Errorf("unknown status %q (want active|finished|failed)", s)
+		}
+	}
+	return out, nil
+}
+
+// parseOptionalInt64 parses an optional decimal query param. An empty value is 0
+// (the "unset" sentinel for the int64 filter/cursor fields), not an error.
+func parseOptionalInt64(s string) (int64, error) {
+	if strings.TrimSpace(s) == "" {
+		return 0, nil
+	}
+	return strconv.ParseInt(s, 10, 64)
+}
+
+// parseOptionalPageSize parses the optional page_size query param into an int32
+// (the proto field width). An empty value is 0 (the server resolves it to the
+// default); a value outside int32 range is parsed-bounded (ParseInt with bitSize
+// 32 rejects overflow), so the server's clamp never sees an overflowed value.
+func parseOptionalPageSize(s string) (int32, error) {
+	if strings.TrimSpace(s) == "" {
+		return 0, nil
+	}
+	n, err := strconv.ParseInt(s, 10, 32)
+	if err != nil {
+		return 0, err
+	}
+	return int32(n), nil
+}
+
+// parseOptionalBool parses an optional bool query param. An empty value is false,
+// not an error; a non-bool token is an error.
+func parseOptionalBool(s string) (bool, error) {
+	if strings.TrimSpace(s) == "" {
+		return false, nil
+	}
+	return strconv.ParseBool(s)
 }
 
 // parseMode maps the facade's mode vocabulary onto the proto enum, mirroring

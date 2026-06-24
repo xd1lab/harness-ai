@@ -299,3 +299,61 @@ func TestOrigin_PresentAllowed(t *testing.T) {
 	defer func() { _ = resp.Body.Close() }()
 	assert.Equal(t, http.StatusOK, resp.StatusCode, "an allowlisted Origin must proceed")
 }
+
+// ---------------------------------------------------------------------------
+// list_sessions + get_session_usage (Feature I / ADR-0027) — thin MCP tools
+// over the shared igrpc.Server.
+// ---------------------------------------------------------------------------
+
+// TestListSessions_ReturnsTenantSessions pins the list_sessions tool: it reaches
+// the shared server, RLS-scopes to the dev tenant, and carries the sessions array
+// + next_page_token in structuredContent.
+func TestListSessions_ReturnsTenantSessions(t *testing.T) {
+	h := devHarness(t)
+	h.store.seed(seededOwned("ls-1", 1))
+	h.store.seed(seededOwned("ls-2", 1))
+
+	env, _ := h.callTool(t, "", "list_sessions", map[string]any{"page_size": 100})
+	cr := decodeCallResult(t, env)
+	assert.False(t, cr.IsError)
+	sessions, _ := cr.StructuredContent["sessions"].([]any)
+	require.Len(t, sessions, 2, "both dev-tenant sessions are listed")
+}
+
+// TestListSessions_StatusFilter pins the status OR-filter forwarded to the server.
+func TestListSessions_StatusFilter(t *testing.T) {
+	h := devHarness(t)
+	h.store.seed(domain.Session{ID: "a", TenantID: igrpc.DevTenantID, Status: domain.StatusActive})
+	h.store.seed(domain.Session{ID: "f", TenantID: igrpc.DevTenantID, Status: domain.StatusFinished})
+
+	env, _ := h.callTool(t, "", "list_sessions", map[string]any{"status": []string{"active"}, "page_size": 100})
+	cr := decodeCallResult(t, env)
+	assert.False(t, cr.IsError)
+	sessions, _ := cr.StructuredContent["sessions"].([]any)
+	require.Len(t, sessions, 1, "status=[active] returns only the active session")
+}
+
+// TestListSessions_BadStatus_32602 pins the edge-side status parse error.
+func TestListSessions_BadStatus_32602(t *testing.T) {
+	h := devHarness(t)
+	env, _ := h.callTool(t, "", "list_sessions", map[string]any{"status": []string{"bogus"}})
+	require.NotNil(t, env.Error)
+	assert.Equal(t, -32602, env.Error.Code)
+}
+
+// TestGetSessionUsage_ForeignTenantDenied pins the ownership path: another
+// tenant's session is a PermissionDenied-mapped JSON-RPC error, not a result.
+func TestGetSessionUsage_ForeignTenantDenied(t *testing.T) {
+	h := devHarness(t)
+	h.store.seed(seededForeign("alien-u"))
+	env, _ := h.callTool(t, "", "get_session_usage", map[string]any{"session_id": "alien-u"})
+	require.NotNil(t, env.Error, "foreign-tenant usage read must be a JSON-RPC error")
+}
+
+// TestGetSessionUsage_MissingID_32602 pins the missing-arg edge error.
+func TestGetSessionUsage_MissingID_32602(t *testing.T) {
+	h := devHarness(t)
+	env, _ := h.callTool(t, "", "get_session_usage", map[string]any{})
+	require.NotNil(t, env.Error)
+	assert.Equal(t, -32602, env.Error.Code)
+}

@@ -180,3 +180,8 @@ func userTextMessage(text string) *genproto.Message {
 func errInvalidMode(s string) error {
 	return fmt.Errorf("unknown permission mode %q (want default|acceptEdits|plan)", s)
 }
+
+// errInvalidStatus is the edge-side list_sessions status-filter parse error.
+func errInvalidStatus(s string) error {
+	return fmt.Errorf("unknown status %q (want active|finished|failed)", s)
+}

@@ -239,6 +239,10 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, r *http.Request, req *r
 		h.toolFork(w, r, req, params)
 	case "run":
 		h.toolRun(w, r, req, params)
+	case "list_sessions":
+		h.toolListSessions(w, r, req, params)
+	case "get_session_usage":
+		h.toolGetSessionUsage(w, r, req, params)
 	default:
 		writeJSON(w, http.StatusOK, errorResponse(req.ID, codeInvalidParams, "unknown tool: "+params.Name, nil))
 	}
@@ -343,6 +347,89 @@ func (h *Handler) toolFork(w http.ResponseWriter, r *http.Request, req *rpcReque
 	result := textResult("forked "+args.SessionID+" -> "+resp.GetSessionId(),
 		map[string]any{"session_id": resp.GetSessionId()})
 	writeJSON(w, http.StatusOK, resultResponse(req.ID, result))
+}
+
+// ---- list_sessions (Feature I / ADR-0027) -----------------------------------
+
+func (h *Handler) toolListSessions(w http.ResponseWriter, r *http.Request, req *rpcRequest, p toolCallParams) {
+	var args listSessionsArgs
+	if !decodeArgs(w, req, p.Arguments, &args) {
+		return
+	}
+	statuses, err := parseStatuses(args.Status)
+	if err != nil {
+		writeJSON(w, http.StatusOK, errorResponse(req.ID, codeInvalidParams, err.Error(), nil))
+		return
+	}
+	resp, err := h.grpc.ListSessions(r.Context(), &genproto.ListSessionsRequest{
+		Status:          statuses,
+		CreatedAfterMs:  args.CreatedAfterMs,
+		CreatedBeforeMs: args.CreatedBeforeMs,
+		PageToken:       args.PageToken,
+		PageSize:        args.PageSize,
+		Descending:      args.Descending,
+	})
+	if err != nil {
+		h.writeToolStatusError(w, req, err)
+		return
+	}
+	out, err := protoToMap(resp)
+	if err != nil {
+		writeJSON(w, http.StatusOK, errorResponse(req.ID, codeInternalError, "encode sessions: "+err.Error(), nil))
+		return
+	}
+	result := textResult("listed sessions", out)
+	writeJSON(w, http.StatusOK, resultResponse(req.ID, result))
+}
+
+// ---- get_session_usage (Feature I / ADR-0027) -------------------------------
+
+func (h *Handler) toolGetSessionUsage(w http.ResponseWriter, r *http.Request, req *rpcRequest, p toolCallParams) {
+	var args getSessionUsageArgs
+	if !decodeArgs(w, req, p.Arguments, &args) {
+		return
+	}
+	if args.SessionID == "" {
+		writeJSON(w, http.StatusOK, errorResponse(req.ID, codeInvalidParams, "session_id is required", nil))
+		return
+	}
+	resp, err := h.grpc.GetSessionUsage(r.Context(), &genproto.GetSessionUsageRequest{SessionId: args.SessionID})
+	if err != nil {
+		h.writeToolStatusError(w, req, err)
+		return
+	}
+	out, err := protoToMap(resp)
+	if err != nil {
+		writeJSON(w, http.StatusOK, errorResponse(req.ID, codeInternalError, "encode usage: "+err.Error(), nil))
+		return
+	}
+	result := textResult("session "+args.SessionID+" usage", out)
+	writeJSON(w, http.StatusOK, resultResponse(req.ID, result))
+}
+
+// parseStatuses maps the list_sessions status string OR-filter (active|finished|
+// failed, case-insensitive) onto the proto SessionStatus enum; an unknown token is
+// a JSON-RPC InvalidParams error.
+func parseStatuses(raw []string) ([]genproto.SessionStatus, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	out := make([]genproto.SessionStatus, 0, len(raw))
+	for _, s := range raw {
+		switch strings.ToLower(strings.TrimSpace(s)) {
+		case "":
+			continue
+		case "active":
+			out = append(out, genproto.SessionStatus_SESSION_STATUS_ACTIVE)
+		case "finished":
+			out = append(out, genproto.SessionStatus_SESSION_STATUS_FINISHED)
+		case "failed":
+			out = append(out, genproto.SessionStatus_SESSION_STATUS_FAILED)
+		default:
+			return nil, errInvalidStatus(s)
+		}
+	}
+	return out, nil
 }
 
 // writeToolStatusError surfaces a shared-method gRPC status error as a JSON-RPC
