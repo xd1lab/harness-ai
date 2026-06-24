@@ -36,11 +36,13 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	OrchestratorService_CreateSession_FullMethodName = "/boltrope.v1.OrchestratorService/CreateSession"
-	OrchestratorService_GetSession_FullMethodName    = "/boltrope.v1.OrchestratorService/GetSession"
-	OrchestratorService_Run_FullMethodName           = "/boltrope.v1.OrchestratorService/Run"
-	OrchestratorService_Control_FullMethodName       = "/boltrope.v1.OrchestratorService/Control"
-	OrchestratorService_Fork_FullMethodName          = "/boltrope.v1.OrchestratorService/Fork"
+	OrchestratorService_CreateSession_FullMethodName   = "/boltrope.v1.OrchestratorService/CreateSession"
+	OrchestratorService_GetSession_FullMethodName      = "/boltrope.v1.OrchestratorService/GetSession"
+	OrchestratorService_Run_FullMethodName             = "/boltrope.v1.OrchestratorService/Run"
+	OrchestratorService_Control_FullMethodName         = "/boltrope.v1.OrchestratorService/Control"
+	OrchestratorService_Fork_FullMethodName            = "/boltrope.v1.OrchestratorService/Fork"
+	OrchestratorService_ListSessions_FullMethodName    = "/boltrope.v1.OrchestratorService/ListSessions"
+	OrchestratorService_GetSessionUsage_FullMethodName = "/boltrope.v1.OrchestratorService/GetSessionUsage"
 )
 
 // OrchestratorServiceClient is the client API for OrchestratorService service.
@@ -75,6 +77,20 @@ type OrchestratorServiceClient interface {
 	// (FR-STATE-03). The caller's tenant must own the parent; a foreign-tenant fork
 	// returns PERMISSION_DENIED.
 	Fork(ctx context.Context, in *ForkRequest, opts ...grpc.CallOption) (*ForkResponse, error)
+	// ListSessions lists the caller-tenant's sessions (control/lineage projection
+	// only — no per-row usage/cost) with an optional status OR-filter and a
+	// half-open [created_after_ms, created_before_ms) created_at window, keyset-
+	// paginated on the composite (created_at, id) exposed as an opaque page_token
+	// (Feature I / ADR-0027). It is the admin/tenant management read surface: the
+	// request tenant_id is a GUARD (must match the principal when non-empty), never
+	// a filter key — the row set is RLS-scoped to the authenticated tenant.
+	ListSessions(ctx context.Context, in *ListSessionsRequest, opts ...grpc.CallOption) (*ListSessionsResponse, error)
+	// GetSessionUsage returns accumulated per-session usage/cost/turns for an owned
+	// session (ADR-0027). v1 sources the totals from the server-side event fold
+	// (the same fold GetSession uses) and tags the result source =
+	// USAGE_SOURCE_EVENT_FOLD; USAGE_SOURCE_COST_ROLLUP is reserved for a future
+	// cost-rollup projection. Cross-tenant -> PERMISSION_DENIED, missing -> NOT_FOUND.
+	GetSessionUsage(ctx context.Context, in *GetSessionUsageRequest, opts ...grpc.CallOption) (*GetSessionUsageResponse, error)
 }
 
 type orchestratorServiceClient struct {
@@ -144,6 +160,26 @@ func (c *orchestratorServiceClient) Fork(ctx context.Context, in *ForkRequest, o
 	return out, nil
 }
 
+func (c *orchestratorServiceClient) ListSessions(ctx context.Context, in *ListSessionsRequest, opts ...grpc.CallOption) (*ListSessionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListSessionsResponse)
+	err := c.cc.Invoke(ctx, OrchestratorService_ListSessions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *orchestratorServiceClient) GetSessionUsage(ctx context.Context, in *GetSessionUsageRequest, opts ...grpc.CallOption) (*GetSessionUsageResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetSessionUsageResponse)
+	err := c.cc.Invoke(ctx, OrchestratorService_GetSessionUsage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // OrchestratorServiceServer is the server API for OrchestratorService service.
 // All implementations must embed UnimplementedOrchestratorServiceServer
 // for forward compatibility.
@@ -176,6 +212,20 @@ type OrchestratorServiceServer interface {
 	// (FR-STATE-03). The caller's tenant must own the parent; a foreign-tenant fork
 	// returns PERMISSION_DENIED.
 	Fork(context.Context, *ForkRequest) (*ForkResponse, error)
+	// ListSessions lists the caller-tenant's sessions (control/lineage projection
+	// only — no per-row usage/cost) with an optional status OR-filter and a
+	// half-open [created_after_ms, created_before_ms) created_at window, keyset-
+	// paginated on the composite (created_at, id) exposed as an opaque page_token
+	// (Feature I / ADR-0027). It is the admin/tenant management read surface: the
+	// request tenant_id is a GUARD (must match the principal when non-empty), never
+	// a filter key — the row set is RLS-scoped to the authenticated tenant.
+	ListSessions(context.Context, *ListSessionsRequest) (*ListSessionsResponse, error)
+	// GetSessionUsage returns accumulated per-session usage/cost/turns for an owned
+	// session (ADR-0027). v1 sources the totals from the server-side event fold
+	// (the same fold GetSession uses) and tags the result source =
+	// USAGE_SOURCE_EVENT_FOLD; USAGE_SOURCE_COST_ROLLUP is reserved for a future
+	// cost-rollup projection. Cross-tenant -> PERMISSION_DENIED, missing -> NOT_FOUND.
+	GetSessionUsage(context.Context, *GetSessionUsageRequest) (*GetSessionUsageResponse, error)
 	mustEmbedUnimplementedOrchestratorServiceServer()
 }
 
@@ -200,6 +250,12 @@ func (UnimplementedOrchestratorServiceServer) Control(context.Context, *ControlR
 }
 func (UnimplementedOrchestratorServiceServer) Fork(context.Context, *ForkRequest) (*ForkResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Fork not implemented")
+}
+func (UnimplementedOrchestratorServiceServer) ListSessions(context.Context, *ListSessionsRequest) (*ListSessionsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListSessions not implemented")
+}
+func (UnimplementedOrchestratorServiceServer) GetSessionUsage(context.Context, *GetSessionUsageRequest) (*GetSessionUsageResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetSessionUsage not implemented")
 }
 func (UnimplementedOrchestratorServiceServer) mustEmbedUnimplementedOrchestratorServiceServer() {}
 func (UnimplementedOrchestratorServiceServer) testEmbeddedByValue()                             {}
@@ -305,6 +361,42 @@ func _OrchestratorService_Fork_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _OrchestratorService_ListSessions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListSessionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OrchestratorServiceServer).ListSessions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OrchestratorService_ListSessions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OrchestratorServiceServer).ListSessions(ctx, req.(*ListSessionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _OrchestratorService_GetSessionUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSessionUsageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OrchestratorServiceServer).GetSessionUsage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OrchestratorService_GetSessionUsage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OrchestratorServiceServer).GetSessionUsage(ctx, req.(*GetSessionUsageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // OrchestratorService_ServiceDesc is the grpc.ServiceDesc for OrchestratorService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -327,6 +419,14 @@ var OrchestratorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Fork",
 			Handler:    _OrchestratorService_Fork_Handler,
+		},
+		{
+			MethodName: "ListSessions",
+			Handler:    _OrchestratorService_ListSessions_Handler,
+		},
+		{
+			MethodName: "GetSessionUsage",
+			Handler:    _OrchestratorService_GetSessionUsage_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

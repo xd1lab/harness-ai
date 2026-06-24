@@ -52,6 +52,142 @@ service OrchestratorService {
   // (FR-STATE-03). The caller's tenant must own the parent; a foreign-tenant fork
   // returns PERMISSION_DENIED.
   rpc Fork(ForkRequest) returns (ForkResponse);
+
+  // ListSessions lists the caller-tenant's sessions (control/lineage projection
+  // only — no per-row usage/cost) with an optional status OR-filter and a
+  // half-open [created_after_ms, created_before_ms) created_at window, keyset-
+  // paginated on the composite (created_at, id) exposed as an opaque page_token
+  // (Feature I / ADR-0027). It is the admin/tenant management read surface: the
+  // request tenant_id is a GUARD (must match the principal when non-empty), never
+  // a filter key — the row set is RLS-scoped to the authenticated tenant.
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+
+  // GetSessionUsage returns accumulated per-session usage/cost/turns for an owned
+  // session (ADR-0027). v1 sources the totals from the server-side event fold
+  // (the same fold GetSession uses) and tags the result source =
+  // USAGE_SOURCE_EVENT_FOLD; USAGE_SOURCE_COST_ROLLUP is reserved for a future
+  // cost-rollup projection. Cross-tenant -> PERMISSION_DENIED, missing -> NOT_FOUND.
+  rpc GetSessionUsage(GetSessionUsageRequest) returns (GetSessionUsageResponse);
+}
+
+// SessionSortField names the sort key for ListSessions. v1 sorts by created_at
+// only (reserve room for future keys); the keyset/cursor is always the composite
+// (created_at, id) total order so paging is stable across same-millisecond rows.
+enum SessionSortField {
+  // SESSION_SORT_FIELD_UNSPECIFIED is the unset value; the server applies the
+  // default (equivalent to SESSION_SORT_FIELD_CREATED_AT).
+  SESSION_SORT_FIELD_UNSPECIFIED = 0;
+  // SESSION_SORT_FIELD_CREATED_AT sorts by the session's created_at (the v1 sort).
+  SESSION_SORT_FIELD_CREATED_AT = 1;
+}
+
+// UsageSource is the honest provenance tag on a GetSessionUsageResponse: which
+// read path produced the usage totals (ADR-0027).
+enum UsageSource {
+  // USAGE_SOURCE_UNSPECIFIED is the unset value.
+  USAGE_SOURCE_UNSPECIFIED = 0;
+  // USAGE_SOURCE_COST_ROLLUP means the totals came from the persisted cost-rollup
+  // projection (Feature O). RESERVED: not wired in v1 (the rollup is unmerged).
+  USAGE_SOURCE_COST_ROLLUP = 1;
+  // USAGE_SOURCE_EVENT_FOLD means the totals were folded on the read path from the
+  // session's TurnFinished/TurnAborted events (the v1 default, identical to the
+  // fold GetSession uses).
+  USAGE_SOURCE_EVENT_FOLD = 2;
+}
+
+// ListSessionsRequest lists the caller-tenant's sessions with optional filters and
+// opaque keyset pagination (Feature I / ADR-0027).
+message ListSessionsRequest {
+  // tenant_id is a GUARD only: when non-empty it MUST match the authenticated
+  // principal (a mismatch is PERMISSION_DENIED); it is NEVER a filter key. The
+  // result is always RLS-scoped to the principal's tenant.
+  string tenant_id = 1;
+  // status is an OR-filter: a session is listed when its status is in this set.
+  // An empty set lists every status.
+  repeated SessionStatus status = 2;
+  // created_after_ms keeps sessions with created_at >= this Unix epoch ms
+  // (inclusive lower bound). Zero disables the lower bound.
+  int64 created_after_ms = 3;
+  // created_before_ms keeps sessions with created_at < this Unix epoch ms
+  // (exclusive upper bound, half-open). Zero disables the upper bound.
+  int64 created_before_ms = 4;
+  // page_token is an opaque keyset cursor returned as next_page_token by a prior
+  // page; empty requests the first page. Clients MUST treat it as opaque (it
+  // carries the (created_at, id) keyset and the sort direction). A malformed
+  // token is INVALID_ARGUMENT, never a silent first page.
+  string page_token = 5;
+  // page_size is the maximum number of sessions to return. A value <= 0 resolves
+  // to the default of 50; a value above 200 is clamped to 200 (never rejected).
+  int32 page_size = 6;
+  // descending lists newest-first when true (oldest-first when false). The
+  // direction is carried in next_page_token so a paging walk cannot reverse
+  // mid-walk; on a continuation request (page_token set) this field is ignored.
+  bool descending = 7;
+}
+
+// SessionSummary is the control/lineage projection of one session for
+// ListSessions: it carries ONLY sessions-table columns (no usage/cost, no event
+// payloads), so there is no message text, system prompt, provider_raw, or blob to
+// redact by construction. Per-session usage is the separate GetSessionUsage call.
+message SessionSummary {
+  // session_id is the session's unique id.
+  string session_id = 1;
+  // tenant_id is the owning tenant (the authenticated principal's tenant).
+  string tenant_id = 2;
+  // status is the lifecycle state.
+  SessionStatus status = 3;
+  // mode is the session's standing permission mode.
+  PermissionMode mode = 4;
+  // head_seq is the sequence number of the last appended event.
+  int64 head_seq = 5;
+  // parent_session_id is the parent session id when this session is a fork; empty
+  // otherwise.
+  string parent_session_id = 6;
+  // forked_from_seq is the frozen parent seq this session branched at when it is a
+  // fork; zero otherwise.
+  int64 forked_from_seq = 7;
+  // created_at_ms is the session's created_at as Unix epoch ms.
+  int64 created_at_ms = 8;
+  // updated_at_ms is the session's updated_at as Unix epoch ms.
+  int64 updated_at_ms = 9;
+  // last_event_at_ms is the time of the most recent append as Unix epoch ms; zero
+  // when the session has no event yet.
+  int64 last_event_at_ms = 10;
+}
+
+// ListSessionsResponse is one page of session summaries plus the opaque cursor for
+// the next page.
+message ListSessionsResponse {
+  // sessions is the page of session summaries in (created_at, id) order.
+  repeated SessionSummary sessions = 1;
+  // next_page_token is the opaque cursor for the next page; empty when this is the
+  // last page.
+  string next_page_token = 2;
+}
+
+// GetSessionUsageRequest identifies the session whose usage to read.
+message GetSessionUsageRequest {
+  // tenant_id is verified against the caller (guard); empty uses the principal.
+  string tenant_id = 1;
+  // session_id is the owned session to read usage for.
+  string session_id = 2;
+}
+
+// GetSessionUsageResponse is the accumulated per-session usage/cost/turns, tagged
+// with its provenance (Feature I / ADR-0027).
+message GetSessionUsageResponse {
+  // session_id is echoed from the request.
+  string session_id = 1;
+  // tenant_id is the verified principal tenant.
+  string tenant_id = 2;
+  // usage is the accumulated normalized token usage across the session.
+  Usage usage = 3;
+  // cost_usd is the accumulated cost in USD across the session.
+  double cost_usd = 4;
+  // num_turns is the number of completed turns so far.
+  int64 num_turns = 5;
+  // source is the provenance of these totals; v1 is always USAGE_SOURCE_EVENT_FOLD.
+  UsageSource source = 6;
 }
 
 // PermissionMode is the session's operating mode for the allow/deny/ask pipeline,
