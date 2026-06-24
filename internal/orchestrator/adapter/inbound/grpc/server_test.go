@@ -46,6 +46,12 @@ type tailingEventLog struct {
 	created      []string                   // session ids passed to CreateSession, in order
 	createdModes []domain.PermissionMode    // mode passed to CreateSession, parallel to created
 	createErr    error                      // optional error returned by CreateSession
+
+	// adminSessions is the per-session control/lineage projection the Feature I
+	// ListSessions fake (admin_api_test.go) lists over (status, created_at, mode,
+	// lineage), keyed by session id. It is populated by seedAdminSession and is
+	// independent of the events map so a list test can control created_at directly.
+	adminSessions map[string]adminSession
 }
 
 // Compile-time assertions: the fake satisfies both the frozen port AND the
