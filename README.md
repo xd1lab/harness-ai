@@ -35,6 +35,7 @@ Context is treated as a finite resource — actively managed via token accountin
 - [REST API (SSE)](#rest-api-sse) — drive it from Python/curl, no SDK
 - [MCP Server mode (callee)](#mcp-server-mode-callee) — other agents delegate to Boltrope
 - [Structured output](#structured-output) — get JSON your code can parse
+- [Long-term memory](#long-term-memory) — durable, tenant-scoped recall across sessions
 - [Local dev mode (`boltrope-dev`)](#local-dev-mode-boltrope-dev) — one binary, no Docker, no keys
 - [Examples](#examples) · [How Boltrope compares](docs/comparison.md)
 - [Feature overview](#feature-overview)
@@ -258,6 +259,22 @@ curl -NfsS -X POST "localhost:8080/v1/sessions/$SESSION/run" -d '{
 ```
 
 Where the provider supports it natively — **OpenAI (Responses), Gemini, and current Anthropic models** — Boltrope sends your schema as the provider's own structured-output mode. Everywhere else (OpenAI-compatible/self-hosted endpoints, older models) it falls back to **validate-then-retry**: the final answer is checked against the schema and the model is re-asked on a mismatch, up to a cap (after which the run ends `error_max_structured_output_retries`). Either way the contract you get is identical — a schema-valid result, or an explicit, recorded failure ([ADR-0023](docs/decisions/0023-structured-output.md)).
+
+---
+
+## Long-term memory
+
+The agent can **remember things across sessions**. Memory is exposed to the model as three native tools — there's no new API to call, no proto, no facade: the model writes and recalls on its own, mid-run ([ADR-0030](docs/decisions/0030-long-term-memory-via-tools.md)).
+
+- **`memory_write`** `{namespace?, key, value, tags?}` — store a durable key/value memory (a fact, preference, or decision) that persists across sessions for this tenant. Upserts on `(namespace, key)`.
+- **`memory_read`** `{namespace?, key}` — recall a memory by key. A miss is a normal "no memory found" result, not an error.
+- **`memory_search`** `{query?, tags?, limit?}` — find memories by **case-insensitive substring** over the value, AND-filtered by **all** supplied tags. `limit` is capped; an all-empty search lists recent entries.
+
+**Tenant-isolated by construction.** In production, memory lives in a Postgres table (`agent_memory`, migration `0008`) under the same **Row-Level Security** as the event log: `FORCE ROW LEVEL SECURITY` with per-operation policies keyed on the request tenant, **fail-closed** when the tenant context is unset. **Tenant A can never read or modify tenant B's memory** — proven by an integration test against real Postgres and a unit test of the in-memory store.
+
+**Dev vs prod backing.** [`boltrope-dev`](#local-dev-mode-boltrope-dev) backs the same three tools with an **in-memory** store (a tenant-keyed map) so the feature works locally with no Postgres — enforcing the same tenant isolation via the same context seam. Production uses the **Postgres/RLS** store. The two impls live in separate packages so the dev binary keeps its pgx-free build-time fence.
+
+**Deliberately simple — no vector/RAG.** Retrieval is key/value + tag/substring, on purpose. There is **no embedding model, no vector index, and no RAG pipeline** — that me-too complexity is explicitly out of scope ([ADR-0030](docs/decisions/0030-long-term-memory-via-tools.md)). The job is durable recall of facts by key or tag, not semantic search over a corpus.
 
 ---
 

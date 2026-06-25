@@ -37,6 +37,7 @@ Context 被當作有限資源——透過 token 計量、自動壓縮(compaction
 - [REST API(SSE)](#rest-api) — 用 Python/curl 驅動,免 SDK
 - [MCP 伺服器模式(被呼叫端)](#mcp-伺服器模式被呼叫端--callee) — 其他 agent 把工作委派給 Boltrope
 - [結構化輸出](#結構化輸出) — 取得程式可解析的 JSON
+- [長期記憶](#長期記憶) — 跨會話、租戶隔離的持久回想
 - [本機開發模式 boltrope-dev](#本機開發模式-boltrope-dev) — 單一執行檔,免 Docker、免金鑰
 - [範例](#範例) · [Boltrope 與其他工具的比較](docs/comparison.md)
 - [功能總覽](#功能總覽)
@@ -258,6 +259,22 @@ curl -NfsS -X POST "localhost:8080/v1/sessions/$SESSION/run" -d '{
 ```
 
 在供應商原生支援的地方——**OpenAI(Responses)、Gemini,以及目前的 Anthropic 模型**——Boltrope 會把你的 schema 當成供應商自己的結構化輸出模式送出。其他地方(OpenAI 相容/自架端點、較舊的模型)則退回**驗證後重試**:最終答案會對 schema 檢查,不符就再問模型一次,直到上限(之後該次執行以 `error_max_structured_output_retries` 結束)。無論走哪條路,你拿到的契約都一樣——一個符合 schema 的結果,或一個明確、有紀錄的失敗([ADR-0023](docs/decisions/0023-structured-output.md))。
+
+---
+
+## 長期記憶
+
+agent 能**跨會話記住事情**。記憶以三個原生工具的形式提供給模型——沒有新的 API 要呼叫、沒有 proto、沒有 facade:模型在執行過程中自行寫入與回想([ADR-0030](docs/decisions/0030-long-term-memory-via-tools.md))。
+
+- **`memory_write`** `{namespace?, key, value, tags?}` — 為此租戶儲存一份跨會話持久的鍵/值記憶(一項事實、偏好或決策)。以 `(namespace, key)` upsert。
+- **`memory_read`** `{namespace?, key}` — 依 key 回想記憶。找不到是正常的「no memory found」結果,而非錯誤。
+- **`memory_search`** `{query?, tags?, limit?}` — 以**不分大小寫的子字串**比對 value 來尋找記憶,並以**所有**給定的標籤做 AND 過濾。`limit` 有上限;全空的搜尋會列出最近的項目。
+
+**設計上即租戶隔離。** 在生產環境,記憶存放在 Postgres 資料表(`agent_memory`,migration `0008`),受與事件日誌相同的 **Row-Level Security** 保護:`FORCE ROW LEVEL SECURITY` 加上以請求租戶為鍵的逐操作策略,在租戶上下文未設定時**fail-closed**。**租戶 A 永遠無法讀取或修改租戶 B 的記憶**——這由一個對真實 Postgres 的整合測試,以及一個對記憶體儲存的單元測試證明。
+
+**開發 vs 生產的後端。** [`boltrope-dev`](#本機開發模式-boltrope-dev) 以**記憶體**儲存(一個以租戶為鍵的 map)支撐同樣的三個工具,讓此功能在本機免 Postgres 即可運作——並透過同一個上下文接縫強制同樣的租戶隔離。生產則使用 **Postgres/RLS** 儲存。兩種實作分屬不同套件,讓 dev 執行檔維持其免 pgx 的建置期圍籬。
+
+**刻意保持簡單——無向量/RAG。** 檢索是鍵/值 + 標籤/子字串,這是刻意的。**沒有 embedding 模型、沒有向量索引、也沒有 RAG 管線**——那種人云亦云的複雜度被明確排除在範圍外([ADR-0030](docs/decisions/0030-long-term-memory-via-tools.md))。它的任務是依 key 或標籤對事實做持久回想,而非對語料庫做語意搜尋。
 
 ---
 
