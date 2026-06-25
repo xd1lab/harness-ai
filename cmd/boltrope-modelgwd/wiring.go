@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"google.golang.org/grpc"
@@ -64,6 +65,25 @@ type gatewaySettings struct {
 	PricingFile string
 	// TrustDomain is the SPIFFE trust domain for inter-service mTLS.
 	TrustDomain string
+	// NativeSchema, when true (BOLTROPE_MODELGW_NATIVE_SCHEMA truthy), opts the
+	// configured endpoint into native strict JSON-schema structured output by
+	// installing an all-models capability override on the shared registry
+	// (AC-17 / ADR-0029). It exists so a self-hosted / OpenAI-compatible
+	// endpoint that supports native json_schema can advertise it WITHOUT any
+	// code change — the conservative default (false) is unchanged when unset.
+	NativeSchema bool
+}
+
+// truthy reports whether s is a recognized affirmative value (case-insensitive):
+// "1", "true", "yes", or "on". Anything else (including "") is false. This is a
+// small local helper so modelgwd does not depend on another command's package.
+func truthy(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 // envOr returns the value of env var key, or def when it is unset/empty.
@@ -84,9 +104,31 @@ func loadGatewaySettings() gatewaySettings {
 		OpenAIBaseURL: envOr("BOLTROPE_MODELGW_OPENAI_BASE_URL", "http://localhost:11434/v1"),
 		// Not BOLTROPE_MODELGW_*: the pricing file is shared with the
 		// orchestrator so both daemons price a turn identically.
-		PricingFile: os.Getenv("BOLTROPE_PRICING_FILE"),
-		TrustDomain: envOr("BOLTROPE_TRUST_DOMAIN", "boltrope.local"),
+		PricingFile:  os.Getenv("BOLTROPE_PRICING_FILE"),
+		TrustDomain:  envOr("BOLTROPE_TRUST_DOMAIN", "boltrope.local"),
+		NativeSchema: truthy(os.Getenv("BOLTROPE_MODELGW_NATIVE_SCHEMA")),
 	}
+}
+
+// applyCapsOverride installs the AC-17 production capability override on reg for
+// endpoint when the BOLTROPE_MODELGW_NATIVE_SCHEMA env (read via the injected env
+// accessor) is truthy. It sets an all-models override turning on native strict
+// JSON-schema structured output for that endpoint, so a self-hosted /
+// OpenAI-compatible endpoint opts in WITHOUT any code change. When the env is
+// unset/falsey it is a no-op, leaving the conservative per-model default intact.
+//
+// It targets the SAME registry instance that backs both the provider and the
+// gateway Service; the registry resolves live per request, so applying the
+// override after construction still takes effect (ADR-0023 single override
+// surface). The env accessor is injected (not os.Getenv directly) so the seam is
+// unit-testable without process-global state.
+func applyCapsOverride(reg *capabilities.Registry, endpoint string, env func(string) string) {
+	if !truthy(env("BOLTROPE_MODELGW_NATIVE_SCHEMA")) {
+		return
+	}
+	reg.SetEndpointOverride(endpoint, capabilities.EndpointOverride{
+		AllModels: &llm.Capabilities{SupportsJSONSchemaStrict: true},
+	})
 }
 
 // loadCostFunc returns the per-turn cost function: [pricing.Cost] when path is
@@ -213,6 +255,14 @@ func Run(ctx context.Context, cfg *config.Config, logw io.Writer) error {
 		_ = tel.Shutdown(ctx)
 		return err
 	}
+
+	// Production capability override (AC-17 / ADR-0029): when configured, opt the
+	// resolved endpoint into native strict JSON-schema structured output on the
+	// SAME shared registry that backs both the provider's native-output gate and
+	// the Service's Capabilities RPC. The endpoint name is only known after
+	// buildProvider, but the registry resolves live per request so this
+	// post-construction override still takes effect before any request is served.
+	applyCapsOverride(caps, endpoint, os.Getenv)
 
 	// Decorate with the harness retry policy (deterministic clock/jitter in tests;
 	// system clock + crypto-seeded jitter in production via newJitter).
