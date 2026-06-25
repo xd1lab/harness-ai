@@ -547,6 +547,7 @@ func TestScenario_PlanModeHoldsMutatingTool(t *testing.T) {
 			domain.EventMessageAppended,   // user task
 			domain.EventTurnStarted,       // turn 1
 			domain.EventAssistantMessage,  // tool_call
+			domain.EventApprovalRequested, // durable pre-block ask record (ADR-0032, AC-3.3)
 			domain.EventPermissionDecided, // ASK, resolved denied (no ToolExecutionStarted)
 			domain.EventToolResult,        // synthetic error observation fed back
 			domain.EventMessageAppended,   // results fed back (tool role)

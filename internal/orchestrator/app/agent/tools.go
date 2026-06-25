@@ -545,4 +545,10 @@ const (
 	// reasonHookBlocked is the [domain.PermissionDecided.Reason] recorded when a
 	// PreToolUse hook blocks a call (FR-EXT-03 AC-1).
 	reasonHookBlocked = "hook_blocked"
+
+	// reasonSuspendedApprovalAbandoned is the [domain.PermissionDecided.Reason]
+	// recorded when a suspended approval re-raised on resume could not be honored
+	// within [Config.ResumeApprovalTimeout] (no human answered) — the durable
+	// auditable fallback close, never a silent abort (ADR-0032; AC-3.8).
+	reasonSuspendedApprovalAbandoned = "suspended-approval-abandoned-on-resume"
 )

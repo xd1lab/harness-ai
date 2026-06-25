@@ -55,6 +55,7 @@ import (
 	"fmt"
 	"runtime"
 	"strconv"
+	"time"
 
 	"github.com/xd1lab/harness-ai/internal/orchestrator/app"
 	"github.com/xd1lab/harness-ai/internal/orchestrator/app/agentctx"
@@ -159,6 +160,19 @@ type Config struct {
 	// the spawn_subagent intercept passes Depth+1 to [app.SubAgentPort.Spawn]. The
 	// zero value (root) preserves current behavior for runs that never spawn.
 	Depth int
+	// ResumeApprovalTimeout bounds how long a re-raised approval may block on the
+	// gate during resume adjudication (FIX 3 re-raise; ADR-0032). On resume, a turn
+	// suspended awaiting approval re-raises the ask via [app.ApprovalGate.Request]
+	// so a reconnecting client can still allow/deny it; that Request blocks until a
+	// human resolves it. This deadline is MANDATORY: the in-memory gate loses its
+	// pending map on a real process restart, so a re-raised ask with NO connected
+	// subscriber would block forever. When the deadline elapses (or no client ever
+	// answers) the loop falls back to the durable-auditable close
+	// (PermissionDecided{AskDenied, reason "suspended-approval-abandoned-on-resume"}
+	// + TurnAborted{ErrorDuringExecution}) rather than hang. A non-positive value
+	// uses [DefaultResumeApprovalTimeout], applied in [NewLoop]; the deadline is
+	// measured against the injected [clock.Clock] so it is deterministic under test.
+	ResumeApprovalTimeout time.Duration
 }
 
 const (
@@ -173,6 +187,11 @@ const (
 	// termination DEFAULT-ON for a normally-constructed loop (FIX 2). A negative
 	// Config value is an explicit opt-out and is left untouched (detection off).
 	DefaultDoomLoopThreshold = 3
+	// DefaultResumeApprovalTimeout is the bound applied in [NewLoop] when
+	// [Config.ResumeApprovalTimeout] is non-positive. It caps how long a re-raised
+	// approval may block on resume so a restart with no connected client cannot
+	// hang the run forever (FIX 3 re-raise; ADR-0032).
+	DefaultResumeApprovalTimeout = 5 * time.Minute
 )
 
 // RunInput is the input to one [Loop.Run]: the session to run and the new user
@@ -227,6 +246,11 @@ func NewLoop(deps Deps, cfg Config) *Loop {
 	// (FIX 2; see [Config.DoomLoopThreshold] and [DefaultDoomLoopThreshold]).
 	if cfg.DoomLoopThreshold == 0 {
 		cfg.DoomLoopThreshold = DefaultDoomLoopThreshold
+	}
+	// Bound a re-raised approval's blocking wait on resume so a restart with no
+	// connected client cannot hang forever (FIX 3 re-raise; ADR-0032).
+	if cfg.ResumeApprovalTimeout <= 0 {
+		cfg.ResumeApprovalTimeout = DefaultResumeApprovalTimeout
 	}
 	l := &Loop{deps: deps, cfg: cfg}
 	l.sink = deps.Sink
@@ -293,8 +317,16 @@ func (l *Loop) Run(ctx context.Context, in RunInput) (RunResult, error) {
 	st.headSeq = sess.HeadSeq
 
 	// --- Resume adjudication (T-LOOP-07) -----------------------------------
-	if err := l.adjudicateResume(ctx, st); err != nil {
+	// adjudicateResume may TERMINATE the run when a suspended approval is abandoned
+	// on resume (the bounded re-raise expired with no human answer): the durable
+	// auditable close already recorded the decision + TurnAborted, so the run is
+	// over and must not generate a fresh turn (ADR-0032; AC-3.8).
+	resumeRes, terminated, err := l.adjudicateResume(ctx, st)
+	if err != nil {
 		return RunResult{}, err
+	}
+	if terminated {
+		return resumeRes, nil
 	}
 
 	// --- Append the new user message ---------------------------------------
@@ -347,18 +379,47 @@ func (l *Loop) Run(ctx context.Context, in RunInput) (RunResult, error) {
 // executions are left for the loop's normal flow; mutating ones are at-most-once
 // and never re-run here. Recovery is a pure fold; this method performs the
 // resulting appends.
-func (l *Loop) adjudicateResume(ctx context.Context, st *runState) error {
+//
+// It returns terminated=true (with the assembled RunResult) when a suspended
+// approval is ABANDONED on resume — the bounded re-raise expired with no human
+// answer, so the durable-auditable close already recorded the decision +
+// TurnAborted and the run is over (ADR-0032; AC-3.8). On the TARGET re-raise
+// (allowed/denied) or a clean log it returns terminated=false so Run continues to
+// the normal turn loop.
+func (l *Loop) adjudicateResume(ctx context.Context, st *runState) (RunResult, bool, error) {
 	events, err := l.deps.EventLog.Load(ctx, st.sessionID, 0)
 	if err != nil {
-		return fmt.Errorf("agent: load for recovery: %w", err)
+		return RunResult{}, false, fmt.Errorf("agent: load for recovery: %w", err)
 	}
 	if len(events) == 0 {
-		return nil
+		return RunResult{}, false, nil
 	}
 
 	plan, err := recovery.Analyze(events, l.sideEffectLookup(ctx, st.sessionID))
 	if err != nil {
-		return fmt.Errorf("agent: recovery analyze: %w", err)
+		return RunResult{}, false, fmt.Errorf("agent: recovery analyze: %w", err)
+	}
+
+	// Re-raise each suspended approval BEFORE closing generic open turns: a turn
+	// awaiting a human ask at crash time is EXCLUDED from plan.OpenTurns (recovery
+	// classifies it as a SuspendedApproval), so without this it would be silently
+	// dropped on resume — the durable ApprovalRequested would never be honored. For
+	// each suspended ask the loop re-raises the gate (bounded), records the
+	// resolution, and — if allowed — dispatches the gated tool and continues the
+	// turn; if denied it feeds a denied observation; if ABANDONED (the bounded wait
+	// expired) it closes the turn with an explicit, auditable record and terminates
+	// the run (never a silent abort) (ADR-0032; AC-3.5/3.7/3.8). It is done before
+	// the OpenTurns loop so a suspended turn's id is never also processed here.
+	for _, sa := range plan.SuspendedApprovals {
+		abandoned, err := l.resumeSuspendedApproval(ctx, st, sa, assistantSeqOf(events, sa.TurnID))
+		if err != nil {
+			return RunResult{}, false, err
+		}
+		if abandoned {
+			// The durable-auditable close already appended PermissionDecided +
+			// TurnAborted; the run is over and must not generate a fresh turn.
+			return l.result(st, domain.ErrorDuringExecution), true, nil
+		}
 	}
 
 	// Close each open turn with a TurnAborted carrying recovered usage so the
@@ -373,7 +434,7 @@ func (l *Loop) adjudicateResume(ctx context.Context, st *runState) error {
 			UsageSoFar: ot.RecoveredUsage,
 			CostUSD:    cost,
 		}); err != nil {
-			return err
+			return RunResult{}, false, err
 		}
 	}
 
@@ -387,7 +448,193 @@ func (l *Loop) adjudicateResume(ctx context.Context, st *runState) error {
 	// speculatively re-run anything here, keeping resume side-effect-free.
 	_ = plan.UnknownExecutions
 
+	return RunResult{}, false, nil
+}
+
+// resumeSuspendedApproval re-raises the human ask gate for a turn that was
+// suspended awaiting approval at crash time (a durable [domain.ApprovalRequested]
+// with no matching [domain.PermissionDecided]; ADR-0032; AC-3.5/3.7/3.8).
+//
+// TARGET LEVEL (re-raise): it reconstructs the gated [llm.ToolCall] from the
+// persisted ApprovalRequested and calls [app.ApprovalGate.Request] via the same
+// path the live gate uses, so a reconnecting client's SubscribeApprovals
+// subscriber is re-notified and the operator can still allow/deny after a restart.
+// The block is BOUNDED by [Config.ResumeApprovalTimeout] (measured on the injected
+// clock): the in-memory gate loses its pending map on a real process restart, so an
+// UNBOUNDED re-raise with no connected subscriber would hang forever — the bound is
+// mandatory. On resolution the AFTER-resolution [domain.PermissionDecided] is
+// appended (mirroring the live gateCall record); if AskAllowed the gated tool is
+// dispatched on the suspended turn (ToolExecutionStarted -> ToolResult -> tool
+// message) so the run continues exactly as if the ask had never been interrupted;
+// if AskDenied a synthetic denied ToolResult is fed back so the model can adapt.
+// Either way the suspended turn is rejoined by the normal turn loop (the gated
+// AssistantMessage already closed the model round-trip; the loop generates the next
+// turn from the now-complete window).
+//
+// FALLBACK LEVEL (durable-auditable close): if the bounded wait elapses (no client
+// answered) or the gate errors, the ask cannot be honored. Rather than a silent
+// generic TurnAborted that erases the fact a human decision was pending, it appends
+// an EXPLICIT auditable record: PermissionDecided{Decision:Ask, Resolved:AskDenied,
+// Reason:"suspended-approval-abandoned-on-resume"} bracketing the durable
+// ApprovalRequested, then TurnAborted{ErrorDuringExecution} closing the turn. The
+// integration test drives the TARGET path with a subscriber registered before
+// resume; the FALLBACK path is what protects an unattended restart.
+//
+// It returns abandoned=true ONLY when the bounded re-raise expired with no human
+// answer and the FALLBACK durable-auditable close was taken (the caller then
+// terminates the run). The TARGET allowed/denied paths return abandoned=false so
+// the run continues.
+func (l *Loop) resumeSuspendedApproval(ctx context.Context, st *runState, sa recovery.SuspendedApproval, assistantSeq int64) (bool, error) {
+	// The suspended turn becomes the current turn so any TurnAborted/continuation
+	// attaches to the right turn id.
+	st.currentTurnID = sa.TurnID
+	st.lastAssistantSeq = assistantSeq
+
+	call := llm.ToolCall{ID: sa.CallID, Name: sa.ToolName, Args: sa.Args}
+
+	// Bound the re-raise so an unattended restart (no connected subscriber) cannot
+	// block forever (MANDATORY). The deadline is measured on the injected clock.
+	reqCtx, cancel := l.withApprovalTimeout(ctx)
+	defer cancel()
+
+	resolution, rerr := l.deps.Approvals.Request(reqCtx, app.ApprovalRequest{
+		SessionID: st.sessionID,
+		CallID:    sa.CallID,
+		ToolName:  sa.ToolName,
+		Reason:    sa.Reason,
+		Args:      sa.Args,
+	})
+	if rerr != nil {
+		// If the PARENT ctx was cancelled (a real interrupt), propagate it as a run
+		// error so the caller surfaces the cancellation rather than mislabeling it as
+		// an abandoned approval.
+		if ctx.Err() != nil {
+			return false, fmt.Errorf("agent: resume approval re-raise: %w", rerr)
+		}
+		// Otherwise the bounded deadline elapsed (or the gate failed) with no human
+		// answer: FALLBACK to the durable-auditable close, then terminate the run.
+		if err := l.abandonSuspendedApproval(ctx, st, sa); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+
+	// Record the AFTER-resolution decision, bracketing the durable ApprovalRequested
+	// exactly as the live gateCall does.
+	if err := l.append(ctx, st, domain.ActorSystem, domain.PermissionDecided{
+		CallID:   sa.CallID,
+		ToolName: sa.ToolName,
+		Decision: domain.PermissionAsk,
+		Resolved: resolution,
+		Reason:   sa.Reason,
+	}); err != nil {
+		return false, err
+	}
+
+	if resolution != domain.AskAllowed {
+		// Denied by the human on resume: feed a synthetic denied observation back so
+		// the model can adapt, then let the normal turn loop generate the next turn.
+		return false, l.feedToolResult(ctx, st, call, deniedResult(call, "denied by human approval"))
+	}
+
+	// Allowed: dispatch the gated tool on the suspended turn (durable execution
+	// intent BEFORE dispatch, log-derived idempotency key), then feed the result
+	// back so the run continues. The idempotency key is reconstructed from the
+	// gated AssistantMessage's seq so a re-dispatch dedups against the durable
+	// ledger (ADR-0012; architecture §7.2).
+	idemKey := deriveIdempotencyKey(st.sessionID, assistantSeq)
+	if err := l.append(ctx, st, domain.ActorSystem, domain.ToolExecutionStarted{
+		CallID:         sa.CallID,
+		ToolName:       sa.ToolName,
+		IdempotencyKey: idemKey,
+	}); err != nil {
+		return false, err
+	}
+	res, _, err := l.execOne(ctx, st, scheduledExec{call: call, idemKey: idemKey})
+	if err != nil {
+		return false, err
+	}
+	return false, l.feedToolResult(ctx, st, call, res)
+}
+
+// abandonSuspendedApproval performs the FALLBACK durable-auditable close for a
+// suspended approval that could not be re-raised (the bounded wait elapsed with no
+// human answer on resume). It appends an EXPLICIT PermissionDecided recording the
+// abandonment (so the audit log shows the ask was denied-by-abandonment, never
+// silently lost) and then a TurnAborted closing the turn (ADR-0032; AC-3.8).
+func (l *Loop) abandonSuspendedApproval(ctx context.Context, st *runState, sa recovery.SuspendedApproval) error {
+	if err := l.append(ctx, st, domain.ActorSystem, domain.PermissionDecided{
+		CallID:   sa.CallID,
+		ToolName: sa.ToolName,
+		Decision: domain.PermissionAsk,
+		Resolved: domain.AskDenied,
+		Reason:   reasonSuspendedApprovalAbandoned,
+	}); err != nil {
+		return err
+	}
+	if err := l.append(ctx, st, domain.ActorSystem, domain.TurnAborted{
+		TurnID: sa.TurnID,
+		Reason: domain.ErrorDuringExecution,
+	}); err != nil {
+		return err
+	}
+	l.metrics.RecordRunError(string(domain.ErrorDuringExecution))
 	return nil
+}
+
+// feedToolResult appends one ToolResult for call and the single tool-role message
+// carrying it, so the resumed turn's result is recorded exactly as the live
+// handleToolCalls result loop records it and the next turn generates from the
+// complete window.
+func (l *Loop) feedToolResult(ctx context.Context, st *runState, call llm.ToolCall, r app.ToolResult) error {
+	if err := l.append(ctx, st, domain.ActorTool, domain.ToolResult{
+		CallID:    call.ID,
+		Result:    r.Content,
+		IsError:   r.IsError,
+		Truncated: r.Truncated,
+		BlobRef:   r.BlobRef,
+	}); err != nil {
+		return err
+	}
+	toolMsg := llm.Message{Role: llm.RoleTool, Content: []llm.ContentPart{{ToolResult: &llm.ToolResult{
+		CallID:  call.ID,
+		Content: r.Content,
+		IsError: r.IsError,
+	}}}}
+	return l.append(ctx, st, domain.ActorTool, domain.MessageAppended{Message: toolMsg})
+}
+
+// withApprovalTimeout derives a child context that is cancelled when the parent is
+// cancelled OR when [Config.ResumeApprovalTimeout] elapses on the injected clock.
+// It uses the injected [clock.Clock] (not time.After) so the bound is deterministic
+// under test (NFR-TEST-01). The returned cancel func MUST be called to release the
+// timer.
+func (l *Loop) withApprovalTimeout(parent context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(parent)
+	timer := l.deps.Clock.NewTimer(l.cfg.ResumeApprovalTimeout)
+	go func() {
+		select {
+		case <-timer.C():
+			cancel()
+		case <-ctx.Done():
+			timer.Stop()
+		}
+	}()
+	return ctx, cancel
+}
+
+// assistantSeqOf returns the seq of the AssistantMessage for turnID from the loaded
+// events, used to reconstruct a re-dispatched tool call's log-derived idempotency
+// key on resume. It returns 0 when no AssistantMessage is found for the turn (the
+// derived key is still deterministic, and a 0-seq turn cannot carry a tool call in
+// practice).
+func assistantSeqOf(events []domain.EventEnvelope, turnID string) int64 {
+	for _, env := range events {
+		if am, ok := env.Event.(domain.AssistantMessage); ok && am.TurnID == turnID {
+			return env.Seq
+		}
+	}
+	return 0
 }
 
 // sideEffectLookup builds a [recovery.SideEffectLookup] from the tool-runtime's

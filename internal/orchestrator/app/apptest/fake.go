@@ -504,6 +504,17 @@ func (f *FakeApprovalGate) Request(ctx context.Context, req app.ApprovalRequest)
 	}
 }
 
+// Pending reports whether a Request for (sessionID, callID) is currently
+// registered and blocking. It lets a test synchronize on a re-raised ask having
+// landed before driving a deadline or resolution, without sleeping.
+func (f *FakeApprovalGate) Pending(sessionID, callID string) bool {
+	key := pendingKey(sessionID, callID)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.pending[key]
+	return ok
+}
+
 // Resolve delivers the resolution for the pending (sessionID, callID) request.
 // It spins briefly to let a concurrent Request goroutine register its channel
 // before giving up, which avoids a test-only race when Request and Resolve are
