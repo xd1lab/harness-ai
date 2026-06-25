@@ -13,7 +13,6 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	genproto "github.com/xd1lab/harness-ai/gen/boltrope/v1"
-	"github.com/xd1lab/harness-ai/internal/modelgateway/adapter/outbound/providers/stub"
 	igrpc "github.com/xd1lab/harness-ai/internal/orchestrator/adapter/inbound/grpc"
 	"github.com/xd1lab/harness-ai/internal/orchestrator/adapter/inbound/rest"
 	"github.com/xd1lab/harness-ai/internal/orchestrator/app"
@@ -105,19 +104,23 @@ func newServer(opts serveOpts) (*serveResult, error) {
 		return nil, fmt.Errorf("boltrope-dev: build policy engine: %w", err)
 	}
 
-	// Resolve the model id once (default "stub") and thread it into BOTH the agent
-	// loop Config and the gRPC DefaultModel, replacing the previously-hardcoded
-	// literals. A later task selects a real model provider when opts.ModelURL is
-	// set; until then the stub provider backs every model id.
-	modelID := opts.Model
-	if modelID == "" {
-		modelID = defaultModel
-	}
+	// Resolve the model port + id once (ADR-0029). By default this is devModel over
+	// the keyless stub provider with id "stub"; when opts.ModelURL is set it is the
+	// openaicompat provider (wrapped by the SAME devModel) with id opts.Model. The
+	// resolved id is threaded into BOTH the agent loop Config and the gRPC
+	// DefaultModel, replacing the previously-hardcoded "stub" literals. The API key
+	// VALUE (if any) is read inside resolveModel from opts.Env and never stored here.
+	model, modelID, _, _ := resolveModel(parsedRunFlags{
+		model:              opts.Model,
+		modelURL:           opts.ModelURL,
+		modelAPIKeyEnv:     opts.ModelAPIKeyEnv,
+		enableNativeSchema: opts.EnableNativeSchema,
+	}, opts.Env)
 
 	gate := newDenyGate()
 	deps := agent.Deps{
 		EventLog:  store,
-		Model:     newDevModel(stub.New()),
+		Model:     model,
 		Tools:     newRuntime(),
 		Approvals: gate,
 		Hooks:     newAllowHooks(),

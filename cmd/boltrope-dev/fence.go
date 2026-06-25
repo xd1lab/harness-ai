@@ -335,8 +335,11 @@ func writeBanner(w io.Writer, cfg parsedRunFlags) {
 		b.WriteString("  Sandbox     : NO-EXEC (model-generated shell is refused, never run on your host)\n")
 	}
 	if cfg.modelURL != "" {
-		// Endpoint + id ONLY. The API key VALUE is never carried into the banner.
-		fmt.Fprintf(&b, "  Model       : %s %s\n", cfg.modelURL, cfg.model)
+		// Endpoint label + base URL + model id ONLY. The API key VALUE is never
+		// carried into the banner. The registry endpoint label (modelEndpoint) is
+		// the same name the openaicompat provider binds to and SetEndpointOverride
+		// keys on, so it is shown for operator clarity (ADR-0029 AC-14).
+		fmt.Fprintf(&b, "  Model       : %s %s %s\n", modelEndpoint, cfg.modelURL, cfg.model)
 	}
 	fmt.Fprintf(&b, "  gRPC        : %s\n", cfg.grpcAddr)
 	fmt.Fprintf(&b, "  REST/SSE    : %s\n", cfg.httpAddr)
