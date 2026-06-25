@@ -34,6 +34,10 @@ func TestDecodePayloadRoundTrip(t *testing.T) {
 		domain.BypassModeActivated{Principal: "ops", PriorMode: domain.ModeDefault, NewMode: domain.ModeBypass},
 		domain.MCPToolApprovalRequested{ServerName: "srv", ServerVersion: "1.0", ToolName: "x", UntrustedDescription: "desc"},
 		domain.MCPToolApprovalResolved{ServerName: "srv", ToolName: "x", Granted: true},
+		domain.PlanUpdated{TurnID: "t1", Items: []domain.PlanItem{
+			{Content: "step one", Status: "completed"},
+			{Content: "step two", Status: "in_progress"},
+		}},
 	}
 
 	for _, want := range samples {

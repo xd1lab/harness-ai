@@ -67,6 +67,11 @@ func eventCases() []struct {
 			ServerName: "files-mcp", ServerVersion: "1.2.3", ToolName: "fs_read", UntrustedDescription: "reads files (UNTRUSTED)",
 		}},
 		{EventMCPToolApprovalResolved, MCPToolApprovalResolved{ServerName: "files-mcp", ToolName: "fs_read", Granted: true}},
+		{EventPlanUpdated, PlanUpdated{TurnID: "t-1", Items: []PlanItem{
+			{Content: "explore the codebase", Status: "completed"},
+			{Content: "write the fix", Status: "in_progress"},
+			{Content: "add tests", Status: "pending"},
+		}}},
 	}
 }
 
@@ -78,6 +83,34 @@ var allEventTypes = []EventType{
 	EventToolResult, EventToolResultCleared, EventTurnAborted, EventTurnFinished,
 	EventCompactionPerformed, EventPermissionDecided, EventWorkspaceReset,
 	EventBypassModeActivated, EventMCPToolApprovalRequested, EventMCPToolApprovalResolved,
+	EventPlanUpdated,
+}
+
+// TestPlanUpdated_Validate asserts the planning event's status validator accepts
+// only the closed status set (pending|in_progress|completed) and rejects any
+// out-of-range status, so the todo_write intercept can never persist an invalid
+// PlanUpdated (Gap#3 AC-9). RED until PlanUpdated + PlanItem + Validate land.
+func TestPlanUpdated_Validate(t *testing.T) {
+	valid := PlanUpdated{TurnID: "t-1", Items: []PlanItem{
+		{Content: "a", Status: "pending"},
+		{Content: "b", Status: "in_progress"},
+		{Content: "c", Status: "completed"},
+	}}
+	if err := valid.Validate(); err != nil {
+		t.Errorf("valid PlanUpdated.Validate() = %v, want nil", err)
+	}
+	// An empty plan is valid (clears/records an empty plan note).
+	if err := (PlanUpdated{TurnID: "t-1"}).Validate(); err != nil {
+		t.Errorf("empty PlanUpdated.Validate() = %v, want nil (empty plan is valid)", err)
+	}
+	// An out-of-range status is rejected.
+	if err := (PlanUpdated{TurnID: "t-1", Items: []PlanItem{{Content: "x", Status: "bogus"}}}).Validate(); err == nil {
+		t.Error("PlanUpdated with status \"bogus\" must fail Validate()")
+	}
+	// An empty content is rejected.
+	if err := (PlanUpdated{TurnID: "t-1", Items: []PlanItem{{Content: "", Status: "pending"}}}).Validate(); err == nil {
+		t.Error("PlanUpdated with empty item content must fail Validate()")
+	}
 }
 
 // TestEventPayloads_TagSealAndJSONRoundTrip folds every payload kind through

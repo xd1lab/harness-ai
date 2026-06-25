@@ -441,6 +441,75 @@ func TestGetStateAtSeq_RejectsForeignTenant(t *testing.T) {
 		"tenant B cannot time-travel tenant A's session (ownership)")
 }
 
+// TestListSessionEvents_PlanUpdatedNonRedacted asserts the NEW planning event
+// (domain.PlanUpdated, Gap#3) is surfaced in the read-plane as a NON-redacted
+// descriptor with a bounded, safe summary — contrast with SessionStarted, which
+// is always redacted (the system prompt is withheld). RED until summarizeEvent
+// gains a domain.PlanUpdated case. (Gap#3 AC-13.)
+func TestListSessionEvents_PlanUpdatedNonRedacted(t *testing.T) {
+	log := newTailingEventLog()
+	appendEvent(t, log, "sess-plan", domain.ActorSystem, domain.SessionStarted{SystemPrompt: "secret prompt"})
+	appendEvent(t, log, "sess-plan", domain.ActorAssistant, domain.PlanUpdated{
+		TurnID: "t-1",
+		Items: []domain.PlanItem{
+			{Content: "explore the codebase", Status: "completed"},
+			{Content: "write the fix", Status: "in_progress"},
+			{Content: "add tests", Status: "pending"},
+		},
+	})
+
+	h := devHarness(t, "tenant-A", noopRunner(log), log)
+	resp, err := h.client.ListSessionEvents(context.Background(), &genproto.ListSessionEventsRequest{
+		TenantId: "tenant-A", SessionId: "sess-plan", PageSize: 1000,
+	})
+	require.NoError(t, err)
+
+	var planDesc, sessDesc *genproto.EventDescriptor
+	for _, d := range resp.GetEvents() {
+		switch d.GetEventType() {
+		case string(domain.EventPlanUpdated):
+			planDesc = d
+		case string(domain.EventSessionStarted):
+			sessDesc = d
+		}
+	}
+	require.NotNil(t, planDesc, "the PlanUpdated descriptor must be listed")
+	assert.Equal(t, string(domain.EventPlanUpdated), planDesc.GetEventType())
+	assert.False(t, planDesc.GetRedacted(), "PlanUpdated is non-secret; it must NOT be redacted")
+	assert.False(t, planDesc.GetHasBlob(), "PlanUpdated never references a blob")
+	assert.NotEmpty(t, planDesc.GetSummary(), "PlanUpdated descriptor carries a bounded summary")
+
+	// Contrast: SessionStarted is always redacted (system prompt withheld).
+	require.NotNil(t, sessDesc)
+	assert.True(t, sessDesc.GetRedacted(), "SessionStarted stays redacted (sanity contrast)")
+}
+
+// TestGetStateAtSeq_PlanUpdatedIgnoredInBilling asserts time-travel includes a
+// PlanUpdated event in its window range without disturbing the folded billing
+// totals (foldEventTotals must safely ignore it — no panic, no cost/turn change).
+// RED until foldEventTotals handles the new sealed event without a default panic.
+// (Gap#3 AC-14.)
+func TestGetStateAtSeq_PlanUpdatedIgnoredInBilling(t *testing.T) {
+	log := newTailingEventLog()
+	appendEvent(t, log, "sess-ttp", domain.ActorSystem, domain.SessionStarted{SystemPrompt: "sys"})
+	appendEvent(t, log, "sess-ttp", domain.ActorAssistant, domain.PlanUpdated{
+		TurnID: "t-1", Items: []domain.PlanItem{{Content: "do it", Status: "pending"}},
+	})
+	appendEvent(t, log, "sess-ttp", domain.ActorSystem, domain.TurnFinished{
+		TurnID: "t-1", Reason: domain.Success, Usage: llm.Usage{OutputTokens: 11}, CostUSD: 0.05, NumTurns: 1,
+	})
+
+	h := devHarness(t, "tenant-A", noopRunner(log), log)
+	resp, err := h.client.GetStateAtSeq(context.Background(), &genproto.GetStateAtSeqRequest{
+		TenantId: "tenant-A", SessionId: "sess-ttp", AtSeq: 3,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp.GetSession())
+	assert.Equal(t, int64(1), resp.GetSession().GetNumTurns(), "the TurnFinished still folds to 1 turn")
+	assert.InDelta(t, 0.05, resp.GetSession().GetTotalCostUsd(), 1e-9, "PlanUpdated does not change cost")
+	assert.Equal(t, int64(11), resp.GetSession().GetTotalUsage().GetOutputTokens(), "PlanUpdated does not change usage")
+}
+
 // noopRunner returns a Runner that does nothing (the read RPCs never invoke the
 // loop), so a read test never needs to script run behavior.
 func noopRunner(log *tailingEventLog) *fakeRunner {
