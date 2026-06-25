@@ -46,6 +46,14 @@ func WithTenant(ctx context.Context, tenantID string) context.Context {
 // TenantFromContext returns the verified tenant id carried by ctx, or
 // [ErrNoTenant] if none is present (or it is empty). Tenant-scoped stores use it
 // to fail closed rather than issue an unscoped query.
+//
+// The name intentionally mirrors the frozen orchestrator
+// [github.com/xd1lab/harness-ai/internal/orchestrator/infra/db].TenantFromContext
+// API verbatim (ADR-0030 AC-4) so the two RLS tenant-context helpers stay
+// name-compatible; the resulting stutter with package `tenant` is contractual,
+// hence the revive suppression below.
+//
+//nolint:revive // contractual name parity with infra/db.TenantFromContext (ADR-0030 AC-4)
 func TenantFromContext(ctx context.Context) (string, error) {
 	v, ok := ctx.Value(tenantCtxKey{}).(string)
 	if !ok || v == "" {

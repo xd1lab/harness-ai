@@ -103,7 +103,8 @@ func provisionOwnerDSN(ctx context.Context, t *testing.T) (string, string) {
 		t.Logf("memory integration: using external DSN from %s", envTestDatabaseURL)
 		return dsn, "external-dsn"
 	}
-	container, err := tcpostgres.Run(ctx, containerImage(),
+	container, err := tcpostgres.Run(
+		ctx, containerImage(),
 		tcpostgres.WithDatabase(containerDB),
 		tcpostgres.WithUsername(containerUser),
 		tcpostgres.WithPassword(containerPassword),
@@ -134,7 +135,8 @@ func grantAppLogin(ctx context.Context, t *testing.T, ownerDSN string) {
 		t.Fatalf("owner connect: %v", err)
 	}
 	defer func() { _ = conn.Close(ctx) }()
-	if _, err := conn.Exec(ctx,
+	if _, err := conn.Exec(
+		ctx,
 		fmt.Sprintf("ALTER ROLE %s WITH LOGIN PASSWORD '%s'", appRole, appPassword),
 	); err != nil {
 		t.Fatalf("grant app login: %v", err)
@@ -222,10 +224,12 @@ func (d *minimalPgxDriver) Lock() error {
 	_, err := d.conn.Exec(d.ctx, "SELECT pg_advisory_lock($1)", advisoryLockKey)
 	return err
 }
+
 func (d *minimalPgxDriver) Unlock() error {
 	_, err := d.conn.Exec(d.ctx, "SELECT pg_advisory_unlock($1)", advisoryLockKey)
 	return err
 }
+
 func (d *minimalPgxDriver) Run(r io.Reader) error {
 	body, err := io.ReadAll(r)
 	if err != nil {
@@ -237,6 +241,7 @@ func (d *minimalPgxDriver) Run(r io.Reader) error {
 	_, err = d.conn.Exec(d.ctx, string(body))
 	return err
 }
+
 func (d *minimalPgxDriver) SetVersion(version int, dirty bool) error {
 	if err := d.ensureVersionTable(); err != nil {
 		return err
@@ -258,6 +263,7 @@ func (d *minimalPgxDriver) SetVersion(version int, dirty bool) error {
 	}
 	return tx.Commit(d.ctx)
 }
+
 func (d *minimalPgxDriver) Version() (int, bool, error) {
 	if err := d.ensureVersionTable(); err != nil {
 		return database.NilVersion, false, err
@@ -276,9 +282,11 @@ func (d *minimalPgxDriver) Version() (int, bool, error) {
 	}
 	return ver, dirty, nil
 }
+
 func (d *minimalPgxDriver) Drop() error {
 	return errors.New("memory harness: Drop not supported (forward-only)")
 }
+
 func (d *minimalPgxDriver) ensureVersionTable() error {
 	const ddl = "CREATE TABLE IF NOT EXISTS " + migrationsTable +
 		" (version BIGINT NOT NULL PRIMARY KEY, dirty BOOLEAN NOT NULL)"

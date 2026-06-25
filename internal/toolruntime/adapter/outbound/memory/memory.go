@@ -97,7 +97,7 @@ func (s *Store) Put(ctx context.Context, namespace, key, value string, tags []st
 	}
 
 	// tenant_id is taken from the GUC so RLS WITH CHECK accepts the row and the
-	// PRIMARY KEY (tenant_id, namespace, mem_key) is honoured.
+	// PRIMARY KEY (tenant_id, namespace, mem_key) is honored.
 	_, err = tx.Exec(ctx, `
 		INSERT INTO agent_memory (tenant_id, namespace, mem_key, value, tags)
 		VALUES (current_setting('app.current_tenant')::uuid, $1, $2, $3, $4)
