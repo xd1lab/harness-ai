@@ -82,7 +82,7 @@ func TestLocalExec_RunsBashInDockerSandbox(t *testing.T) {
 	const marker = "boltrope-local-exec-ok"
 	stream, err := tools.ExecuteTool(ctx, orchapp.ToolExecution{
 		SessionID:      "it-sess-1",
-		Call:           llm.ToolCall{ID: "c1", Name: "bash", Args: map[string]any{"cmd": "echo " + marker}},
+		Call:           llm.ToolCall{ID: "c1", Name: "bash", Args: map[string]any{"command": "echo " + marker}},
 		IdempotencyKey: "it-idem-1",
 	})
 	if err != nil {
