@@ -17,6 +17,7 @@ package app
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/xd1lab/harness-ai/internal/toolruntime/domain"
 )
@@ -368,4 +369,86 @@ type DedupStore interface {
 	// an error if no record exists. The returned record's status drives the
 	// at-most-once decision for a mutating tool (architecture §7.2).
 	Lookup(ctx context.Context, tenantID, sessionID, idempotencyKey string) (ExecutionRecord, error)
+}
+
+// ----------------------------------------------------------------------------
+// MemoryStore — long-term, cross-session agent memory (ADR-0030). A simple
+// tenant-scoped, RLS-protected key/value store with tag/substring retrieval,
+// exposed to the model ONLY as the memory_write/memory_read/memory_search tools
+// (no proto/facade/RPC). It deliberately does NOT do vector embeddings or RAG —
+// that me-too complexity is explicitly out of scope (ADR-0030).
+// ----------------------------------------------------------------------------
+
+// DefaultMemorySearchLimit is the result cap [MemoryStore.Search] applies when
+// the caller passes limit <= 0, and the hard upper bound it clamps any larger
+// request to, so an unbounded model-driven search can never read an unbounded
+// number of rows. It is exported so the PostgreSQL and in-memory implementations
+// share one source of truth for the cap.
+const DefaultMemorySearchLimit = 50
+
+// MemoryEntry is one stored memory: a tenant-scoped key/value pair within a
+// namespace, plus retrieval tags and audit timestamps. The owning tenant is
+// NOT a field — it is carried out-of-band in the request context (see the
+// fail-closed tenant note on [MemoryStore]) and enforced by Postgres RLS, so an
+// entry can never name or cross to another tenant.
+type MemoryEntry struct {
+	// Namespace groups related memories within a tenant; it defaults to
+	// "default" when the writer does not supply one.
+	Namespace string
+	// Key is the memory key, unique within (tenant, namespace).
+	Key string
+	// Value is the stored text payload.
+	Value string
+	// Tags are optional retrieval labels; [MemoryStore.Search] AND-matches all
+	// supplied tags against this set.
+	Tags []string
+	// CreatedAt is when the entry was first written.
+	CreatedAt time.Time
+	// UpdatedAt is when the entry was last written (equal to CreatedAt until the
+	// first overwrite).
+	UpdatedAt time.Time
+}
+
+// MemoryStore is the durable, tenant-scoped key/value memory backing the
+// memory_* tools (ADR-0030). It gives the agent long-term, cross-session recall
+// without vector search: writes UPSERT by (namespace, key) and reads retrieve by
+// exact key or by tag/substring scan.
+//
+// Tenant scoping is the load-bearing invariant. Implementations read the
+// verified tenant from the tool-runtime tenant-context helper
+// ([github.com/xd1lab/harness-ai/internal/toolruntime/infra/tenant.TenantFromContext])
+// — never from a method argument — and FAIL CLOSED, returning an error, when no
+// tenant is present, so an unscoped write or read is impossible. The PostgreSQL
+// implementation additionally relies on FORCE ROW LEVEL SECURITY as the
+// in-database backstop; the in-memory dev implementation honors the same
+// context-derived isolation. Tenant A can therefore never read or modify tenant
+// B's memory. Implementations must be safe for concurrent use.
+type MemoryStore interface {
+	// Put UPSERTs value (and tags) under (namespace, key) for the context's
+	// tenant: it inserts a new entry or overwrites the value/tags of an existing
+	// one and bumps its updated_at. An empty namespace is normalised to
+	// "default" by the caller before storage. It fails closed when the context
+	// carries no tenant.
+	Put(ctx context.Context, namespace, key, value string, tags []string) error
+
+	// Get returns the entry stored under (namespace, key) for the context's
+	// tenant. found is false (with a nil error) when no such entry exists — a
+	// miss is a normal outcome, not an error. It fails closed when the context
+	// carries no tenant.
+	Get(ctx context.Context, namespace, key string) (entry MemoryEntry, found bool, err error)
+
+	// Search returns the context tenant's entries matching the filters: query is
+	// matched as a case-insensitive SUBSTRING over the entry value (value only —
+	// the pinned recall surface), and every tag in tags must be present on the
+	// entry (tag AND-semantics). An empty query and empty tags lists recent
+	// entries. limit caps the result count; limit <= 0 applies
+	// [DefaultMemorySearchLimit] and any larger value is hard-capped to it. It
+	// fails closed when the context carries no tenant.
+	Search(ctx context.Context, query string, tags []string, limit int) ([]MemoryEntry, error)
+
+	// Delete removes the entry under (namespace, key) for the context's tenant.
+	// Deleting an absent entry is not an error (idempotent). It fails closed when
+	// the context carries no tenant. Delete is a store capability used by ops/GC;
+	// it is intentionally NOT exposed as a model-facing tool in this batch.
+	Delete(ctx context.Context, namespace, key string) error
 }
