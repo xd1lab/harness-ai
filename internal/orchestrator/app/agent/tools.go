@@ -216,6 +216,22 @@ func (l *Loop) gateCall(ctx context.Context, st *runState, c llm.ToolCall, cls a
 		return true, app.ToolResult{}, nil
 
 	default: // policy.Ask
+		// Durable pre-block record: append ApprovalRequested BEFORE blocking on the
+		// gate (ADR-0032; AC-3.3) so a pending ask survives a crash/restart and a
+		// recovered orchestrator can detect a suspended-awaiting-approval turn (an
+		// ApprovalRequested with no matching PermissionDecided for the same CallID).
+		// Args is carried in FULL here for audit fidelity; the read-plane bounds it.
+		// The Deny and hook-block branches above append NO ApprovalRequested
+		// (FR-PERM-01 AC-1 / FR-EXT-03 AC-1 preserved).
+		if err := l.append(ctx, st, domain.ActorSystem, domain.ApprovalRequested{
+			TurnID:   st.currentTurnID,
+			CallID:   c.ID,
+			ToolName: c.Name,
+			Reason:   pres.Reason,
+			Args:     c.Args,
+		}); err != nil {
+			return false, app.ToolResult{}, err
+		}
 		// Raise the human ask gate and block until resolved or ctx is cancelled.
 		resolution, rerr := l.deps.Approvals.Request(ctx, app.ApprovalRequest{
 			SessionID: st.sessionID,

@@ -322,7 +322,19 @@ func TestRun_AppendFailuresSurfaceAsErrors(t *testing.T) {
 			setup: func(h *harness, _ *agent.Config) { readToolTurn(h, false) },
 		},
 		{
-			name: "permission decided on resolved ask", nilsBefore: 3, wantErr: "append PermissionDecided",
+			// FIX 3 (AC-3.3): an ask now appends ApprovalRequested BEFORE blocking on
+			// the gate, so the pre-block append at index 3 must surface its failure.
+			name: "approval requested before ask", nilsBefore: 3, wantErr: "append ApprovalRequested",
+			setup: func(h *harness, _ *agent.Config) {
+				h.tools.SetTools([]app.ToolDescriptor{{Name: "write", SideEffect: domain.SideEffectMutating}})
+				h.model.AddStream(toolCallStream("c1", "write", map[string]any{"p": "f"}), nil)
+				h.pol.AddAsk("ask", "needs human")
+			},
+		},
+		{
+			// The AFTER-resolution PermissionDecided is now appended at index 4 (after
+			// the pre-block ApprovalRequested at index 3); its failure must surface.
+			name: "permission decided on resolved ask", nilsBefore: 4, wantErr: "append PermissionDecided",
 			setup: func(h *harness, _ *agent.Config) {
 				h.tools.SetTools([]app.ToolDescriptor{{Name: "write", SideEffect: domain.SideEffectMutating}})
 				h.model.AddStream(toolCallStream("c1", "write", map[string]any{"p": "f"}), nil)
