@@ -14,6 +14,7 @@ import (
 	"github.com/xd1lab/harness-ai/internal/platform/blob"
 	"github.com/xd1lab/harness-ai/internal/toolruntime/app"
 	"github.com/xd1lab/harness-ai/internal/toolruntime/domain"
+	tenantctx "github.com/xd1lab/harness-ai/internal/toolruntime/infra/tenant"
 )
 
 // BlobThresholdBytes is the inline-output threshold: a tool result whose content
@@ -248,6 +249,14 @@ func (s *Service) Execute(ctx context.Context, req Request, em Emitter) (Result,
 		execCtx, cancel = context.WithTimeout(ctx, req.Timeout)
 		defer cancel()
 	}
+
+	// Propagate the request's verified tenant id into the execution context so a
+	// tenant-scoped tool (e.g. the memory tools backed by an RLS KV store) can read
+	// it back via tenantctx.TenantFromContext and run set_config('app.current_tenant')
+	// to scope its query (ADR-0030). This wraps execCtx — the timeout-derived ctx —
+	// so the tool's downstream store call carries both the per-call deadline and the
+	// tenant value. Additive: tools that ignore the tenant are unaffected.
+	execCtx = tenantctx.WithTenant(execCtx, req.TenantID)
 
 	// Emit a starting progress note (best-effort relay; an emitter error aborts).
 	if perr := em.Progress(ctx, Progress{Message: "executing " + spec.Name}); perr != nil {
