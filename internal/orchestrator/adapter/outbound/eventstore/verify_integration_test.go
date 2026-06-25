@@ -230,6 +230,52 @@ func TestVerifyChainIntegrity_CrossTenantInvisible(t *testing.T) {
 	}
 }
 
+// TestVerifyChainIntegrity_WindowedSeedsFromPriorStoredChain covers AC-7's
+// mid-chain seeding (open question #1): a verify window that starts at fromSeq>1
+// must seed the running chain from the STORED chain_hash of seq=fromSeq-1 (one
+// extra row read), NOT re-fold from seq 1. A clean window verifies Valid=true with
+// Checked = the window size, and tampering INSIDE the window is still caught at the
+// right seq — proving the seed is the true predecessor link, not genesis.
+func TestVerifyChainIntegrity_WindowedSeedsFromPriorStoredChain(t *testing.T) {
+	h := newHarness(t)
+	tenantID, sessionID := h.seedTenantAndSession(t)
+	ctx := tenantCtx(tenantID)
+	seedNEvents(ctx, t, h.store, sessionID, 8) // seq 1..8
+
+	// Verify ONLY [4,7]: the seed must come from seq 3's stored chain_hash, so the
+	// window links correctly and reports Valid over exactly 4 events.
+	res, err := h.store.VerifyChainIntegrity(ctx, sessionID, 4, 7)
+	if err != nil {
+		t.Fatalf("windowed verify [4,7]: %v", err)
+	}
+	if !res.Valid {
+		t.Fatalf("windowed [4,7] verified Valid=false (FirstBadSeq=%d, Reason=%q) — bad mid-chain seed?", res.FirstBadSeq, res.Reason)
+	}
+	if res.Checked != 4 {
+		t.Fatalf("windowed [4,7] Checked = %d, want 4 (seq 4,5,6,7)", res.Checked)
+	}
+
+	// Tamper seq 5 (inside the window) and re-verify [4,7]: still detected at seq 5,
+	// which is only possible if the window seeded from seq 3's real chain_hash and
+	// linked through seq 4 correctly.
+	owner := h.ownerConn(t)
+	if _, err := owner.Exec(context.Background(),
+		`UPDATE events SET payload = '{"TurnID":"TAMPER","Model":"x"}'::jsonb WHERE session_id = $1 AND seq = 5`,
+		sessionID); err != nil {
+		t.Fatalf("tamper seq 5: %v", err)
+	}
+	bad, err := h.store.VerifyChainIntegrity(ctx, sessionID, 4, 7)
+	if err != nil {
+		t.Fatalf("windowed verify after tamper: %v", err)
+	}
+	if bad.Valid {
+		t.Fatal("windowed verify returned Valid=true for a tampered in-window row")
+	}
+	if bad.FirstBadSeq != 5 {
+		t.Fatalf("windowed verify FirstBadSeq = %d, want 5", bad.FirstBadSeq)
+	}
+}
+
 // errUnusedAppendInput keeps the app import referenced even if a future edit
 // trims the only app.AppendInput use; harmless and removed when the suite lands
 // (kept so the RED file's imports are not flagged unused at compile time).

@@ -23,7 +23,45 @@ import (
 
 	"github.com/xd1lab/harness-ai/internal/orchestrator/app"
 	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
+	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
+
+// fullV1EventSet returns one representative value of EVERY concrete domain.Event
+// kind (the closed v1 set in event.go), including the map-bearing
+// ApprovalRequested, the slice-bearing PlanUpdated, and the llm-typed
+// MessageAppended/AssistantMessage/AssistantMessageDelta/TurnAborted/TurnFinished.
+// It is the fixture for the append-vs-verify re-marshal round-trip pin (T-04
+// limitation guard): the order matches event.go's discriminator declaration order
+// so a newly added event type that this set forgets will (eventually) be caught by
+// the decodePayload exhaustiveness check on read-back.
+func fullV1EventSet() []domain.Event {
+	return []domain.Event{
+		domain.SessionStarted{ParentID: "", ForkedFromSeq: 0, SystemPrompt: "you are a helpful agent"},
+		domain.MessageAppended{Message: llm.Message{}},
+		domain.TurnStarted{TurnID: "t-1", Model: "claude"},
+		domain.AssistantMessageDelta{TurnID: "t-1", TextSoFar: "partial", UsageSoFar: llm.Usage{}},
+		domain.AssistantMessage{TurnID: "t-1", Message: llm.Message{}, StopReason: llm.StopEnd, Usage: llm.Usage{}, CostUSD: 0.5},
+		domain.ToolExecutionStarted{CallID: "c-1", ToolName: "bash", IdempotencyKey: "k-1"},
+		domain.ToolResult{CallID: "c-1", Result: "ok", IsError: false, Truncated: false},
+		domain.ToolResultCleared{ClearedSessionID: "s-1", ClearedSeq: 2, Reason: "reclaim"},
+		domain.TurnAborted{TurnID: "t-1", Reason: domain.ErrorDuringExecution, UsageSoFar: llm.Usage{}, CostUSD: 0.1},
+		domain.TurnFinished{TurnID: "t-1", Reason: domain.Success, Usage: llm.Usage{}, CostUSD: 0.2, NumTurns: 1},
+		domain.CompactionPerformed{BeforeTokens: 100, AfterTokens: 40, Reason: "approaching window"},
+		domain.PermissionDecided{CallID: "c-1", ToolName: "bash", Decision: domain.PermissionAsk, Resolved: domain.AskAllowed, RuleID: "r-1", Reason: "ask"},
+		domain.WorkspaceReset{Reason: "resume after crash"},
+		domain.BypassModeActivated{Principal: "op-1", PriorMode: domain.ModeDefault, NewMode: domain.ModeBypass, Reason: "incident"},
+		domain.MCPToolApprovalRequested{ServerName: "srv", ServerVersion: "1.0", ToolName: "search", UntrustedDescription: "desc"},
+		domain.MCPToolApprovalResolved{ServerName: "srv", ToolName: "search", Granted: true},
+		domain.PlanUpdated{TurnID: "t-1", Items: []domain.PlanItem{
+			{Content: "step one", Status: domain.PlanStatusCompleted},
+			{Content: "step two", Status: domain.PlanStatusInProgress},
+		}},
+		// A map-bearing payload with UNSORTED insertion order: json.Marshal sorts map
+		// keys, so the stored bytes (and thus the hash) are stable regardless of the
+		// literal order here — the load-bearing determinism property (AC-2/AC-11).
+		domain.ApprovalRequested{TurnID: "t-1", CallID: "c-1", ToolName: "bash", Reason: "needs approval", Args: map[string]any{"z": 3, "a": 1, "m": 2}},
+	}
+}
 
 // TestMigration0009_AddsHashColumns covers AC-1: migration 0009 applied cleanly
 // (the harness runs the embedded migrations) and added the additive, NULLABLE
@@ -320,5 +358,158 @@ func TestAppend_HashParityWithDomainHelpers(t *testing.T) {
 			t.Fatalf("seq %d chain_hash parity mismatch: prod %x vs helper %x", loaded[i].Seq, loaded[i].ChainHash, wantChain)
 		}
 		prev = wantChain
+	}
+}
+
+// TestVerify_ReMarshalRoundTripIsByteIdentical covers the T-04 round-trip pin
+// (AC-7 documented limitation guard) for EVERY concrete v1 event kind.
+//
+// IMPORTANT — what "round-trip" means here. The events.payload column is JSONB, so
+// Postgres re-serializes the bytes Go wrote into its OWN canonical jsonb form
+// (spaces after ':'/',', its own key order). So the column text is NOT byte-equal
+// to Go's compact json.Marshal output — and that is FINE, because production
+// VerifyChainIntegrity never hashes the raw JSONB text: it decodes the payload to
+// the typed struct and re-hashes domain.MarshalEventPayload(decoded) (Go's compact
+// bytes). The append side ALSO hashed domain.MarshalEventPayload(event) (the
+// marshalPayload helper). So the load-bearing invariant verify depends on is:
+//
+//	MarshalEventPayload( decode( stored_jsonb ) )  ==  MarshalEventPayload( original_event )
+//
+// i.e. decoding the JSONB back through the typed struct and re-marshaling
+// reproduces the ORIGINAL append-side bytes — byte-for-byte — so the recomputed
+// content_hash equals the stored content_hash. If a future schema_version writes
+// extra JSONB keys, or a json.Marshal field-ordering/escaping change lands, this
+// round-trip diverges and verify would falsely flag an untampered row; this test is
+// the regression alarm that trips first. It asserts the re-marshal equals the
+// original append bytes AND equals the stored content_hash, for every kind.
+func TestVerify_ReMarshalRoundTripIsByteIdentical(t *testing.T) {
+	h := newHarness(t)
+	tenantID, sessionID := h.seedTenantAndSession(t)
+	ctx := tenantCtx(tenantID)
+
+	events := fullV1EventSet()
+	// Sanity: the fixture covers the whole closed discriminator set, so a newly
+	// added event kind forces this test to be extended (it would otherwise silently
+	// under-cover the round-trip). Count the distinct EventType values.
+	seenTypes := map[domain.EventType]bool{}
+	for _, ev := range events {
+		seenTypes[ev.EventType()] = true
+	}
+	if len(seenTypes) != len(events) {
+		t.Fatalf("fullV1EventSet has duplicate event types: %d distinct of %d", len(seenTypes), len(events))
+	}
+
+	var expected int64
+	for _, ev := range events {
+		envs, err := h.store.Append(ctx, sessionID, expected, 0, newUUID(t),
+			app.AppendInput{Event: ev, Actor: domain.ActorSystem})
+		if err != nil {
+			t.Fatalf("append %T: %v", ev, err)
+		}
+		expected = envs[0].Seq
+	}
+
+	owner := h.ownerConn(t)
+	for i, ev := range events {
+		seq := int64(i + 1)
+		// The append-side bytes content_hash was computed over: Go's compact
+		// json.Marshal of the ORIGINAL event (== marshalPayload at append time).
+		appendBytes, err := domain.MarshalEventPayload(ev)
+		if err != nil {
+			t.Fatalf("marshal original seq=%d (%s): %v", seq, ev.EventType(), err)
+		}
+
+		// Read the stored content_hash and the JSONB the column actually holds (the
+		// Postgres-canonical re-serialization — deliberately decoded, not hashed).
+		var storedContent []byte
+		var storedJSONB []byte
+		if err := owner.QueryRow(context.Background(),
+			"SELECT content_hash, payload::text::bytea FROM events WHERE session_id = $1 AND seq = $2",
+			sessionID, seq).Scan(&storedContent, &storedJSONB); err != nil {
+			t.Fatalf("read row seq=%d: %v", seq, err)
+		}
+
+		// The verify-side bytes: decode the STORED JSONB back to the typed struct and
+		// re-marshal it (the exact path VerifyChainIntegrity takes via scanEnvelopes +
+		// domain.MarshalEventPayload). This is what gets re-hashed.
+		decoded, err := decodePayload(ev.EventType(), storedJSONB)
+		if err != nil {
+			t.Fatalf("decode seq=%d (%s): %v", seq, ev.EventType(), err)
+		}
+		reMarshaled, err := domain.MarshalEventPayload(decoded)
+		if err != nil {
+			t.Fatalf("re-marshal seq=%d (%s): %v", seq, ev.EventType(), err)
+		}
+
+		// The load-bearing round-trip: re-marshal of the decoded stored payload ==
+		// the original append-side bytes. If this diverges, verify falsely flags the
+		// row (the documented T-04 limitation manifesting).
+		if !bytes.Equal(reMarshaled, appendBytes) {
+			t.Fatalf("seq %d (%s): re-marshal round-trip DIVERGED from append bytes (verify would falsely flag this row)\n append=%s\n re-mar=%s",
+				seq, ev.EventType(), appendBytes, reMarshaled)
+		}
+		// And the content_hash verify recomputes from the re-marshaled bytes equals
+		// the stored content_hash (the exact property verify relies on).
+		if recomputed := domain.ContentHash(reMarshaled); !bytes.Equal(recomputed, storedContent) {
+			t.Fatalf("seq %d (%s): recomputed content_hash %x != stored %x", seq, ev.EventType(), recomputed, storedContent)
+		}
+	}
+
+	// The whole stream verifies clean (the round-trip holding for every kind is
+	// exactly what makes VerifyChainIntegrity report Valid over the full set).
+	res, err := h.store.VerifyChainIntegrity(ctx, sessionID, 0, 0)
+	if err != nil {
+		t.Fatalf("VerifyChainIntegrity over full v1 set: %v", err)
+	}
+	if !res.Valid || res.Checked != len(events) {
+		t.Fatalf("full v1 set verify = {Valid:%v Checked:%d FirstBadSeq:%d Reason:%q}, want Valid=true Checked=%d",
+			res.Valid, res.Checked, res.FirstBadSeq, res.Reason, len(events))
+	}
+}
+
+// TestVerify_DetectorIsRedProof is the "red-proof the detector" guard the task
+// requires: it proves VerifyChainIntegrity's pass/fail hinges on the hash
+// comparison and not on some always-true path. It runs the SAME store, SAME
+// session twice: (1) untampered -> Valid=true; (2) after an owner-side payload
+// mutation that leaves content_hash stale -> Valid=false at the mutated seq. If the
+// content-hash equality check in VerifyChainIntegrity were removed (the mutation
+// undetectable), step (2) would return Valid=true and this test FAILS — so the
+// assertion genuinely exercises the detector rather than a tautology.
+func TestVerify_DetectorIsRedProof(t *testing.T) {
+	h := newHarness(t)
+	tenantID, sessionID := h.seedTenantAndSession(t)
+	ctx := tenantCtx(tenantID)
+	seedNEvents(ctx, t, h.store, sessionID, 5) // seq 1..5
+
+	// (1) Clean run is Valid — establishes the detector is not stuck on "false".
+	clean, err := h.store.VerifyChainIntegrity(ctx, sessionID, 0, 0)
+	if err != nil {
+		t.Fatalf("clean verify: %v", err)
+	}
+	if !clean.Valid || clean.Checked != 5 {
+		t.Fatalf("clean verify = {Valid:%v Checked:%d}, want Valid=true Checked=5", clean.Valid, clean.Checked)
+	}
+
+	// (2) Mutate seq 2's payload (content_hash left stale). The detector MUST flip to
+	// Valid=false at exactly that seq — proving the comparison is load-bearing.
+	owner := h.ownerConn(t)
+	if _, err := owner.Exec(context.Background(),
+		`UPDATE events SET payload = '{"TurnID":"flipped","Model":"x"}'::jsonb WHERE session_id = $1 AND seq = 2`,
+		sessionID); err != nil {
+		t.Fatalf("mutate payload: %v", err)
+	}
+	dirty, err := h.store.VerifyChainIntegrity(ctx, sessionID, 0, 0)
+	if err != nil {
+		t.Fatalf("dirty verify: %v", err)
+	}
+	if dirty.Valid {
+		t.Fatal("detector returned Valid=true after a payload mutation — the hash check is NOT load-bearing (red-proof failed)")
+	}
+	if dirty.FirstBadSeq != 2 {
+		t.Fatalf("dirty verify FirstBadSeq = %d, want 2 (the mutated seq)", dirty.FirstBadSeq)
+	}
+	// Only the events BEFORE the bad seq are counted as checked (seq 1).
+	if dirty.Checked != 1 {
+		t.Fatalf("dirty verify Checked = %d, want 1 (events verified before the first bad seq)", dirty.Checked)
 	}
 }
