@@ -19,6 +19,14 @@ import (
 // is the Agent-Computer Interface presented to the model (FR-TOOL-02): read,
 // write, edit, bash, glob, grep, webfetch, websearch.
 //
+// The long-term memory tools (memory_write/memory_read/memory_search) are NOT
+// part of this slice: they are constructed from an
+// [github.com/xd1lab/harness-ai/internal/toolruntime/app.MemoryStore] (see
+// [NewMemoryWriteTool]/[NewMemoryReadTool]/[NewMemorySearchTool]) and registered
+// SEPARATELY by the wiring, because their backing store differs by deployment
+// (Postgres in production, in-memory in cmd/boltrope-dev) while the Native
+// tools' ports do not (ADR-0030).
+//
 // Callers (the tool-runtime wiring) register these into a
 // [github.com/xd1lab/harness-ai/internal/toolruntime/app.ToolRegistry], which
 // wraps each with schema validation before execution (FR-TOOL-01).
