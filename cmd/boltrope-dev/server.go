@@ -37,6 +37,29 @@ type serveOpts struct {
 	GRPCAddr string
 	// HTTPAddr is the REST/SSE listen address.
 	HTTPAddr string
+
+	// Model is the model id threaded into BOTH the agent loop Config and the gRPC
+	// DefaultModel. Defaults to "stub" when empty (the keyless stub provider).
+	Model string
+	// ModelURL, when non-empty, is the base URL of an OpenAI-compatible model
+	// endpoint; a later task uses it to construct a real provider in place of the
+	// stub. When empty, the stub provider is used (the default posture).
+	ModelURL string
+	// ModelAPIKeyEnv, when non-empty, names the env var whose VALUE a later task
+	// reads (only at provider construction) and passes as the openaicompat API
+	// key. The key VALUE is never stored here — only the env NAME is carried.
+	ModelAPIKeyEnv string
+	// EnableNativeSchema turns on native json_schema structured output for the
+	// model endpoint (only meaningful with ModelURL set).
+	EnableNativeSchema bool
+	// EnableLocalExec, when true, replaces the no-exec runtime with an in-process
+	// bridge to a Docker-isolated tool runtime (wired by a later task). Default
+	// OFF: the no-exec sandbox is the secure default.
+	EnableLocalExec bool
+	// Env is the INJECTED process environment. A later task reads named env vars
+	// (the model API key, the toolruntime image/docker binary) from it, so the
+	// wiring stays hermetic and unit-testable.
+	Env map[string]string
 }
 
 // serveResult is the running dev server: the resolved (post-bind) listen
@@ -82,6 +105,15 @@ func newServer(opts serveOpts) (*serveResult, error) {
 		return nil, fmt.Errorf("boltrope-dev: build policy engine: %w", err)
 	}
 
+	// Resolve the model id once (default "stub") and thread it into BOTH the agent
+	// loop Config and the gRPC DefaultModel, replacing the previously-hardcoded
+	// literals. A later task selects a real model provider when opts.ModelURL is
+	// set; until then the stub provider backs every model id.
+	modelID := opts.Model
+	if modelID == "" {
+		modelID = defaultModel
+	}
+
 	gate := newDenyGate()
 	deps := agent.Deps{
 		EventLog:  store,
@@ -94,10 +126,10 @@ func newServer(opts serveOpts) (*serveResult, error) {
 		Clock:     clock.System{},
 		IDs:       ids.System{},
 	}
-	loopCfg := agent.Config{Model: "stub"}
+	loopCfg := agent.Config{Model: modelID}
 
 	runner := igrpc.NewLoopRunner(deps, loopCfg)
-	srv := igrpc.NewServer(store, gate, runner, ids.System{}, igrpc.Config{DefaultModel: "stub"})
+	srv := igrpc.NewServer(store, gate, runner, ids.System{}, igrpc.Config{DefaultModel: modelID})
 
 	// gRPC server with the dev-insecure edge-auth interceptors (the SAME
 	// interceptors the production daemon installs, on the SAME AuthConfig path —

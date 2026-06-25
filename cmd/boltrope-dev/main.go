@@ -37,7 +37,16 @@ func run(args []string, env map[string]string, stderr *os.File) int {
 		return exit
 	}
 
-	srv, err := newServer(serveOpts{GRPCAddr: cfg.GRPCAddr, HTTPAddr: cfg.HTTPAddr})
+	srv, err := newServer(serveOpts{
+		GRPCAddr:           cfg.GRPCAddr,
+		HTTPAddr:           cfg.HTTPAddr,
+		Model:              cfg.Model,
+		ModelURL:           cfg.ModelURL,
+		ModelAPIKeyEnv:     cfg.ModelAPIKeyEnv,
+		EnableNativeSchema: cfg.EnableNativeSchema,
+		EnableLocalExec:    cfg.EnableLocalExec,
+		Env:                env,
+	})
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "boltrope-dev: %v\n", err)
 		return 1

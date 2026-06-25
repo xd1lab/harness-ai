@@ -147,13 +147,14 @@ func TestDispatch_ProductionSignal_Refuses(t *testing.T) {
 	}
 }
 
-// --- AC-13: re-scoped flags rejected in v1 -----------------------------------
+// --- AC-11: --store re-scoped flag still rejected in v1 -----------------------
+// NOTE: --enable-local-exec is NO LONGER rejected (ADR-0029): it is now an
+// explicit, default-OFF opt-in. Only --store remains roadmap-rejected.
 
 func TestDispatch_RescopedFlags_Rejected(t *testing.T) {
 	cases := [][]string{
 		{"run", "--store=sqlite"},
 		{"run", "--store=sqlite:/tmp/dev.db"},
-		{"run", "--enable-local-exec"},
 	}
 	for _, args := range cases {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
@@ -167,4 +168,113 @@ func TestDispatch_RescopedFlags_Rejected(t *testing.T) {
 				"rejection must explain the flag is re-scoped to roadmap; got %q", stderr.String())
 		})
 	}
+}
+
+// --- AC-1/AC-14: DEFAULT posture — stub model, NO-EXEC, no LOCAL-EXEC ---------
+
+func TestDispatch_Default_StubModel_NoExecBanner(t *testing.T) {
+	var stderr bytes.Buffer
+	exit, cfg := dispatch([]string{"run"}, noEnv(), &stderr)
+	require.Equal(t, 0, exit)
+	require.NotNil(t, cfg)
+
+	// Model id resolves to "stub" by default.
+	assert.Equal(t, "stub", cfg.Model, "default model id must be \"stub\"")
+	assert.Empty(t, cfg.ModelURL, "no real model endpoint by default")
+	assert.False(t, cfg.EnableLocalExec, "local-exec must be OFF by default")
+	assert.False(t, cfg.EnableNativeSchema, "native-schema must be OFF by default")
+
+	banner := stderr.String()
+	up := strings.ToUpper(banner)
+	assert.Truef(t,
+		strings.Contains(up, "NO-EXEC") || strings.Contains(up, "NO EXEC"),
+		"default banner must carry the NO-EXEC marker; got:\n%s", banner)
+	assert.NotContainsf(t, up, "LOCAL-EXEC ENABLED",
+		"default banner must NOT carry the LOCAL-EXEC marker; got:\n%s", banner)
+	assert.NotContainsf(t, banner, "Model       :",
+		"default banner must NOT show a Model line (no real model); got:\n%s", banner)
+}
+
+// --- AC-14: local-exec swaps the Sandbox marker to LOCAL-EXEC ENABLED ---------
+
+func TestDispatch_LocalExec_BannerSwapsSandboxMarker(t *testing.T) {
+	var stderr bytes.Buffer
+	exit, cfg := dispatch([]string{"run", "--enable-local-exec"}, noEnv(), &stderr)
+	require.Equal(t, 0, exit, "--enable-local-exec is an accepted opt-in, not a rejected flag")
+	require.NotNil(t, cfg)
+	assert.True(t, cfg.EnableLocalExec)
+
+	banner := stderr.String()
+	up := strings.ToUpper(banner)
+	assert.Containsf(t, up, "LOCAL-EXEC ENABLED",
+		"local-exec banner must carry the LOCAL-EXEC ENABLED marker; got:\n%s", banner)
+	assert.NotContainsf(t, banner,
+		"NO-EXEC (model-generated shell is refused",
+		"local-exec banner must NOT keep the NO-EXEC sandbox line; got:\n%s", banner)
+	// The six always-on markers are retained.
+	for _, marker := range []string{
+		"NOT FOR PRODUCTION", "IN-MEMORY", "NO RLS", "NO mTLS", "NO OIDC", "LOOPBACK ONLY",
+	} {
+		assert.Containsf(t, banner, marker, "banner must retain marker %q under local-exec", marker)
+	}
+}
+
+// --- AC-2/AC-3: --model-url + --model resolve into runConfig + Model line ------
+
+func TestDispatch_ModelFlags_ResolveIntoConfigAndBanner(t *testing.T) {
+	var stderr bytes.Buffer
+	exit, cfg := dispatch(
+		[]string{"run", "--model-url", "http://localhost:11434/v1", "--model", "gemma"},
+		noEnv(), &stderr)
+	require.Equal(t, 0, exit)
+	require.NotNil(t, cfg)
+
+	assert.Equal(t, "gemma", cfg.Model)
+	assert.Equal(t, "http://localhost:11434/v1", cfg.ModelURL)
+
+	banner := stderr.String()
+	assert.Contains(t, banner, "http://localhost:11434/v1", "banner must show the model endpoint")
+	assert.Contains(t, banner, "gemma", "banner must show the model id")
+}
+
+// --- AC-4: --model-api-key-env value never leaks into the banner -------------
+
+func TestDispatch_ModelAPIKeyEnv_DoesNotLeakSecretIntoBanner(t *testing.T) {
+	var stderr bytes.Buffer
+	env := map[string]string{"SECRET": "topsecret"}
+	exit, cfg := dispatch(
+		[]string{"run", "--model-url", "http://localhost:11434/v1", "--model-api-key-env", "SECRET"},
+		env, &stderr)
+	require.Equal(t, 0, exit)
+	require.NotNil(t, cfg)
+
+	// Only the env NAME is carried; the VALUE is never stored or printed.
+	assert.Equal(t, "SECRET", cfg.ModelAPIKeyEnv)
+	assert.NotContains(t, stderr.String(), "topsecret",
+		"the API key VALUE must never appear in the banner")
+}
+
+// --- AC-12: prod-signal refusal STILL fires with the new model/exec flags -----
+
+func TestDispatch_ProductionSignal_RefusesEvenWithModelAndLocalExec(t *testing.T) {
+	var stderr bytes.Buffer
+	env := map[string]string{"KUBERNETES_SERVICE_HOST": "10.0.0.1"}
+	exit, cfg := dispatch(
+		[]string{"run", "--enable-local-exec", "--model-url", "http://localhost:11434/v1"},
+		env, &stderr)
+	assert.NotEqual(t, 0, exit, "a production signal must refuse even with the new opt-in flags")
+	assert.Nil(t, cfg, "no server config when a production signal is present")
+	assert.NotEmpty(t, strings.TrimSpace(stderr.String()))
+}
+
+// --- AC-13: loopback fence STILL fires with the new model/exec flags ----------
+
+func TestDispatch_NonLoopback_RefusesEvenWithModelAndLocalExec(t *testing.T) {
+	var stderr bytes.Buffer
+	exit, cfg := dispatch(
+		[]string{"run", "--grpc-addr", "0.0.0.0:8089", "--enable-local-exec", "--model-url", "http://localhost:11434/v1"},
+		noEnv(), &stderr)
+	assert.NotEqual(t, 0, exit, "a non-loopback bind without the ack flag must still be refused")
+	assert.Nil(t, cfg)
+	assert.NotEmpty(t, strings.TrimSpace(stderr.String()))
 }

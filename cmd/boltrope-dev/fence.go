@@ -23,6 +23,11 @@ const (
 	defaultHTTPAddr = "127.0.0.1:8088"
 )
 
+// defaultModel is the model id used when --model is not passed: the keyless stub
+// provider. It is threaded into BOTH the agent loop Config and the gRPC
+// DefaultModel so the default-path posture is unchanged (stub everywhere).
+const defaultModel = "stub"
+
 // productionSignalEnv lists the environment variables whose mere presence forces
 // a fail-closed refusal: each is a strong signal the binary is running somewhere
 // it must never run (a Kubernetes/orchestrator pod, or against a real Postgres /
@@ -42,6 +47,26 @@ type runConfig struct {
 	GRPCAddr string
 	// HTTPAddr is the resolved REST/SSE listen address (loopback by default).
 	HTTPAddr string
+
+	// Model is the model id threaded into BOTH the agent loop Config and the gRPC
+	// DefaultModel. Defaults to "stub" (the keyless stub provider).
+	Model string
+	// ModelURL, when non-empty, is the base URL of an OpenAI-compatible model
+	// endpoint; setting it switches the dev binary from the stub provider to a
+	// real openaicompat provider (wired in server.go by a later task).
+	ModelURL string
+	// ModelAPIKeyEnv, when non-empty, names the env var whose VALUE is read (only
+	// at provider construction time) and passed as the openaicompat API key. The
+	// key VALUE is NEVER stored here and NEVER printed in the banner — only the
+	// env NAME is carried so the secret cannot leak through this struct.
+	ModelAPIKeyEnv string
+	// EnableNativeSchema turns on native json_schema structured output for the
+	// openaicompat endpoint (only meaningful with ModelURL set).
+	EnableNativeSchema bool
+	// EnableLocalExec, when true, replaces the no-exec runtime with an in-process
+	// bridge to a Docker-isolated tool runtime (wired in server.go by a later
+	// task). Default OFF: the no-exec sandbox is the secure default.
+	EnableLocalExec bool
 }
 
 // dispatch is the pure parse/guard seam the binary's main() calls. It returns the
@@ -54,8 +79,10 @@ type runConfig struct {
 //
 //  1. Subcommand gate — the only v1 subcommand is `run`; a bare or unknown
 //     invocation prints usage and exits 2 (non-default; can't start by accident).
-//  2. Flag parse + re-scoped-flag rejection — --store=sqlite[:...] and
-//     --enable-local-exec are re-scoped to roadmap and rejected, never ignored.
+//  2. Flag parse + re-scoped-flag rejection — --store=sqlite[:...] is re-scoped
+//     to roadmap and rejected, never ignored. The model (--model-url/--model/
+//     --model-api-key-env/--enable-native-schema) and --enable-local-exec flags
+//     are explicit, default-OFF opt-ins (ADR-0029, amending ADR-0024).
 //  3. Production-signal fence — any productionSignalEnv present => fail-closed.
 //  4. Loopback fence — a non-loopback bind on EITHER listener requires the ack
 //     flag; otherwise refuse.
@@ -106,7 +133,15 @@ func dispatch(args []string, env map[string]string, stderr io.Writer) (int, *run
 	}
 
 	writeBanner(stderr, cfg)
-	return 0, &runConfig{GRPCAddr: cfg.grpcAddr, HTTPAddr: cfg.httpAddr}
+	return 0, &runConfig{
+		GRPCAddr:           cfg.grpcAddr,
+		HTTPAddr:           cfg.httpAddr,
+		Model:              cfg.model,
+		ModelURL:           cfg.modelURL,
+		ModelAPIKeyEnv:     cfg.modelAPIKeyEnv,
+		EnableNativeSchema: cfg.enableNativeSchema,
+		EnableLocalExec:    cfg.enableLocalExec,
+	}
 }
 
 // parsedRunFlags holds the raw, validated flag values for `run`.
@@ -114,13 +149,24 @@ type parsedRunFlags struct {
 	grpcAddr string
 	httpAddr string
 	ack      bool
+
+	// model is the model id (default "stub"); modelURL is the OpenAI-compatible
+	// base URL that, when set, switches to a real provider; modelAPIKeyEnv is the
+	// NAME of the env var holding the API key (the value is never stored here);
+	// enableNativeSchema turns on native json_schema; enableLocalExec opts into
+	// the Docker-isolated tool runtime. All default to the secure off/stub state.
+	model              string
+	modelURL           string
+	modelAPIKeyEnv     string
+	enableNativeSchema bool
+	enableLocalExec    bool
 }
 
 // parseRunFlags parses the `run` subcommand flags by hand (the flag package's
 // default error behavior calls os.Exit, which would defeat the hermetic
 // dispatch contract). It rejects the re-scoped v1 flags with a "roadmap" reason.
 func parseRunFlags(args []string) (parsedRunFlags, error) {
-	cfg := parsedRunFlags{grpcAddr: defaultGRPCAddr, httpAddr: defaultHTTPAddr}
+	cfg := parsedRunFlags{grpcAddr: defaultGRPCAddr, httpAddr: defaultHTTPAddr, model: defaultModel}
 
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -154,18 +200,40 @@ func parseRunFlags(args []string) (parsedRunFlags, error) {
 		case ackFlag:
 			cfg.ack = true
 
-		// --- re-scoped to roadmap (rejected, never silently ignored; AC-13) ---
+		// --- explicit, default-OFF opt-ins (ADR-0029, amending ADR-0024) ------
+		case "--model":
+			v, err := value()
+			if err != nil {
+				return parsedRunFlags{}, err
+			}
+			cfg.model = v
+		case "--model-url":
+			v, err := value()
+			if err != nil {
+				return parsedRunFlags{}, err
+			}
+			cfg.modelURL = v
+		case "--model-api-key-env":
+			v, err := value()
+			if err != nil {
+				return parsedRunFlags{}, err
+			}
+			cfg.modelAPIKeyEnv = v
+		case "--enable-native-schema":
+			cfg.enableNativeSchema = true
+		case "--enable-local-exec":
+			// A Docker-isolated local sandbox is a deliberate, default-OFF opt-in
+			// (ADR-0029): per-session container, --network none, cgroup/PID limits.
+			// The no-exec sandbox remains the secure default when this is unset.
+			cfg.enableLocalExec = true
+
+		// --- re-scoped to roadmap (rejected, never silently ignored; AC-11) ---
 		case "--store":
 			// Both --store=sqlite and --store sqlite are rejected: SQLite/file
 			// persistence is re-scoped to roadmap (K-2). In-memory is the only v1
 			// store; there is no flag to select it.
 			return parsedRunFlags{}, fmt.Errorf(
 				"--store is not available in v1 (re-scoped to roadmap): dev mode is in-memory only")
-		case "--enable-local-exec":
-			// A real shell-capable local sandbox is roadmap and requires its own
-			// ADR-0014-grade adversarial tests + a second opt-in (K-2).
-			return parsedRunFlags{}, fmt.Errorf(
-				"--enable-local-exec is not available in v1 (re-scoped to roadmap): dev sandbox is no-exec")
 
 		default:
 			return parsedRunFlags{}, fmt.Errorf("unknown flag %q", arg)
@@ -228,18 +296,30 @@ The only subcommand is `+"`run`"+`. There is no default action.
 Flags:
   --grpc-addr host:port   gRPC listen address (default `+defaultGRPCAddr+`, loopback only)
   --http-addr host:port   REST/SSE listen address (default `+defaultHTTPAddr+`, loopback only)
+  --model id              model id threaded into the loop + gRPC DefaultModel (default `+defaultModel+`)
+  --model-url base-url    OpenAI-compatible base URL; when set, uses a real model instead of the stub
+                          (e.g. http://localhost:11434/v1 for Ollama). Default OFF (stub).
+  --model-api-key-env VAR name of the env var holding the API key (the VALUE is never logged/printed)
+  --enable-native-schema  turn on native json_schema structured output for the model endpoint (off by default)
+  --enable-local-exec     EXECUTE tools in a Docker sandbox (per-session container, --network none,
+                          cgroup/PID limits) instead of the no-exec runtime. Default OFF. Requires Docker.
   `+ackFlag+`
                           acknowledge and permit a NON-loopback bind (off by default)
 
-NOT FOR PRODUCTION: in-memory store, NO RLS, NO mTLS, NO OIDC, loopback only,
-no-exec sandbox. See ADR-0024.
+NOT FOR PRODUCTION: in-memory store, NO RLS, NO mTLS, NO OIDC, loopback only.
+The stub model + no-exec sandbox are the DEFAULT; the model/local-exec flags are
+explicit opt-ins. See ADR-0024 (amended by ADR-0029).
 `)
 }
 
 // writeBanner writes the loud, multi-line, NOT-FOR-PRODUCTION startup banner to
 // stderr. The markers (NOT FOR PRODUCTION / IN-MEMORY / NO RLS / NO mTLS / NO
-// OIDC / LOOPBACK ONLY / NO-EXEC) are load-bearing: they are the operator-facing
-// proof of exactly which production safeguards this mode bypasses (K-1 §3).
+// OIDC / LOOPBACK ONLY) are load-bearing: they are the operator-facing proof of
+// exactly which production safeguards this mode bypasses (K-1 §3). The Sandbox
+// line is honest about posture: NO-EXEC by default, or LOCAL-EXEC ENABLED when
+// the Docker-isolated runtime is opted into. When a real model endpoint is set a
+// Model line shows the endpoint + id ONLY — the API key VALUE is never threaded
+// into this function and is never printed.
 func writeBanner(w io.Writer, cfg parsedRunFlags) {
 	const bar = "============================================================================"
 	var b strings.Builder
@@ -249,7 +329,15 @@ func writeBanner(w io.Writer, cfg parsedRunFlags) {
 	b.WriteString("  Event store : IN-MEMORY (non-persistent; lost on exit)\n")
 	b.WriteString("  Security    : NO RLS  |  NO mTLS  |  NO OIDC  (synthetic single-tenant principal)\n")
 	b.WriteString("  Network     : LOOPBACK ONLY\n")
-	b.WriteString("  Sandbox     : NO-EXEC (model-generated shell is refused, never run on your host)\n")
+	if cfg.enableLocalExec {
+		b.WriteString("  Sandbox     : LOCAL-EXEC ENABLED (Docker isolation: per-session container, --network none, cgroup/PID limits)\n")
+	} else {
+		b.WriteString("  Sandbox     : NO-EXEC (model-generated shell is refused, never run on your host)\n")
+	}
+	if cfg.modelURL != "" {
+		// Endpoint + id ONLY. The API key VALUE is never carried into the banner.
+		fmt.Fprintf(&b, "  Model       : %s %s\n", cfg.modelURL, cfg.model)
+	}
 	fmt.Fprintf(&b, "  gRPC        : %s\n", cfg.grpcAddr)
 	fmt.Fprintf(&b, "  REST/SSE    : %s\n", cfg.httpAddr)
 	if cfg.ack {
