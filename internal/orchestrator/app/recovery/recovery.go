@@ -20,6 +20,13 @@
 //     for a MUTATING tool is UNKNOWN and must NOT be marked re-dispatchable
 //     (at-most-once semantics; the loop adjudicates). For a read-only tool
 //     it may be safely re-run.
+//
+//   - An open turn whose log contains an [domain.ApprovalRequested] with NO
+//     matching [domain.PermissionDecided] for the same CallID is SUSPENDED
+//     AWAITING APPROVAL — distinct from a generic open turn. It is emitted as a
+//     [SuspendedApproval] and EXCLUDED from [Plan.OpenTurns] so the loop
+//     re-raises the gate (or closes it with an explicit auditable reason)
+//     instead of silently aborting the pending decision (ADR-0032; AC-3.4).
 package recovery
 
 import (
@@ -83,6 +90,35 @@ type UnknownExecution struct {
 	ReDispatchable bool
 }
 
+// SuspendedApproval describes a turn that was suspended awaiting a human
+// approval at crash time: an [domain.ApprovalRequested] was appended for a tool
+// call but no matching [domain.PermissionDecided] (for the same CallID) followed
+// before the orchestrator stopped. This is DISTINCT from a generic [OpenTurn]:
+// the turn is not stalled mid-generation, it is deliberately paused at the
+// dispatch gate waiting for a person to allow or deny the call. The loop must
+// re-raise the approval gate (or, at the durable-minimum level, close the turn
+// with an explicit auditable reason) rather than silently aborting it, so the
+// pending decision is not lost on restart (ADR-0032; AC-3.4).
+type SuspendedApproval struct {
+	// TurnID is the turn the ask was raised in, from
+	// [domain.ApprovalRequested.TurnID]. It correlates back to the open turn so
+	// the loop can resume the correct turn (and so the turn is excluded from
+	// [Plan.OpenTurns]).
+	TurnID string
+	// CallID is the [llm.ToolCall.ID] of the gated call, from
+	// [domain.ApprovalRequested.CallID]. The loop re-raises the gate for this
+	// call and matches the eventual [domain.PermissionDecided.CallID] against it.
+	CallID string
+	// ToolName is the gated tool, from [domain.ApprovalRequested.ToolName].
+	ToolName string
+	// Reason is the permission pipeline's ask reason shown to the approver, from
+	// [domain.ApprovalRequested.Reason].
+	Reason string
+	// Args is the tool-call arguments captured for re-raising the gate, from
+	// [domain.ApprovalRequested.Args]. Operator-facing audit data.
+	Args map[string]any
+}
+
 // Plan is the result of folding a slice of [domain.EventEnvelope]: the
 // complete set of adjudication decisions the loop must take before resuming.
 // A zero-value Plan (all slices nil/empty) means the log is clean and the
@@ -91,13 +127,23 @@ type Plan struct {
 	// OpenTurns is the set of turns that were in flight at crash time and have
 	// no terminal event. The loop must append [domain.TurnAborted] for each
 	// before resuming (ADR-0012; FR-LOOP-05 AC-2). Ordered by ascending
-	// [domain.TurnStarted.Seq].
+	// [domain.TurnStarted.Seq]. A turn that is awaiting approval (see
+	// [Plan.SuspendedApprovals]) is EXCLUDED from this set so it is never both a
+	// SuspendedApproval and a generic OpenTurn (which would double-terminate it).
 	OpenTurns []OpenTurn
 	// UnknownExecutions is the set of tool executions whose outcome is unknown.
 	// The loop must surface each for adjudication; mutating ones must NOT be
 	// re-dispatched automatically (ADR-0012; FR-TOOL-03 AC-1). Ordered by
 	// ascending [domain.ToolExecutionStarted.Seq].
 	UnknownExecutions []UnknownExecution
+	// SuspendedApprovals is the set of turns suspended awaiting a human approval
+	// at crash time (an [domain.ApprovalRequested] with no matching
+	// [domain.PermissionDecided] for the same CallID). The loop re-raises the
+	// gate for each (or closes it with an explicit auditable reason) instead of a
+	// silent abort (ADR-0032; AC-3.4). A turn appearing here is EXCLUDED from
+	// [Plan.OpenTurns]. Ordered by ascending
+	// [domain.ApprovalRequested.Seq].
+	SuspendedApprovals []SuspendedApproval
 }
 
 // turnState is internal fold state for one in-flight turn.
@@ -105,7 +151,18 @@ type turnState struct {
 	turnID          string
 	recoveredUsage  llm.Usage
 	lastProviderRaw llm.ProviderRaw
-	closed          bool // true once a terminal event is seen
+	// closed is true once a turn-closing event is seen for OpenTurn
+	// classification: AssistantMessage (generation complete), TurnAborted, or
+	// TurnFinished. An open (un-closed) turn is a candidate OpenTurn.
+	closed bool
+	// terminated is true ONLY once a truly terminal turn event is seen —
+	// TurnAborted or TurnFinished — NOT AssistantMessage. A per-dispatch approval
+	// ask is raised AFTER the AssistantMessage (the tool call lives in the
+	// assistant message), so AssistantMessage does not end the turn for
+	// suspended-approval purposes: a turn is only no longer suspendable once it is
+	// truly terminated. Used to decide whether an unresolved ApprovalRequested is
+	// a live suspension (ADR-0032; AC-3.4).
+	terminated bool
 }
 
 // execState is internal fold state for one in-flight tool execution.
@@ -114,6 +171,20 @@ type execState struct {
 	toolName       string
 	idempotencyKey string
 	closed         bool // true once a ToolResult is seen
+}
+
+// approvalState is internal fold state for one per-dispatch approval ask, keyed
+// by CallID. An [domain.ApprovalRequested] opens it (resolved=false); a matching
+// [domain.PermissionDecided] for the same CallID closes it (resolved=true). A
+// state that is still unresolved at the end of the fold AND whose turn is open is
+// emitted as a [SuspendedApproval].
+type approvalState struct {
+	turnID   string
+	callID   string
+	toolName string
+	reason   string
+	args     map[string]any
+	resolved bool // true once a matching PermissionDecided is seen
 }
 
 // Analyze folds events into a [Plan] by scanning for open turns and unknown
@@ -134,6 +205,11 @@ func Analyze(events []domain.EventEnvelope, lookup SideEffectLookup) (Plan, erro
 	execs := make(map[string]*execState)
 	// execOrder preserves insertion order.
 	var execOrder []string
+
+	// approvals tracks per-dispatch approval-ask state keyed by CallID.
+	approvals := make(map[string]*approvalState)
+	// approvalOrder preserves insertion order for deterministic output.
+	var approvalOrder []string
 
 	for _, env := range events {
 		switch p := env.Event.(type) {
@@ -160,12 +236,14 @@ func Analyze(events []domain.EventEnvelope, lookup SideEffectLookup) (Plan, erro
 			// TurnAborted is a terminal event — the turn was already adjudicated.
 			if ts, ok := turns[p.TurnID]; ok {
 				ts.closed = true
+				ts.terminated = true
 			}
 
 		case domain.TurnFinished:
 			// TurnFinished is a terminal event — the turn completed normally.
 			if ts, ok := turns[p.TurnID]; ok {
 				ts.closed = true
+				ts.terminated = true
 			}
 
 		case domain.ToolExecutionStarted:
@@ -183,15 +261,82 @@ func Analyze(events []domain.EventEnvelope, lookup SideEffectLookup) (Plan, erro
 			if es, ok := execs[p.CallID]; ok {
 				es.closed = true
 			}
+
+		case domain.ApprovalRequested:
+			// A per-dispatch ask was raised before the gate blocked. Track it as
+			// requested-but-unresolved keyed by CallID; a later PermissionDecided
+			// with the same CallID closes it. The latest ApprovalRequested for a
+			// CallID wins (re-raised asks reuse the same CallID).
+			if as, exists := approvals[p.CallID]; exists {
+				as.turnID = p.TurnID
+				as.toolName = p.ToolName
+				as.reason = p.Reason
+				as.args = p.Args
+				as.resolved = false
+			} else {
+				approvals[p.CallID] = &approvalState{
+					turnID:   p.TurnID,
+					callID:   p.CallID,
+					toolName: p.ToolName,
+					reason:   p.Reason,
+					args:     p.Args,
+				}
+				approvalOrder = append(approvalOrder, p.CallID)
+			}
+
+		case domain.PermissionDecided:
+			// A resolution for the ask closes the matching approval state, so the
+			// pair (ApprovalRequested -> PermissionDecided) brackets one ask and the
+			// turn is no longer suspended on this call.
+			if as, ok := approvals[p.CallID]; ok {
+				as.resolved = true
+			}
 		}
 	}
 
 	var plan Plan
 
-	// Collect open turns in insertion order.
+	// Collect suspended approvals first and record their turn IDs so the open-turn
+	// loop can EXCLUDE them: a turn awaiting approval must be emitted ONLY as a
+	// SuspendedApproval, never also as a generic OpenTurn (which would
+	// double-terminate it — once via re-raise/auditable-close and once via a silent
+	// TurnAborted). An ask qualifies as suspended only when (a) it is unresolved
+	// (no matching PermissionDecided) AND (b) its turn is still open (no terminal
+	// event); a resolved ask, or an ask whose turn already closed, is not a
+	// suspension (ADR-0032; AC-3.4).
+	suspendedTurns := make(map[string]struct{})
+	for _, cid := range approvalOrder {
+		as := approvals[cid]
+		if as.resolved {
+			continue
+		}
+		ts, ok := turns[as.turnID]
+		if !ok || ts.terminated {
+			// The turn was truly terminated (TurnAborted/TurnFinished) — or never
+			// started — so the ask is not a live suspension. Note: an
+			// AssistantMessage does NOT terminate the turn here, because the ask is
+			// raised after it (the gated tool call lives in the assistant message).
+			continue
+		}
+		plan.SuspendedApprovals = append(plan.SuspendedApprovals, SuspendedApproval{
+			TurnID:   as.turnID,
+			CallID:   as.callID,
+			ToolName: as.toolName,
+			Reason:   as.reason,
+			Args:     as.args,
+		})
+		suspendedTurns[as.turnID] = struct{}{}
+	}
+
+	// Collect open turns in insertion order, EXCLUDING any turn classified as a
+	// SuspendedApproval above so it is never both a SuspendedApproval and an
+	// OpenTurn.
 	for _, tid := range turnOrder {
 		ts := turns[tid]
 		if ts.closed {
+			continue
+		}
+		if _, suspended := suspendedTurns[tid]; suspended {
 			continue
 		}
 		plan.OpenTurns = append(plan.OpenTurns, OpenTurn{
