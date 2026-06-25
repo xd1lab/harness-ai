@@ -341,3 +341,71 @@ func TestAnalyze_NilLookup_DefaultsMutating(t *testing.T) {
 	assert.Equal(t, domain.SideEffectMutating, plan.UnknownExecutions[0].SideEffect)
 	assert.False(t, plan.UnknownExecutions[0].ReDispatchable)
 }
+
+// ---------------------------------------------------------------------------
+// FIX 3 (AC-3.4): a crash mid-ask. An open turn whose log contains an
+// ApprovalRequested{CallID} with NO matching PermissionDecided{CallID} is a
+// SuspendedApproval — DISTINCT from a generic open turn, and it SUPPRESSES the
+// plain OpenTurn TurnAborted for that same turn (the turn is awaiting approval,
+// not a generic open turn). These reference recovery.SuspendedApproval and
+// Plan.SuspendedApprovals, which do not exist yet — the RED proof.
+// ---------------------------------------------------------------------------
+
+func TestAnalyze_SuspendedApproval_RequestedNoResolution(t *testing.T) {
+	events := []domain.EventEnvelope{
+		envOf(1, domain.SessionStarted{SystemPrompt: "sys"}),
+		envOf(2, domain.MessageAppended{Message: llm.Message{Role: llm.RoleUser}}),
+		envOf(3, domain.TurnStarted{TurnID: "turn-1", Model: "m"}),
+		envOf(4, domain.AssistantMessage{
+			TurnID:     "turn-1",
+			Message:    llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentPart{{ToolCall: &llm.ToolCall{ID: "c1", Name: "write"}}}},
+			StopReason: llm.StopToolUse,
+		}),
+		// Crash mid-ask: ApprovalRequested with NO matching PermissionDecided.
+		envOf(5, domain.ApprovalRequested{TurnID: "turn-1", CallID: "c1", ToolName: "write", Reason: "mutating", Args: map[string]any{"p": "f"}}),
+	}
+
+	plan, err := recovery.Analyze(events, sideEffectLookup)
+	require.NoError(t, err)
+
+	// Classified as a SuspendedApproval, carrying the call details.
+	require.Len(t, plan.SuspendedApprovals, 1, "a requested-but-unresolved ask is a SuspendedApproval")
+	sa := plan.SuspendedApprovals[0]
+	assert.Equal(t, "turn-1", sa.TurnID)
+	assert.Equal(t, "c1", sa.CallID)
+	assert.Equal(t, "write", sa.ToolName)
+	assert.Equal(t, "mutating", sa.Reason)
+	assert.Equal(t, map[string]any{"p": "f"}, sa.Args)
+
+	// The suspended turn must NOT also be classified as a generic OpenTurn — the
+	// loop must re-raise the approval, not silently TurnAbort it.
+	for _, ot := range plan.OpenTurns {
+		assert.NotEqual(t, "turn-1", ot.TurnID,
+			"a turn awaiting approval must NOT be a generic open turn (it would be silently aborted)")
+	}
+}
+
+// TestAnalyze_ResolvedApproval_NotSuspended asserts that once a matching
+// PermissionDecided{CallID} closes the ask, it is NOT a SuspendedApproval (the
+// pair is complete). The turn then closes normally via its terminal event.
+func TestAnalyze_ResolvedApproval_NotSuspended(t *testing.T) {
+	events := []domain.EventEnvelope{
+		envOf(1, domain.SessionStarted{}),
+		envOf(2, domain.TurnStarted{TurnID: "turn-1", Model: "m"}),
+		envOf(3, domain.AssistantMessage{
+			TurnID:     "turn-1",
+			Message:    llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentPart{{ToolCall: &llm.ToolCall{ID: "c1", Name: "write"}}}},
+			StopReason: llm.StopToolUse,
+		}),
+		envOf(4, domain.ApprovalRequested{TurnID: "turn-1", CallID: "c1", ToolName: "write"}),
+		// The ask WAS resolved — the pair is complete.
+		envOf(5, domain.PermissionDecided{CallID: "c1", ToolName: "write", Decision: domain.PermissionAsk, Resolved: domain.AskAllowed}),
+		envOf(6, domain.TurnFinished{TurnID: "turn-1", Reason: domain.Success, NumTurns: 1}),
+	}
+
+	plan, err := recovery.Analyze(events, sideEffectLookup)
+	require.NoError(t, err)
+
+	assert.Empty(t, plan.SuspendedApprovals, "a resolved ask is not suspended")
+	assert.Empty(t, plan.OpenTurns, "a finished turn is not open")
+}

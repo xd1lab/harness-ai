@@ -67,6 +67,13 @@ func eventCases() []struct {
 			ServerName: "files-mcp", ServerVersion: "1.2.3", ToolName: "fs_read", UntrustedDescription: "reads files (UNTRUSTED)",
 		}},
 		{EventMCPToolApprovalResolved, MCPToolApprovalResolved{ServerName: "files-mcp", ToolName: "fs_read", Granted: true}},
+		// FIX 3 (AC-3.1/AC-3.2): the un-collapsed general tool-dispatch approval
+		// request event. Numeric Args use float64 per the table convention so the
+		// JSON round trip is exact.
+		{EventApprovalRequested, ApprovalRequested{
+			TurnID: "t-1", CallID: "c1", ToolName: "bash", Reason: "mutating",
+			Args: map[string]any{"cmd": "rm -rf /tmp/x", "force": float64(1)},
+		}},
 		{EventPlanUpdated, PlanUpdated{TurnID: "t-1", Items: []PlanItem{
 			{Content: "explore the codebase", Status: "completed"},
 			{Content: "write the fix", Status: "in_progress"},
@@ -83,6 +90,7 @@ var allEventTypes = []EventType{
 	EventToolResult, EventToolResultCleared, EventTurnAborted, EventTurnFinished,
 	EventCompactionPerformed, EventPermissionDecided, EventWorkspaceReset,
 	EventBypassModeActivated, EventMCPToolApprovalRequested, EventMCPToolApprovalResolved,
+	EventApprovalRequested,
 	EventPlanUpdated,
 }
 
@@ -234,6 +242,8 @@ func TestTerminationReason_IsError(t *testing.T) {
 		{ErrorDuringExecution, true},
 		{ErrorMaxStructuredOutputRetries, true},
 		{Refusal, true},
+		// FIX 2 (AC-2.1): a doom-loop is a non-success terminal condition.
+		{ErrorDoomLoop, true},
 	}
 	for _, tc := range cases {
 		if got := tc.r.IsError(); got != tc.want {

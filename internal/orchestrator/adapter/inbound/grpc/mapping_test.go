@@ -159,6 +159,11 @@ func TestToGenSubtype_Exhaustive(t *testing.T) {
 		{"max turns", domain.ErrorMaxTurns, genproto.TerminationSubtype_TERMINATION_SUBTYPE_ERROR_MAX_TURNS},
 		{"max budget", domain.ErrorMaxBudgetUSD, genproto.TerminationSubtype_TERMINATION_SUBTYPE_ERROR_MAX_BUDGET_USD},
 		{"during execution", domain.ErrorDuringExecution, genproto.TerminationSubtype_TERMINATION_SUBTYPE_ERROR_DURING_EXECUTION},
+		// FIX 2 (AC-2.2): ErrorDoomLoop maps to the EXISTING generic-error wire
+		// subtype (ERROR_DURING_EXECUTION) — no proto/gen change. The dedicated
+		// not-UNSPECIFIED assertion below proves it is not silently falling through
+		// the default case.
+		{"doom loop maps to during-execution", domain.ErrorDoomLoop, genproto.TerminationSubtype_TERMINATION_SUBTYPE_ERROR_DURING_EXECUTION},
 		{"structured output retries", domain.ErrorMaxStructuredOutputRetries, genproto.TerminationSubtype_TERMINATION_SUBTYPE_ERROR_MAX_STRUCTURED_OUTPUT_RETRIES},
 		{"refusal", domain.Refusal, genproto.TerminationSubtype_TERMINATION_SUBTYPE_REFUSAL},
 		{"zero value", domain.TerminationReason(""), genproto.TerminationSubtype_TERMINATION_SUBTYPE_UNSPECIFIED},
@@ -169,6 +174,16 @@ func TestToGenSubtype_Exhaustive(t *testing.T) {
 			assert.Equal(t, tc.want, toGenSubtype(tc.in))
 		})
 	}
+}
+
+// TestToGenSubtype_DoomLoopIsNotUnspecified pins FIX 2 AC-2.2 explicitly: the new
+// ErrorDoomLoop reason must map to the generic-error subtype and NOT silently
+// fall through to UNSPECIFIED (which a client would read as "no subtype").
+func TestToGenSubtype_DoomLoopIsNotUnspecified(t *testing.T) {
+	got := toGenSubtype(domain.ErrorDoomLoop)
+	assert.Equal(t, genproto.TerminationSubtype_TERMINATION_SUBTYPE_ERROR_DURING_EXECUTION, got)
+	assert.NotEqual(t, genproto.TerminationSubtype_TERMINATION_SUBTYPE_UNSPECIFIED, got,
+		"ErrorDoomLoop must be explicitly mapped, not fall through the default")
 }
 
 // ---- Message (wire → llm) ------------------------------------------------------

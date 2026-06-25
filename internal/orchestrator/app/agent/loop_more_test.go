@@ -69,8 +69,13 @@ func TestNewLoop_NilSinkAndMetricsDefaultToNoop(t *testing.T) {
 }
 
 // TestNewLoop_NilMetricsAbsorbsErrorAndDoomLoop drives both metrics callbacks
-// (RecordDoomLoop via a threshold-1 repeat, RecordRunError via the max-turns
-// cap) through the noop recorder.
+// (RecordDoomLoop via a threshold-1 repeat, RecordRunError via the doom-loop
+// trip) through the noop recorder.
+//
+// FIX 2 (AC-2.7): with DoomLoopThreshold=1 the FIRST batch trips immediately, so
+// the run now terminates with domain.ErrorDoomLoop (not ErrorMaxTurns, which it
+// would only reach if the doom-loop guard were still a pure metric no-op). The
+// noop metrics recorder must absorb BOTH RecordDoomLoop and RecordRunError.
 func TestNewLoop_NilMetricsAbsorbsErrorAndDoomLoop(t *testing.T) {
 	h := newHarness(t)
 	cfg := defaultConfig()
@@ -89,7 +94,7 @@ func TestNewLoop_NilMetricsAbsorbsErrorAndDoomLoop(t *testing.T) {
 
 	res, err := lp.Run(context.Background(), agent.RunInput{SessionID: "sess-nilmet", UserMessage: userMsg("go")})
 	require.NoError(t, err)
-	assert.Equal(t, domain.ErrorMaxTurns, res.Reason)
+	assert.Equal(t, domain.ErrorDoomLoop, res.Reason)
 }
 
 // ---------------------------------------------------------------------------
