@@ -36,6 +36,8 @@ Context is treated as a finite resource — actively managed via token accountin
 - [MCP Server mode (callee)](#mcp-server-mode-callee) — other agents delegate to Boltrope
 - [Structured output](#structured-output) — get JSON your code can parse
 - [Long-term memory](#long-term-memory) — durable, tenant-scoped recall across sessions
+- [Planning](#planning) — durable, time-travelable task plans
+- [Sub-agents](#sub-agents) — delegate a focused subtask to a depth-bounded child loop
 - [Local dev mode (`boltrope-dev`)](#local-dev-mode-boltrope-dev) — one binary, no Docker, no keys
 - [Examples](#examples) · [How Boltrope compares](docs/comparison.md)
 - [Feature overview](#feature-overview)
@@ -275,6 +277,34 @@ The agent can **remember things across sessions**. Memory is exposed to the mode
 **Dev vs prod backing.** [`boltrope-dev`](#local-dev-mode-boltrope-dev) backs the same three tools with an **in-memory** store (a tenant-keyed map) so the feature works locally with no Postgres — enforcing the same tenant isolation via the same context seam. Production uses the **Postgres/RLS** store. The two impls live in separate packages so the dev binary keeps its pgx-free build-time fence.
 
 **Deliberately simple — no vector/RAG.** Retrieval is key/value + tag/substring, on purpose. There is **no embedding model, no vector index, and no RAG pipeline** — that me-too complexity is explicitly out of scope ([ADR-0030](docs/decisions/0030-long-term-memory-via-tools.md)). The job is durable recall of facts by key or tag, not semantic search over a corpus.
+
+---
+
+## Planning
+
+The agent can **author and track a multi-step plan** — a durable, replayable todo list — via a single tool. Like memory, there's no new API to call; the model plans on its own, mid-run ([ADR-0031](docs/decisions/0031-in-loop-virtual-tools-planning-and-subagents.md)).
+
+- **`todo_write`** `{items: [{content, status}]}` — record or update the current task plan. Send the **complete** ordered list every time; it replaces the previous plan. Each item has a `content` (the step) and a `status` (`pending` / `in_progress` / `completed`); keep exactly one item `in_progress`. An empty array clears the plan.
+
+**Durable and time-travelable.** Each `todo_write` appends a `PlanUpdated` event to the session's event log. The plan therefore survives replay, shows up in the [event-log read + time-travel API](#event-log-read--time-travel) as a **non-redacted** descriptor (plan text isn't a secret, unlike provider raw or system prompts), and reconstructs correctly at any `GetStateAtSeq`. Billing totals are unaffected by it.
+
+**Re-surfaced to the model.** The **latest** plan is re-surfaced into the model's context window as a single `[current plan]` note, so the agent always sees where it is — stale plan updates never pile up.
+
+**Not a permission mode.** This is a *planning primitive*, distinct from the session-scoped `plan` permission mode ([ADR-0019](docs/decisions/0019-session-scoped-permission-mode.md)), which is a guardrail that denies mutating tools. `todo_write` records intent; the permission mode constrains action.
+
+---
+
+## Sub-agents
+
+The agent can **delegate a focused subtask to a child sub-agent** that runs its own bounded loop and returns a condensed result ([ADR-0031](docs/decisions/0031-in-loop-virtual-tools-planning-and-subagents.md)).
+
+- **`spawn_subagent`** `{task, model?}` — hand a self-contained `task` to a child agent (it does **not** see the parent conversation). The child runs its own loop, and its condensed result is fed back to the parent as the tool result. `model` optionally overrides the child's model; omit it to inherit the parent's.
+
+**Depth-bounded.** Recursion is capped by `BOLTROPE_SUBAGENT_MAX_DEPTH` (default `2`). The tool is **only advertised below the limit**, so the model is never offered a spawn that would be rejected — an advertised `spawn_subagent` call always succeeds the depth check. A child knows its own depth, so grandchild spawning is bounded the same way.
+
+**Gated like any mutation.** A child can do anything, so `spawn_subagent` is classified as a mutating tool: it's **serialized** (never auto-parallelized) and flows through the **full permission pipeline** — PreToolUse hooks → policy → approval. A denied spawn never runs.
+
+**In the loop, not the runtime.** Both `todo_write` and `spawn_subagent` are **virtual tools** handled inside the orchestrator loop rather than the tool sandbox, because they need the event log and the sub-agent spawner — which the tool-runtime deliberately can't reach. They still emit the same `ToolExecutionStarted` + `ToolResult` events as real tools, so audit, replay, and idempotency are identical ([ADR-0031](docs/decisions/0031-in-loop-virtual-tools-planning-and-subagents.md)).
 
 ---
 
