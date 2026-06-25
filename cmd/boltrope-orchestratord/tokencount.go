@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 
 	"github.com/xd1lab/harness-ai/internal/orchestrator/app"
 	"github.com/xd1lab/harness-ai/internal/orchestrator/app/agentctx"
@@ -39,13 +41,35 @@ func (c *gatewayTokenCounter) Count(ctx context.Context, model string, msgs []ll
 // estimateTokens is the local fallback: a coarse ~4-chars-per-token estimate over
 // the rendered message and tool-definition text. It is monotone in window size,
 // which is all the compaction trigger needs.
+//
+// It counts every token-bearing [llm.ContentPart] variant, not just text:
+// assistant Text, the textual ToolResult.Content fed back to the model, the
+// ToolCall name plus its JSON-marshaled args, and Thinking text. Image bytes are
+// deliberately excluded because they are not model-text tokens. The ContentPart
+// union has exactly one field non-nil per part (see message.go), so the branches
+// are mutually exclusive and cannot double-count. The Args contribution is
+// deterministic regardless of map iteration order because json.Marshal sorts
+// object keys; on a marshal error we fall back to fmt rendering so a
+// non-serializable arg still contributes non-zero characters.
 func estimateTokens(msgs []llm.Message, tools []llm.ToolDef) int {
 	const charsPerToken = 4
 	chars := 0
 	for _, m := range msgs {
 		for _, p := range m.Content {
-			if p.Text != nil {
+			switch {
+			case p.Text != nil:
 				chars += len(p.Text.Text)
+			case p.ToolResult != nil:
+				chars += len(p.ToolResult.Content)
+			case p.ToolCall != nil:
+				chars += len(p.ToolCall.Name)
+				if b, err := json.Marshal(p.ToolCall.Args); err == nil {
+					chars += len(b)
+				} else {
+					chars += len(fmt.Sprintf("%v", p.ToolCall.Args))
+				}
+			case p.Thinking != nil:
+				chars += len(p.Thinking.Text)
 			}
 		}
 	}
