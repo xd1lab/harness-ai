@@ -288,7 +288,32 @@ curl -s -N -X POST localhost:8088/v1/sessions/<id>/run -d '{"text":"hello"}'
 - **它很吵。** 每次啟動都印多行橫幅:`NOT FOR PRODUCTION · IN-MEMORY · NO RLS · NO mTLS · NO OIDC · LOOPBACK ONLY · NO-EXEC`。
 - **它仍然跑租戶檢查。** 跳過 OIDC 時它注入一個固定的合成單租戶 principal,所以 `igrpc` 的 `authorizeTenant` 走的是同一條程式路徑——單租戶 loopback 語意*取代*多租戶 RLS,而不是刪掉檢查。
 
-**v1 範圍,誠實說:** 會話是**記憶體**式的(不持久、退出即失),沙箱是 **no-exec**——`read`/`compute`/`sub-agent` 可用,但 `bash` 是會拒絕的佔位符(`"dev sandbox exec disabled"`),所以 v1 展示整套迴圈,但不執行任意 shell/coding 任務。**SQLite/檔案持久化**與**真正可選的本機-exec 沙箱**重新劃入路線圖,其旗標(`--store`、`--enable-local-exec`)是**被拒絕、而非默默忽略**。見 [ADR-0024](docs/decisions/0024-boltrope-dev-local-mode.md)。
+**預設範圍,誠實說:** 在**沒有任何旗標**時,會話是**記憶體**式的(不持久、退出即失),沙箱是 **no-exec**——`read`/`compute`/`sub-agent` 可用,但 `bash` 是會拒絕的佔位符(`"dev sandbox exec disabled"`),所以預設執行展示整套迴圈,但不執行任意 shell/coding 任務。**SQLite/檔案持久化**仍重新劃入路線圖,其 `--store` 旗標是**被拒絕、而非默默忽略**。見 [ADR-0024](docs/decisions/0024-boltrope-dev-local-mode.md)。
+
+### 選擇啟用:真實本機模型 + Docker 沙箱(gemma / Ollama)
+
+你可以讓 `boltrope-dev` 連上一個**真實的本機 OpenAI 相容模型**,並讓它**在強隔離的 Docker 沙箱中實際執行工具**——兩者都在**顯式、預設關閉(default-OFF)**的旗標之後([ADR-0029](docs/decisions/0029-boltrope-dev-real-model-and-local-exec-opt-in.md))。stub 模型 + no-exec 沙箱仍是**預設**。
+
+```bash
+# 前置需求:Docker 運行中;Ollama 提供 OpenAI 相容 API。
+ollama serve                 # 提供 http://localhost:11434/v1
+ollama pull gemma            # 或任何你想用的 model id
+
+# 連上本機模型,並在 Docker 沙箱中執行工具。
+go run ./cmd/boltrope-dev run \
+  --model-url http://localhost:11434/v1 \  # OpenAI 相容 base URL
+  --model gemma \                          # model id(預設:stub)
+  --enable-local-exec \                    # 在每會話 Docker 容器中執行真實工具
+  --enable-native-schema                   # 開啟原生 json_schema 結構化輸出
+```
+
+- `--model-url <base-url>` 將迴圈指向任何 **OpenAI 相容**端點(Ollama、vLLM、LM Studio、llama.cpp、TGI、LiteLLM)。未設定時使用免金鑰的 `stub` 模型。
+- `--model <id>`(預設 `stub`)設定貫穿迴圈與 gRPC 預設的 model id。
+- `--model-api-key-env <ENVVAR>`(選用)指定一個環境變數,其**值**作為 API key 送出——該值**絕不**被記錄或印在橫幅中(只顯示模型端點 + id)。
+- `--enable-native-schema` 為該端點開啟原生 `json_schema` 結構化輸出。
+- `--enable-local-exec` 以真實沙箱取代 no-exec 沙箱:每個會話跑在**自己的 Docker 容器**中,具 `--network none` + cgroup/PID 限制、預設拒絕的網路出口(所以 `webfetch`/`websearch` 被拒)、一份記憶體去重帳本(無 Postgres),以及一個位於暫存目錄的 FS blob 儲存。容器映像/二進位檔重用 `BOLTROPE_TOOLRT_IMAGE` / `BOLTROPE_TOOLRT_DOCKER_BIN`。
+
+當 local-exec 開啟時,橫幅會以 `Sandbox     : LOCAL-EXEC ENABLED (Docker isolation: per-session container, --network none, cgroup/PID limits)` 取代 `NO-EXEC` 標記,並加上一行 `Model       : <endpoint> <id>`。**一切仍然是 NOT-FOR-PRODUCTION:** 醒目橫幅、只綁 loopback,以及生產訊號拒絕(`KUBERNETES_SERVICE_HOST` / `BOLTROPE_POSTGRES__DSN` / `BOLTROPE_OIDC_ISSUER` → fail-closed 退出)都未改變,即使帶上這些旗標仍會生效。**Docker 僅在 `--enable-local-exec` 時需要;**預設路徑不需要 Docker。
 
 ---
 

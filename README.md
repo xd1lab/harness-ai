@@ -288,7 +288,32 @@ curl -s -N -X POST localhost:8088/v1/sessions/<id>/run -d '{"text":"hello"}'
 - **It's loud.** Every start prints a multi-line banner: `NOT FOR PRODUCTION · IN-MEMORY · NO RLS · NO mTLS · NO OIDC · LOOPBACK ONLY · NO-EXEC`.
 - **It still runs the tenant check.** With OIDC skipped it injects a fixed synthetic single-tenant principal, so `igrpc`'s `authorizeTenant` runs the same code path — single-tenant loopback semantics *replace* multi-tenant RLS, they don't delete the check.
 
-**v1 scope, honestly:** sessions are **in-memory** (non-persistent, lost on exit) and the sandbox is **no-exec** — `read`/`compute`/`sub-agent` work, but `bash` is a refusing placeholder (`"dev sandbox exec disabled"`), so v1 demonstrates the whole loop but does not run arbitrary shell/coding tasks. **SQLite/file persistence** and a **real opt-in local-exec sandbox** are re-scoped to roadmap and their flags (`--store`, `--enable-local-exec`) are **rejected, not silently ignored**. See [ADR-0024](docs/decisions/0024-boltrope-dev-local-mode.md).
+**Default scope, honestly:** with **no flags**, sessions are **in-memory** (non-persistent, lost on exit) and the sandbox is **no-exec** — `read`/`compute`/`sub-agent` work, but `bash` is a refusing placeholder (`"dev sandbox exec disabled"`), so the default run demonstrates the whole loop but does not run arbitrary shell/coding tasks. **SQLite/file persistence** is still re-scoped to roadmap and its `--store` flag is **rejected, not silently ignored**. See [ADR-0024](docs/decisions/0024-boltrope-dev-local-mode.md).
+
+### Opt in: a real local model + a Docker sandbox (gemma / Ollama)
+
+You can point `boltrope-dev` at a **real local OpenAI-compatible model** and have it **actually execute tools in a strongly-isolated Docker sandbox** — both behind **explicit, default-OFF** flags ([ADR-0029](docs/decisions/0029-boltrope-dev-real-model-and-local-exec-opt-in.md)). The stub model + no-exec sandbox stays the **default**.
+
+```bash
+# Prereqs: Docker running; Ollama serving an OpenAI-compatible API.
+ollama serve                 # exposes http://localhost:11434/v1
+ollama pull gemma            # or any model id you want to use
+
+# Talk to the local model AND execute tools in a Docker sandbox.
+go run ./cmd/boltrope-dev run \
+  --model-url http://localhost:11434/v1 \  # OpenAI-compatible base URL
+  --model gemma \                          # model id (default: stub)
+  --enable-local-exec \                    # real tools in a per-session Docker container
+  --enable-native-schema                   # turn on native json_schema structured output
+```
+
+- `--model-url <base-url>` points the loop at any **OpenAI-compatible** endpoint (Ollama, vLLM, LM Studio, llama.cpp, TGI, LiteLLM). When unset, the keyless `stub` model is used.
+- `--model <id>` (default `stub`) sets the model id threaded through the loop and the gRPC default.
+- `--model-api-key-env <ENVVAR>` (optional) names an env var whose **value** is sent as the API key — the value is **never** logged or printed in the banner (only the model endpoint + id are shown).
+- `--enable-native-schema` turns on native `json_schema` structured output for the endpoint.
+- `--enable-local-exec` swaps the no-exec sandbox for a real one: each session runs in its **own Docker container** with `--network none` + cgroup/PID limits, deny-by-default egress (so `webfetch`/`websearch` are denied), an in-memory dedup ledger (no Postgres), and an FS blob store in a temp dir. The container image/binary reuse `BOLTROPE_TOOLRT_IMAGE` / `BOLTROPE_TOOLRT_DOCKER_BIN`.
+
+When local-exec is on, the banner replaces the `NO-EXEC` marker with `Sandbox     : LOCAL-EXEC ENABLED (Docker isolation: per-session container, --network none, cgroup/PID limits)` and adds a `Model       : <endpoint> <id>` line. **Everything stays NOT-FOR-PRODUCTION:** the loud banner, the loopback-only bind, and the prod-signal refusal (`KUBERNETES_SERVICE_HOST` / `BOLTROPE_POSTGRES__DSN` / `BOLTROPE_OIDC_ISSUER` → fail-closed exit) are unchanged and still run even with these flags set. **Docker is required only for `--enable-local-exec`;** the default path needs no Docker.
 
 ---
 

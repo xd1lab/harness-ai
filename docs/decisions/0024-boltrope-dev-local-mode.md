@@ -2,7 +2,7 @@
 
 # ADR-0024: `boltrope dev` local mode — a separate single-process, loopback-only, in-memory dev binary that runs the real agent loop
 
-- **Status:** Accepted
+- **Status:** Accepted — amended by [ADR-0029](0029-boltrope-dev-real-model-and-local-exec-opt-in.md) (the §3 roadmap deferrals of a real model edge and an opt-in local-exec sandbox are now shipped behind explicit, default-OFF flags; the import-graph fence of §5 is refined to exact-match the `modelgateway/app` Service while admitting the pure-data capabilities leaf)
 - **Date:** 2026-06-15
 - **Relates to:** ADR-0009/0010 (service decomposition, gRPC client edge), ADR-0011 (event-store schema — RLS, fenced lease, pg_notify), ADR-0013/NFR-SEC-01 (security model, fail-closed edge), ADR-0014 (sandbox isolation: docker kill / `--network none` / cgroup limits), ADR-0018/0019 (keyless demo provider, session-scoped permission mode), ADR-0020 (production OIDC edge auth), the eval harness (`test/eval/harness.go`), the REST/SSE facade and `igrpc.Server`. Decisions recorded in full in `C:/Users/123/Documents/harness-wave1-build/boltrope-dev/DECISIONS.md` (決策 K-1, K-2).
 
