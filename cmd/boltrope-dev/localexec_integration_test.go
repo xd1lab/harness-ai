@@ -20,6 +20,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os/exec"
 	"strings"
@@ -45,7 +46,7 @@ func drainTerminal(t *testing.T, s orchapp.ToolStream) orchapp.ToolResult {
 	var last orchapp.ToolResult
 	for {
 		ev, err := s.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return last
 		}
 		if err != nil {

@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	orchapp "github.com/xd1lab/harness-ai/internal/orchestrator/app"
+	orchdomain "github.com/xd1lab/harness-ai/internal/orchestrator/domain"
 	"github.com/xd1lab/harness-ai/internal/platform/llm"
 	trapp "github.com/xd1lab/harness-ai/internal/toolruntime/app"
 	"github.com/xd1lab/harness-ai/internal/toolruntime/app/execute"
@@ -98,7 +99,7 @@ func TestMemDedup_GetOrCreate_Complete_Lookup(t *testing.T) {
 
 // TestMemDedup_SatisfiesPort is a compile-time-ish assertion at runtime that the
 // dev dedup store satisfies the toolruntime app.DedupStore port.
-func TestMemDedup_SatisfiesPort(t *testing.T) {
+func TestMemDedup_SatisfiesPort(_ *testing.T) {
 	var _ trapp.DedupStore = newMemDedup() // RED until newMemDedup exists
 }
 
@@ -193,8 +194,11 @@ func TestExecBridge_ListTools_MapsDescriptors(t *testing.T) {
 	assert.Equal(t, "bash", got[0].Name)
 	assert.Equal(t, "Run a shell command in the sandbox.", got[0].Description)
 	assert.JSONEq(t, `{"type":"object"}`, string(got[0].JSONSchema))
-	assert.Equal(t, trdomain.SideEffectMutating, got[0].SideEffect)
-	assert.Equal(t, trdomain.EgressClassNone, got[0].EgressClass)
+	// The descriptor carries the orchestrator's DISTINCT (string-equal) enums after
+	// the cross-package translation (toolruntime SideEffectMutating/EgressClassNone
+	// -> orchestrator SideEffectMutating/EgressClassNone; ADR-0029 AC-9).
+	assert.Equal(t, orchdomain.SideEffectMutating, got[0].SideEffect)
+	assert.Equal(t, orchdomain.EgressClassNone, got[0].EgressClass)
 }
 
 // --- AC-6: resolveTools selects the bridge when local-exec is ON ---------------

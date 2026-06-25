@@ -77,6 +77,11 @@ type serveResult struct {
 
 	grpcServer *grpc.Server
 	httpServer *http.Server
+
+	// cleanup, when non-nil, releases resources owned by the resolved wiring (the
+	// local-exec FS blob temp dir). It is invoked by Shutdown after the listeners
+	// stop. The default (no-exec) path leaves it nil.
+	cleanup func() error
 }
 
 // newServer assembles and STARTS the dev server on the (possibly ephemeral)
@@ -117,11 +122,26 @@ func newServer(opts serveOpts) (*serveResult, error) {
 		enableNativeSchema: opts.EnableNativeSchema,
 	}, opts.Env)
 
+	// Resolve the tool port (ADR-0029). By DEFAULT this is the in-process no-exec
+	// [Runtime] (byte-identical to pre-ADR-0029). When opts.EnableLocalExec is set
+	// it is the in-process bridge over the tool-runtime execute.Service backed by
+	// the real Docker runtime; buildLocalExec also returns a cleanup for the FS blob
+	// temp dir, threaded into serveResult.Shutdown.
+	var tools app.ToolRuntimePort = newRuntime()
+	var cleanup func() error
+	if opts.EnableLocalExec {
+		_, bridge, cu, lerr := buildLocalExec(opts.Env)
+		if lerr != nil {
+			return nil, fmt.Errorf("boltrope-dev: build local-exec runtime: %w", lerr)
+		}
+		tools, cleanup = bridge, cu
+	}
+
 	gate := newDenyGate()
 	deps := agent.Deps{
 		EventLog:  store,
 		Model:     model,
-		Tools:     newRuntime(),
+		Tools:     tools,
 		Approvals: gate,
 		Hooks:     newAllowHooks(),
 		Policy:    pol,
@@ -180,6 +200,7 @@ func newServer(opts serveOpts) (*serveResult, error) {
 		HTTPAddr:   httpLn.Addr().String(),
 		grpcServer: grpcServer,
 		httpServer: httpServer,
+		cleanup:    cleanup,
 	}
 
 	go func() { _ = grpcServer.Serve(grpcLn) }()
@@ -203,6 +224,14 @@ func (r *serveResult) Shutdown(ctx context.Context) error {
 	case <-done:
 	case <-ctx.Done():
 		r.grpcServer.Stop()
+	}
+
+	// Release wiring-owned resources (the local-exec FS blob temp dir) after the
+	// listeners have stopped. The default no-exec path leaves cleanup nil.
+	if r.cleanup != nil {
+		if cerr := r.cleanup(); cerr != nil && httpErr == nil {
+			httpErr = cerr
+		}
 	}
 	return httpErr
 }
