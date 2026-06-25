@@ -130,6 +130,13 @@ func toGenSubtype(r domain.TerminationReason) genproto.TerminationSubtype {
 		return genproto.TerminationSubtype_TERMINATION_SUBTYPE_ERROR_MAX_BUDGET_USD
 	case domain.ErrorDuringExecution:
 		return genproto.TerminationSubtype_TERMINATION_SUBTYPE_ERROR_DURING_EXECUTION
+	case domain.ErrorDoomLoop:
+		// FIX 2 (ADR-0032): a doom-loop is a generic execution error on the wire.
+		// It maps to the EXISTING ERROR_DURING_EXECUTION subtype so no proto/gen
+		// change is needed; the distinct domain reason is preserved for metrics and
+		// logs. Explicit (not default) so it never silently falls through to
+		// UNSPECIFIED.
+		return genproto.TerminationSubtype_TERMINATION_SUBTYPE_ERROR_DURING_EXECUTION
 	case domain.ErrorMaxStructuredOutputRetries:
 		return genproto.TerminationSubtype_TERMINATION_SUBTYPE_ERROR_MAX_STRUCTURED_OUTPUT_RETRIES
 	case domain.Refusal:

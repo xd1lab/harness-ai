@@ -45,6 +45,14 @@ const (
 	// [ErrorDuringExecution], so it can trigger a fallback-model policy and be
 	// reported separately (architecture §11.3).
 	Refusal TerminationReason = "refusal"
+
+	// ErrorDoomLoop is termination because the model entered a doom loop —
+	// repeatedly issuing the IDENTICAL tool call (same name + same args) past the
+	// configured threshold — so the loop terminates the run rather than burning
+	// turns until the MaxTurns cap (ADR-0032 FIX 2). On the wire it maps to the
+	// generic-error subtype TERMINATION_SUBTYPE_ERROR_DURING_EXECUTION (no proto
+	// change); IsError() reports true automatically since it != Success.
+	ErrorDoomLoop TerminationReason = "error_doom_loop"
 )
 
 // IsError reports whether the reason denotes an unsuccessful termination (anything
