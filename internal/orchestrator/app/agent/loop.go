@@ -150,6 +150,12 @@ type Config struct {
 	// the loop falls back to validate-and-retry. Meaningful only when OutputSchema
 	// is set. Mirrors [llm.Request.Strict].
 	Strict bool
+	// Depth is this loop's own sub-agent recursion depth (0 = root). It is used
+	// (a) to gate whether the spawn_subagent virtual tool is advertised (only when
+	// Depth < [app.SubAgentPort.MaxDepth]) and (b) to compute the child's depth:
+	// the spawn_subagent intercept passes Depth+1 to [app.SubAgentPort.Spawn]. The
+	// zero value (root) preserves current behavior for runs that never spawn.
+	Depth int
 }
 
 const (
