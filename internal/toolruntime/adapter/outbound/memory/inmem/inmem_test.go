@@ -1,19 +1,20 @@
 package inmem_test
 
-// RED (TDD) — ADR-0030 AC-8 / AC-14. Unit tests for the IN-MEMORY app.MemoryStore
-// used by the dev binary's local-exec path. They prove tenant isolation purely
-// in-process (no Postgres): a value written under tenant A is invisible to tenant
-// B for Get/Search, a Delete under B leaves A intact, and every method fails closed
-// (ErrNoTenant) when the context carries no tenant.
-//
-// The package under test (internal/toolruntime/adapter/outbound/memory/inmem) and
-// the app.MemoryStore port do not exist yet, so this file is expected to FAIL to
-// compile until the feature is implemented (feature absent).
+// ADR-0030 AC-8 / AC-14. Unit tests for the IN-MEMORY app.MemoryStore used by the
+// dev binary's local-exec path. They prove tenant isolation purely in-process (no
+// Postgres): a value written under tenant A is invisible to tenant B for
+// Get/Search, a Delete under B leaves A intact, and every method fails closed
+// (ErrNoTenant) when the context carries no tenant. They also pin the Search
+// query/tag AND-semantics and limit cap, and the UPSERT timestamp contract
+// (CreatedAt preserved, UpdatedAt bumped) so the dev store matches the pgx-backed
+// store byte-for-byte on observable behavior.
 
 import (
 	"context"
 	"errors"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/outbound/memory/inmem"
 	"github.com/xd1lab/harness-ai/internal/toolruntime/app"
@@ -77,6 +78,74 @@ func TestPutUpserts(t *testing.T) {
 	}
 	if got.Value != "v2" {
 		t.Errorf("upsert value = %q, want %q", got.Value, "v2")
+	}
+}
+
+// TestUpsertPreservesCreatedAtBumpsUpdatedAt pins the UPSERT timestamp contract:
+// overwriting an existing (namespace,key) keeps the original CreatedAt and moves
+// UpdatedAt forward (never backward), mirroring the PG store's
+// `... DO UPDATE SET value=EXCLUDED.value, tags=EXCLUDED.tags, updated_at=now()`
+// which never touches created_at. This is the AC-14 / T8 timestamp invariant.
+func TestUpsertPreservesCreatedAtBumpsUpdatedAt(t *testing.T) {
+	t.Parallel()
+	st := newStore()
+
+	if err := st.Put(ctxA(), "default", "k", "v1", nil); err != nil {
+		t.Fatalf("Put v1: %v", err)
+	}
+	first, ok, err := st.Get(ctxA(), "default", "k")
+	if err != nil || !ok {
+		t.Fatalf("Get after first Put: ok=%v err=%v", ok, err)
+	}
+	if first.CreatedAt.IsZero() || first.UpdatedAt.IsZero() {
+		t.Fatalf("first Put left a zero timestamp: created=%v updated=%v", first.CreatedAt, first.UpdatedAt)
+	}
+	if first.UpdatedAt.Before(first.CreatedAt) {
+		t.Fatalf("first Put: UpdatedAt %v is before CreatedAt %v", first.UpdatedAt, first.CreatedAt)
+	}
+
+	// Sleep a beat so the second now() is strictly later than the first on any
+	// clock resolution, making the "bumped" assertion deterministic.
+	time.Sleep(2 * time.Millisecond)
+
+	if err := st.Put(ctxA(), "default", "k", "v2", nil); err != nil {
+		t.Fatalf("Put v2: %v", err)
+	}
+	second, ok, err := st.Get(ctxA(), "default", "k")
+	if err != nil || !ok {
+		t.Fatalf("Get after upsert: ok=%v err=%v", ok, err)
+	}
+	if second.Value != "v2" {
+		t.Fatalf("upsert value = %q, want %q", second.Value, "v2")
+	}
+	if !second.CreatedAt.Equal(first.CreatedAt) {
+		t.Errorf("upsert changed CreatedAt: was %v, now %v — must be preserved", first.CreatedAt, second.CreatedAt)
+	}
+	if !second.UpdatedAt.After(first.UpdatedAt) {
+		t.Errorf("upsert did not bump UpdatedAt: was %v, now %v — must move forward", first.UpdatedAt, second.UpdatedAt)
+	}
+}
+
+// TestSearchOverLimitIsHardCapped verifies a caller-supplied limit larger than the
+// shared DefaultMemorySearchLimit cap is clamped to the cap, so a model-driven
+// search can never read an unbounded number of rows.
+func TestSearchOverLimitIsHardCapped(t *testing.T) {
+	t.Parallel()
+	st := newStore()
+
+	total := app.DefaultMemorySearchLimit + 10
+	for i := 0; i < total; i++ {
+		key := "k" + strconv.Itoa(i)
+		if err := st.Put(ctxA(), "default", key, "match-me", nil); err != nil {
+			t.Fatalf("Put %s: %v", key, err)
+		}
+	}
+	hits, err := st.Search(ctxA(), "match", nil, total) // ask for more than the cap
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(hits) != app.DefaultMemorySearchLimit {
+		t.Errorf("Search with over-cap limit returned %d, want hard cap %d", len(hits), app.DefaultMemorySearchLimit)
 	}
 }
 
