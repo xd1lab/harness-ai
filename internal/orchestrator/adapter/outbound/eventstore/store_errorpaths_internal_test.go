@@ -191,7 +191,13 @@ func assignDest(dest, v any) error {
 	case *int:
 		*d = v.(int)
 	case *[]byte:
-		*d = v.([]byte)
+		// A nullable column scanned into *[]byte: an untyped nil row value (a NULL
+		// content_hash / chain_hash) leaves the dest nil; otherwise copy the bytes.
+		if v == nil {
+			*d = nil
+		} else {
+			*d = v.([]byte)
+		}
 	case **string:
 		if v == nil {
 			*d = nil
@@ -277,6 +283,20 @@ func insertEventStub(err error) stmtStub {
 		err:   err,
 		scan: func(dest ...any) error {
 			*(dest[0].(*time.Time)) = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+			return nil
+		},
+	}
+}
+
+// chainHeadStub returns the stub for the in-tx `SELECT chain_head FROM sessions`
+// the append path runs after the optimistic gate to seed the running chain head.
+// It scans a NULL chain_head (a fresh session with no chained events), so the
+// fold seeds from the session genesis — the common happy-path shape.
+func chainHeadStub() stmtStub {
+	return stmtStub{
+		match: "chain_head FROM sessions",
+		scan: func(dest ...any) error {
+			*(dest[0].(*[]byte)) = nil
 			return nil
 		},
 	}
@@ -502,7 +522,7 @@ func TestAppend_CommitErrorReclassification(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tx := &fakeTx{
-				stubs:     []stmtStub{gateStub(6, nil), insertEventStub(nil)},
+				stubs:     []stmtStub{gateStub(6, nil), chainHeadStub(), insertEventStub(nil)},
 				commitErr: tc.commitErr,
 			}
 			store, _, _ := newFakeStore(tx)
@@ -575,8 +595,10 @@ func TestAppend_IdempotentReplayShortCircuits(t *testing.T) {
 		match: "request_id = $2",
 		rows: &fakeRows{rows: [][]any{
 			// eventColumns order: session_id, seq, request_id, event_type,
-			// schema_version, payload, blob_ref, actor, created_at.
-			{"sess-1", int64(7), "req-1", string(domain.EventTurnStarted), 1, priorPayload, nil, string(domain.ActorSystem), createdAt},
+			// schema_version, payload, blob_ref, actor, created_at, content_hash,
+			// chain_hash. The two trailing nils model a NULL-hash (pre-0009) row;
+			// this replay test asserts only seq/request_id, not the hashes.
+			{"sess-1", int64(7), "req-1", string(domain.EventTurnStarted), 1, priorPayload, nil, string(domain.ActorSystem), createdAt, []byte(nil), []byte(nil)},
 		}},
 	}}}
 	store, _, _ := newFakeStore(tx)
@@ -622,7 +644,7 @@ func TestAppend_PerStatementFailures(t *testing.T) {
 			stubs: []stmtStub{{
 				match: "request_id = $2",
 				rows: &fakeRows{rows: [][]any{
-					{"sess-1", int64(1), "req-1", string(domain.EventTurnStarted), 1, []byte("{not json"), nil, "system", time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
+					{"sess-1", int64(1), "req-1", string(domain.EventTurnStarted), 1, []byte("{not json"), nil, "system", time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), []byte(nil), []byte(nil)},
 				}},
 			}},
 			events:  []app.AppendInput{turnStartedInput("t1")},
@@ -638,19 +660,19 @@ func TestAppend_PerStatementFailures(t *testing.T) {
 			// json.Marshal cannot encode NaN — the one way a domain payload can
 			// fail to marshal, exercising marshalPayload's error branch.
 			name:    "payload marshal failure",
-			stubs:   []stmtStub{gateStub(6, nil)},
+			stubs:   []stmtStub{gateStub(6, nil), chainHeadStub()},
 			events:  []app.AppendInput{{Event: domain.AssistantMessage{TurnID: "t1", CostUSD: math.NaN()}}},
 			wantSub: "marshaling AssistantMessage payload",
 		},
 		{
 			name:    "event insert fails",
-			stubs:   []stmtStub{gateStub(6, nil), insertEventStub(errors.New("disk full"))},
+			stubs:   []stmtStub{gateStub(6, nil), chainHeadStub(), insertEventStub(errors.New("disk full"))},
 			events:  []app.AppendInput{turnStartedInput("t1")},
 			wantSub: "inserting event seq=6",
 		},
 		{
 			name:    "notify fails",
-			stubs:   []stmtStub{gateStub(6, nil), insertEventStub(nil), {match: "pg_notify", err: errors.New("conn reset")}},
+			stubs:   []stmtStub{gateStub(6, nil), chainHeadStub(), insertEventStub(nil), {match: "pg_notify", err: errors.New("conn reset")}},
 			events:  []app.AppendInput{turnStartedInput("t1")},
 			wantSub: "eventstore: notify",
 		},
@@ -659,7 +681,7 @@ func TestAppend_PerStatementFailures(t *testing.T) {
 			// only AppendWithBlob inserts the metadata row that the composite FK
 			// needs in the same tx, so this is the dangling-reference guard.
 			name:    "blob-referencing event without a BlobUpload",
-			stubs:   []stmtStub{gateStub(6, nil)},
+			stubs:   []stmtStub{gateStub(6, nil), chainHeadStub()},
 			events:  []app.AppendInput{{Event: domain.ToolResult{CallID: "c1", BlobRef: "sha256:abc"}}},
 			wantSub: "use AppendWithBlob",
 		},
@@ -690,7 +712,7 @@ func TestAppend_PerStatementFailures(t *testing.T) {
 func TestAppend_SuccessAssignsSeqsAndDefaults(t *testing.T) {
 	t.Parallel()
 
-	tx := &fakeTx{stubs: []stmtStub{gateStub(7, nil), insertEventStub(nil)}}
+	tx := &fakeTx{stubs: []stmtStub{gateStub(7, nil), chainHeadStub(), insertEventStub(nil)}}
 	store, _, _ := newFakeStore(tx)
 
 	envs, err := store.Append(fakeTenantCtx(), "sess-1", 5, 2, "req-1",
@@ -729,7 +751,7 @@ func TestAppendWithBlob(t *testing.T) {
 
 	t.Run("success inserts the blob row before the event", func(t *testing.T) {
 		t.Parallel()
-		tx := &fakeTx{stubs: []stmtStub{gateStub(6, nil), insertEventStub(nil)}}
+		tx := &fakeTx{stubs: []stmtStub{gateStub(6, nil), chainHeadStub(), insertEventStub(nil)}}
 		store, _, _ := newFakeStore(tx)
 		envs, err := store.AppendWithBlob(fakeTenantCtx(), "sess-1", 5, 0, "req-1", blob, blobEvent)
 		if err != nil {
@@ -766,6 +788,7 @@ func TestAppendWithBlob(t *testing.T) {
 		t.Parallel()
 		tx := &fakeTx{stubs: []stmtStub{gateStub(6, nil)}}
 		store, _, _ := newFakeStore(tx)
+		tx.stubs = append(tx.stubs, chainHeadStub())
 		other := BlobUpload{Ref: "sha256:OTHER", MediaType: "text/plain", SizeBytes: 1, StorageURI: "x"}
 		_, err := store.AppendWithBlob(fakeTenantCtx(), "sess-1", 5, 0, "req-1", other, blobEvent)
 		if err == nil || !strings.Contains(err.Error(), "no matching BlobUpload") {
@@ -811,8 +834,8 @@ func TestScanEnvelopes(t *testing.T) {
 	t.Run("decodes rows and stamps the caller tenant", func(t *testing.T) {
 		t.Parallel()
 		rows := &fakeRows{rows: [][]any{
-			{"sess-1", int64(1), "req-1", string(domain.EventTurnStarted), 1, goodPayload, nil, string(domain.ActorSystem), createdAt},
-			{"sess-1", int64(2), "req-1", string(domain.EventToolResult), 2, blobPayload, "sha256:abc", string(domain.ActorTool), createdAt},
+			{"sess-1", int64(1), "req-1", string(domain.EventTurnStarted), 1, goodPayload, nil, string(domain.ActorSystem), createdAt, []byte(nil), []byte(nil)},
+			{"sess-1", int64(2), "req-1", string(domain.EventToolResult), 2, blobPayload, "sha256:abc", string(domain.ActorTool), createdAt, []byte(nil), []byte(nil)},
 		}}
 		envs, err := scanEnvelopes(rows, "tenant-A")
 		if err != nil {
@@ -837,7 +860,7 @@ func TestScanEnvelopes(t *testing.T) {
 	t.Run("scan failure", func(t *testing.T) {
 		t.Parallel()
 		rows := &fakeRows{
-			rows:    [][]any{{"sess-1", int64(1), "req-1", "TurnStarted", 1, goodPayload, nil, "system", createdAt}},
+			rows:    [][]any{{"sess-1", int64(1), "req-1", "TurnStarted", 1, goodPayload, nil, "system", createdAt, []byte(nil), []byte(nil)}},
 			scanErr: errors.New("type mismatch"),
 		}
 		if _, err := scanEnvelopes(rows, "t"); err == nil || !strings.Contains(err.Error(), "scanning event row") {
@@ -848,7 +871,7 @@ func TestScanEnvelopes(t *testing.T) {
 	t.Run("malformed payload", func(t *testing.T) {
 		t.Parallel()
 		rows := &fakeRows{rows: [][]any{
-			{"sess-1", int64(1), "req-1", string(domain.EventTurnStarted), 1, []byte("{truncated"), nil, "system", createdAt},
+			{"sess-1", int64(1), "req-1", string(domain.EventTurnStarted), 1, []byte("{truncated"), nil, "system", createdAt, []byte(nil), []byte(nil)},
 		}}
 		if _, err := scanEnvelopes(rows, "t"); err == nil || !strings.Contains(err.Error(), "decoding TurnStarted payload") {
 			t.Fatalf("err = %v, want decode error", err)
@@ -858,7 +881,7 @@ func TestScanEnvelopes(t *testing.T) {
 	t.Run("unknown event type fails loudly", func(t *testing.T) {
 		t.Parallel()
 		rows := &fakeRows{rows: [][]any{
-			{"sess-1", int64(1), "req-1", "EventFromTheFuture", 1, []byte("{}"), nil, "system", createdAt},
+			{"sess-1", int64(1), "req-1", "EventFromTheFuture", 1, []byte("{}"), nil, "system", createdAt, []byte(nil), []byte(nil)},
 		}}
 		if _, err := scanEnvelopes(rows, "t"); err == nil || !strings.Contains(err.Error(), "unknown event_type") {
 			t.Fatalf("err = %v, want unknown event_type error", err)

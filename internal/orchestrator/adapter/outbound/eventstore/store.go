@@ -36,7 +36,6 @@ package eventstore
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -190,7 +189,20 @@ func (s *Store) appendTx(
 		}
 	}
 
-	// (c) Insert each event with its contiguous seq.
+	// (c) Seed the running per-session chain head from sessions.chain_head (read
+	// in THIS tx, so it reflects every prior committed append under RLS). NULL ->
+	// no chained events yet -> seed from the session-derived genesis (ADR-0033).
+	// This read runs only on the non-idempotent append path: a replay short-
+	// circuited above and never reaches here, so it can never re-chain.
+	prevChain, err := s.loadChainHead(ctx, tx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	// (d) Insert each event with its contiguous seq, folding the chain as we go.
+	// For each event content_hash = ContentHash(payload) over the SAME payload
+	// bytes insertEvent persists, and chain_hash = ChainHash(prev, content_hash);
+	// prev advances to that chain_hash for the next event.
 	envelopes := make([]domain.EventEnvelope, 0, len(events))
 	for i, in := range events {
 		seq := expectedHeadSeq + 1 + int64(i)
@@ -201,11 +213,24 @@ func (s *Store) appendTx(
 			requestID: requestID,
 			in:        in,
 			blob:      blob,
+			prevChain: prevChain,
 		})
 		if err != nil {
 			return nil, err
 		}
+		prevChain = env.ChainHash
 		envelopes = append(envelopes, env)
+	}
+
+	// (e) Advance the running chain head to the last event's chain_hash, in the
+	// SAME tx. Keyed by id ONLY (no head_seq/lease_epoch re-gate — the optimistic
+	// gate above already matched and fenced this writer); RLS still scopes the
+	// row to the tenant. prevChain now holds the last fold result.
+	if _, err := tx.Exec(ctx,
+		"UPDATE sessions SET chain_head = $1 WHERE id = $2",
+		prevChain, sessionID,
+	); err != nil {
+		return nil, fmt.Errorf("eventstore: advancing chain head: %w", err)
 	}
 
 	// Wakeup hint for Subscribe: NOTIFY the single channel with the session id.
@@ -293,6 +318,25 @@ func (s *Store) loadByRequestID(ctx context.Context, tx pgx.Tx, sessionID, tenan
 	return envs, len(envs) > 0, nil
 }
 
+// loadChainHead reads the running per-session chain head from sessions.chain_head
+// within the append tx (RLS-scoped). A NULL chain_head (a session with no chained
+// events yet, e.g. a pre-0009 session or one whose only events are unchained) is
+// seeded from [domain.GenesisChainHash], so the first chained event of the batch
+// folds from the session-derived genesis (ADR-0033). It is read-only.
+func (s *Store) loadChainHead(ctx context.Context, tx pgx.Tx, sessionID string) ([]byte, error) {
+	var head []byte
+	err := tx.QueryRow(ctx,
+		"SELECT chain_head FROM sessions WHERE id = $1", sessionID,
+	).Scan(&head)
+	if err != nil {
+		return nil, fmt.Errorf("eventstore: reading chain head: %w", err)
+	}
+	if head == nil {
+		return domain.GenesisChainHash(sessionID), nil
+	}
+	return head, nil
+}
+
 // pgUniqueViolation is the stable SQLSTATE for a unique-constraint violation. It
 // is referenced directly (rather than via github.com/jackc/pgerrcode, which is
 // not a dependency of this module).
@@ -312,8 +356,13 @@ func isUniqueViolation(err error) bool {
 // column. The persisted coordinates (seq/request/tenant/actor/timestamp) live on
 // the envelope/columns, never duplicated in the payload, so only the typed event
 // struct is marshaled.
+//
+// It delegates to [domain.MarshalEventPayload] (the shared, pgx-free helper) so
+// the bytes hashed for content_hash are byte-identical to the bytes persisted in
+// the payload column — verify-on-read then recomputes the same digest from the
+// stored bytes (ADR-0033, AC-2).
 func marshalPayload(e domain.Event) ([]byte, error) {
-	b, err := json.Marshal(e)
+	b, err := domain.MarshalEventPayload(e)
 	if err != nil {
 		return nil, fmt.Errorf("eventstore: marshaling %s payload: %w", e.EventType(), err)
 	}

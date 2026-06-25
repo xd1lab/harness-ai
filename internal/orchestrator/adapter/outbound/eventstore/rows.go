@@ -20,7 +20,7 @@ const defaultSchemaVersion = 1
 // eventColumns is the column list (in order) that [scanEnvelopes] reads. It is
 // shared by every SELECT that returns whole events so the scan order cannot
 // drift from the query.
-const eventColumns = "session_id, seq, request_id, event_type, schema_version, payload, blob_ref, actor, created_at"
+const eventColumns = "session_id, seq, request_id, event_type, schema_version, payload, blob_ref, actor, created_at, content_hash, chain_hash"
 
 // selectEventsByRequestSQL loads the events previously committed under a
 // (session_id, request_id) pair, oldest-seq first — the idempotency
@@ -86,6 +86,11 @@ type insertEventArgs struct {
 	requestID string
 	in        app.AppendInput
 	blob      *BlobUpload
+	// prevChain is the running per-session chain head entering this event: the
+	// prior event's chain_hash, or [domain.GenesisChainHash] for the first chained
+	// event of the session. insertEvent folds it into this event's chain_hash and
+	// returns the new head on the envelope (ADR-0033).
+	prevChain []byte
 }
 
 // insertEvent inserts one event row at args.seq and returns its
@@ -118,6 +123,13 @@ func (s *Store) insertEvent(ctx context.Context, tx pgx.Tx, args insertEventArgs
 		}
 	}
 
+	// Tamper-evident hashes (ADR-0033): content_hash over the EXACT payload bytes
+	// just marshaled (so verify-on-read recomputes the identical digest), then
+	// chain_hash = ChainHash(prevChain, content_hash). prevChain is the prior
+	// event's chain_hash (or the session genesis for the first chained event).
+	contentHash := domain.ContentHash(payload)
+	chainHash := domain.ChainHash(args.prevChain, contentHash)
+
 	var createdAt time.Time
 	// blob_ref is written as NULL when empty so the composite FK is not exercised
 	// for non-blob events.
@@ -126,11 +138,12 @@ func (s *Store) insertEvent(ctx context.Context, tx pgx.Tx, args insertEventArgs
 		blobArg = blobRef
 	}
 	err = tx.QueryRow(ctx, `
-		INSERT INTO events (tenant_id, session_id, seq, request_id, event_type, schema_version, payload, blob_ref, actor)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		INSERT INTO events (tenant_id, session_id, seq, request_id, event_type, schema_version, payload, blob_ref, actor, content_hash, chain_hash)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING created_at`,
 		args.tenantID, args.sessionID, args.seq, args.requestID,
 		string(args.in.Event.EventType()), schemaVersion, payload, blobArg, string(actor),
+		contentHash, chainHash,
 	).Scan(&createdAt)
 	if err != nil {
 		return domain.EventEnvelope{}, fmt.Errorf("eventstore: inserting event seq=%d: %w", args.seq, err)
@@ -146,6 +159,8 @@ func (s *Store) insertEvent(ctx context.Context, tx pgx.Tx, args insertEventArgs
 		Actor:         actor,
 		CreatedAt:     createdAt,
 		Event:         args.in.Event,
+		ContentHash:   contentHash,
+		ChainHash:     chainHash,
 	}, nil
 }
 
@@ -176,8 +191,10 @@ func scanEnvelopes(rows pgx.Rows, tenantID string) ([]domain.EventEnvelope, erro
 			blobRef       *string
 			actor         string
 			createdAt     time.Time
+			contentHash   []byte // nullable: nil for unchained pre-0009 rows.
+			chainHash     []byte // nullable: nil for unchained pre-0009 rows.
 		)
-		if err := rows.Scan(&sessionID, &seq, &requestID, &eventType, &schemaVersion, &payload, &blobRef, &actor, &createdAt); err != nil {
+		if err := rows.Scan(&sessionID, &seq, &requestID, &eventType, &schemaVersion, &payload, &blobRef, &actor, &createdAt, &contentHash, &chainHash); err != nil {
 			return nil, fmt.Errorf("eventstore: scanning event row: %w", err)
 		}
 		evt, err := decodePayload(domain.EventType(eventType), payload)
@@ -194,6 +211,8 @@ func scanEnvelopes(rows pgx.Rows, tenantID string) ([]domain.EventEnvelope, erro
 			Actor:         domain.Actor(actor),
 			CreatedAt:     createdAt,
 			Event:         evt,
+			ContentHash:   contentHash,
+			ChainHash:     chainHash,
 		})
 	}
 	if err := rows.Err(); err != nil {
