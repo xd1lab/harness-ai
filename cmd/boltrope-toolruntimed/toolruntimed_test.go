@@ -48,6 +48,33 @@ func TestBuildRegistry_RegistersNativeTools(t *testing.T) {
 	}
 }
 
+// TestBuildToolRuntime_RegistersMemoryTools asserts the production wiring
+// registers the three long-term memory tools (memory_write/memory_read/
+// memory_search) backed by the PG MemoryStore alongside the native tools
+// (ADR-0030; AC-11). The PG SimplePool dials lazily so this never blocks on
+// Postgres.
+func TestBuildToolRuntime_RegistersMemoryTools(t *testing.T) {
+	cfg := baseConfig(t)
+	_, reg, _, closers, err := buildToolRuntime(cfg, toolSettings{})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		for _, c := range closers {
+			_ = c()
+		}
+	})
+
+	specs, err := reg.List(context.Background())
+	require.NoError(t, err)
+
+	names := map[string]bool{}
+	for _, s := range specs {
+		names[s.Name] = true
+	}
+	for _, want := range []string{"memory_write", "memory_read", "memory_search"} {
+		assert.True(t, names[want], "memory tool %q must be registered in production wiring", want)
+	}
+}
+
 // TestBuildExecuteService_Constructs asserts the ExecuteTool use-case constructs
 // from the wired collaborators (registry, runtime, egress, dedup, blobs) without
 // error — the full tool-runtime dependency graph (T-TR-07).

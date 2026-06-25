@@ -31,11 +31,13 @@ import (
 	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/outbound/egress"
 	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/outbound/egressclient"
 	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/outbound/mcp"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/outbound/memory"
 	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/outbound/runtime"
 	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/outbound/sessionstatus"
 	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/registry"
 	"github.com/xd1lab/harness-ai/internal/toolruntime/app"
 	"github.com/xd1lab/harness-ai/internal/toolruntime/app/execute"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/domain"
 	"github.com/xd1lab/harness-ai/internal/toolruntime/tools"
 )
 
@@ -231,6 +233,26 @@ func registerNative(reg *registry.Registry, ws app.SessionWorkspaces, fetcher ap
 	return nil
 }
 
+// registerMemory registers the three long-term cross-session memory tools
+// (memory_write/memory_read/memory_search) backed by the tenant-scoped,
+// RLS-protected [app.MemoryStore] (ADR-0030). The tools are EgressClassNone and
+// talk only to the store; the owning tenant is read from the request context at
+// execution time (set by execute.Service), never from a model argument, so a
+// call can never cross tenants. Returns the first registration error.
+func registerMemory(reg *registry.Registry, store app.MemoryStore) error {
+	memTools := []domain.Tool{
+		tools.NewMemoryWriteTool(store),
+		tools.NewMemoryReadTool(store),
+		tools.NewMemorySearchTool(store),
+	}
+	for _, tool := range memTools {
+		if err := reg.Register(context.Background(), tool); err != nil {
+			return fmt.Errorf("toolruntimed: register memory tool %q: %w", tool.Spec().Name, err)
+		}
+	}
+	return nil
+}
+
 // buildToolRuntime wires the full tool-runtime: a shared container runtime + the
 // deny-by-default egress broker back both the native tools' per-session
 // workspace router and the ExecuteTool use-case; the durable pgx dedup ledger
@@ -276,6 +298,26 @@ func buildToolRuntime(cfg *config.Config, ts toolSettings) (*execute.Service, *r
 	}
 	dedupStore := dedup.New(dedupPool)
 
+	// The long-term agent memory store over the agent_memory table (ADR-0030;
+	// migration 0008), sharing the same event-store DSN as the dedup ledger. Like
+	// the dedup SimplePool it dials lazily per acquire, so construction never
+	// blocks on Postgres. Its three model-facing tools are registered alongside
+	// the native set; the store is tenant-scoped via RLS (the tenant is read from
+	// the request context that execute.Service stamps at call time).
+	memPool, err := memory.NewSimplePool(cfg.Postgres.DSN)
+	if err != nil {
+		_ = closeStatus()
+		dedupPool.Close()
+		return nil, nil, nil, nil, fmt.Errorf("toolruntimed: build memory pool: %w", err)
+	}
+	memStore := memory.New(memPool)
+	if err := registerMemory(reg, memStore); err != nil {
+		_ = closeStatus()
+		dedupPool.Close()
+		memPool.Close()
+		return nil, nil, nil, nil, err
+	}
+
 	blobs := blob.NewFSStore(cfg.Blob.Dir, maxBlobBytes)
 
 	svc, err := execute.NewService(execute.Config{
@@ -292,6 +334,7 @@ func buildToolRuntime(cfg *config.Config, ts toolSettings) (*execute.Service, *r
 	closers := []func() error{
 		closeStatus,
 		func() error { dedupPool.Close(); return nil },
+		func() error { memPool.Close(); return nil },
 		// Destroy live sandboxes on shutdown so containers do not outlive the
 		// daemon (resume re-Creates a fresh workspace; ADR-0012 clean-workspace
 		// resume). Any container that still escapes (crash) is reclaimed by
