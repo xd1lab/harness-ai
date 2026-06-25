@@ -4,6 +4,8 @@ package grpc
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -155,9 +157,42 @@ func summarizeEvent(ev domain.Event, includePayload bool) (summary string, redac
 	case domain.MCPToolApprovalRequested:
 		// The untrusted description is flagged, never rendered as an instruction.
 		return "MCP tool approval requested (untrusted description withheld)", true, false
+	case domain.PlanUpdated:
+		// PlanUpdated is non-secret plan text (ADR-0031): surface it as a normal,
+		// NON-redacted descriptor with a bounded, safe summary. It never references a
+		// blob. The summary is the item count plus the in-progress count (a stable,
+		// bounded shape); includePayload additionally previews item content.
+		return summarizePlan(e, includePayload), false, false
 	default:
 		return "", false, false
 	}
+}
+
+// summarizePlan renders a SAFE, bounded summary of a [domain.PlanUpdated]: always
+// the item total and in-progress count, plus (when includePayload) a bounded preview
+// of item contents truncated at the summary cap. It surfaces only non-secret plan
+// text (ADR-0031).
+func summarizePlan(e domain.PlanUpdated, includePayload bool) string {
+	inProgress := 0
+	for _, it := range e.Items {
+		if it.Status == domain.PlanStatusInProgress {
+			inProgress++
+		}
+	}
+	summary := fmt.Sprintf("plan: %d items (in_progress: %d)", len(e.Items), inProgress)
+	if !includePayload || len(e.Items) == 0 {
+		return summary
+	}
+	var b strings.Builder
+	b.WriteString(summary)
+	for _, it := range e.Items {
+		b.WriteString("\n- [")
+		b.WriteString(it.Status)
+		b.WriteString("] ")
+		b.WriteString(it.Content)
+	}
+	txt, _ := truncateText(b.String())
+	return txt
 }
 
 // truncateText bounds s at summaryCapBytes, returning the (possibly truncated)

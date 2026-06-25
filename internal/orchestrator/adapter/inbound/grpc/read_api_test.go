@@ -448,6 +448,9 @@ func TestGetStateAtSeq_RejectsForeignTenant(t *testing.T) {
 // gains a domain.PlanUpdated case. (Gap#3 AC-13.)
 func TestListSessionEvents_PlanUpdatedNonRedacted(t *testing.T) {
 	log := newTailingEventLog()
+	log.mu.Lock()
+	log.tenants["sess-plan"] = "tenant-A"
+	log.mu.Unlock()
 	appendEvent(t, log, "sess-plan", domain.ActorSystem, domain.SessionStarted{SystemPrompt: "secret prompt"})
 	appendEvent(t, log, "sess-plan", domain.ActorAssistant, domain.PlanUpdated{
 		TurnID: "t-1",
@@ -491,6 +494,9 @@ func TestListSessionEvents_PlanUpdatedNonRedacted(t *testing.T) {
 // (Gap#3 AC-14.)
 func TestGetStateAtSeq_PlanUpdatedIgnoredInBilling(t *testing.T) {
 	log := newTailingEventLog()
+	log.mu.Lock()
+	log.tenants["sess-ttp"] = "tenant-A"
+	log.mu.Unlock()
 	appendEvent(t, log, "sess-ttp", domain.ActorSystem, domain.SessionStarted{SystemPrompt: "sys"})
 	appendEvent(t, log, "sess-ttp", domain.ActorAssistant, domain.PlanUpdated{
 		TurnID: "t-1", Items: []domain.PlanItem{{Content: "do it", Status: "pending"}},
