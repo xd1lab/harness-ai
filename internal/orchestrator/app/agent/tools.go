@@ -45,8 +45,15 @@ func (l *Loop) handleToolCalls(ctx context.Context, st *runState, msg llm.Messag
 	}
 
 	// Doom-loop detection: a batch identical to the immediately preceding batch
-	// is a stuck loop (FR-OBS-04). Detect on the consecutive-repeat count.
-	l.detectDoomLoop(st, calls)
+	// is a stuck loop (FR-OBS-04). detectDoomLoop updates st.repeatCount and, on a
+	// trip, records the RED doom-loop metric. When it trips we terminate the run
+	// via the EXISTING turnTerminal -> finish contract (loop.go Run routes
+	// turnTerminal to l.finish, attaching exactly one TurnFinished{ErrorDoomLoop}
+	// to st.currentTurnID) — BEFORE dispatching the repeated batch, so no further
+	// tool execution happens once tripped (FIX 2; AC-2.3/AC-2.4).
+	if l.detectDoomLoop(st, calls) {
+		return turnTerminal, domain.ErrorDoomLoop, nil
+	}
 
 	// Resolve each tool's safety classification from the runtime's descriptors,
 	// then overlay the in-loop virtual-tool classifications (ADR-0031, T11). The
@@ -448,12 +455,19 @@ func (l *Loop) mode() policy.Mode {
 	return l.cfg.Mode
 }
 
-// detectDoomLoop tracks consecutive identical tool batches and emits the
-// doom-loop signal when the repeat count reaches the configured threshold
-// (FR-OBS-04). It compares a stable signature of the batch (tool names + args).
-func (l *Loop) detectDoomLoop(st *runState, calls []llm.ToolCall) {
-	if l.cfg.DoomLoopThreshold <= 0 {
-		return
+// detectDoomLoop tracks consecutive identical tool batches and reports whether
+// the run has tripped the doom-loop guard (FR-OBS-04; FIX 2). It compares a
+// stable signature of the batch (tool names + args) and, on a trip, records the
+// RED doom-loop metric for every repeating tool in the batch. The caller
+// (handleToolCalls) terminates the run when this returns true.
+//
+// The threshold is read from l.cfg.DoomLoopThreshold after NewLoop has applied
+// the default-on substitution: a value <0 is an EXPLICIT disable (detection off),
+// while 0 has been normalized to [DefaultDoomLoopThreshold] in NewLoop, so the
+// guard here disables ONLY on a negative value.
+func (l *Loop) detectDoomLoop(st *runState, calls []llm.ToolCall) bool {
+	if l.cfg.DoomLoopThreshold < 0 {
+		return false
 	}
 	sig := toolBatchSignature(calls)
 	if sig == st.lastToolSig {
@@ -467,7 +481,9 @@ func (l *Loop) detectDoomLoop(st *runState, calls []llm.ToolCall) {
 		for _, c := range calls {
 			l.metrics.RecordDoomLoop(c.Name)
 		}
+		return true
 	}
+	return false
 }
 
 // toolBatchSignature builds a deterministic signature of a tool-call batch from

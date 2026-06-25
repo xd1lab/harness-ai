@@ -125,9 +125,12 @@ type Config struct {
 	// [domain.ErrorMaxStructuredOutputRetries]. A non-positive value uses
 	// [DefaultStructuredOutputRetries].
 	MaxStructuredOutputRetries int
-	// DoomLoopThreshold is the number of consecutive identical tool calls that
-	// triggers a doom-loop signal (FR-OBS-04). A non-positive value disables
-	// detection.
+	// DoomLoopThreshold is the number of consecutive identical tool calls (same
+	// name + same args) that trips the doom-loop guard and TERMINATES the run with
+	// [domain.ErrorDoomLoop] (FR-OBS-04; FIX 2). Value semantics, applied in
+	// [NewLoop]: 0 => the default-on [DefaultDoomLoopThreshold] (=3) is substituted
+	// so a zero-value Config is protected; a NEGATIVE value is an explicit opt-out
+	// that disables detection entirely; a positive value is used as-is.
 	DoomLoopThreshold int
 	// ReadOnlyConcurrency bounds the read-only tool worker pool. A non-positive
 	// value uses min(4, GOMAXPROCS) (architecture §9.2).
@@ -165,6 +168,11 @@ const (
 	// DefaultStructuredOutputRetries is the structured-output retry cap applied
 	// when [Config.MaxStructuredOutputRetries] is non-positive.
 	DefaultStructuredOutputRetries = 3
+	// DefaultDoomLoopThreshold is the doom-loop trip count substituted in
+	// [NewLoop] when [Config.DoomLoopThreshold] is zero, making doom-loop
+	// termination DEFAULT-ON for a normally-constructed loop (FIX 2). A negative
+	// Config value is an explicit opt-out and is left untouched (detection off).
+	DefaultDoomLoopThreshold = 3
 )
 
 // RunInput is the input to one [Loop.Run]: the session to run and the new user
@@ -213,6 +221,13 @@ type Loop struct {
 // zero-behavior defaults for an absent Sink/Metrics so callers never pass a nil
 // just to satisfy the interface.
 func NewLoop(deps Deps, cfg Config) *Loop {
+	// Default-on doom-loop guard: a zero-value Config gets the default threshold so
+	// every normally-constructed loop (including sub-agents) is protected; a
+	// negative value is an explicit opt-out and is preserved as the disable sentinel
+	// (FIX 2; see [Config.DoomLoopThreshold] and [DefaultDoomLoopThreshold]).
+	if cfg.DoomLoopThreshold == 0 {
+		cfg.DoomLoopThreshold = DefaultDoomLoopThreshold
+	}
 	l := &Loop{deps: deps, cfg: cfg}
 	l.sink = deps.Sink
 	if l.sink == nil {

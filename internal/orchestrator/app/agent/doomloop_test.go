@@ -15,7 +15,6 @@ package agent_test
 // absent.
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
@@ -23,7 +22,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/xd1lab/harness-ai/internal/orchestrator/app"
-	"github.com/xd1lab/harness-ai/internal/orchestrator/app/agent"
 	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
 )
 

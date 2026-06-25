@@ -103,7 +103,7 @@ func vtConfig() Config {
 		MaxTurns:                   16,
 		MaxBudgetUSD:               1000,
 		MaxStructuredOutputRetries: 3,
-		DoomLoopThreshold:          0, // disabled: this battery is not about doom loops
+		DoomLoopThreshold:          -1, // explicit-disable: this battery is not about doom loops (FIX 2: 0 now means default-on)
 	}
 }
 

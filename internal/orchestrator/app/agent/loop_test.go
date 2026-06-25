@@ -390,7 +390,7 @@ func TestRun_MaxTurns(t *testing.T) {
 	h := newHarness(t)
 	cfg := defaultConfig()
 	cfg.MaxTurns = 3
-	cfg.DoomLoopThreshold = 0 // disable doom-loop so we isolate the max-turns cap
+	cfg.DoomLoopThreshold = -1 // explicit-disable doom-loop so we isolate the max-turns cap (FIX 2: 0 now means default-on)
 
 	h.tools.SetTools([]app.ToolDescriptor{{Name: "read", SideEffect: domain.SideEffectReadOnly}})
 	h.pol.AddAllow("a", "")

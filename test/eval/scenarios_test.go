@@ -253,7 +253,7 @@ func TestScenario_MaxTurnsCap(t *testing.T) {
 		ToolResults:       results,
 		Rules:             []policy.Rule{allowRule()},
 		MaxTurns:          maxTurns,
-		DoomLoopThreshold: 0, // isolate the max-turns cap
+		DoomLoopThreshold: -1, // explicit-disable to isolate the max-turns cap (FIX 2: 0 now means default-on)
 		CostPerTurnUSD:    0.05,
 
 		WantReason: domain.ErrorMaxTurns,
@@ -411,17 +411,23 @@ func TestScenario_StreamErrorDuringExecution(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Scenario 8 (bonus) — doom-loop detection: the SAME tool call repeated up to
-// the configured threshold emits a doom-loop signal labeled by tool name
-// (FR-OBS-04 AC-1). An operational signal distinct from the eventual caps.
+// Scenario 8 (bonus) — doom-loop detection AND termination: the SAME tool call
+// repeated up to the configured threshold emits a doom-loop signal labeled by
+// tool name (FR-OBS-04 AC-1) AND, since FIX 2 (ADR-0032), TERMINATES the run
+// with domain.ErrorDoomLoop on the tripping batch BEFORE dispatching it — rather
+// than burning turns until a cap. The doom-loop metric is still emitted on the
+// trip; the terminal reason is now ErrorDoomLoop (no longer Success).
 // ---------------------------------------------------------------------------
 
 func TestScenario_DoomLoopDetected(t *testing.T) {
 	const threshold = 3
-	// Repeat the IDENTICAL read call `threshold` times, then end with text.
-	turns := make([]eval.ModelTurn, 0, threshold+1)
-	results := make([]app.ToolResult, 0, threshold)
-	for i := 0; i < threshold; i++ {
+	// Script MORE identical read calls than the threshold (the run trips on the
+	// threshold-th identical batch BEFORE dispatch, so the extra scripted turns —
+	// including the final text turn — are simply left unconsumed; the fake gateway
+	// only panics on queue EXHAUSTION, never on leftover queued streams).
+	turns := make([]eval.ModelTurn, 0, threshold+2)
+	results := make([]app.ToolResult, 0, threshold+1)
+	for i := 0; i < threshold+1; i++ {
 		turns = append(turns, eval.ToolCallTurn("call-same", "read",
 			map[string]any{"path": "/same"}, llm.Usage{}))
 		results = append(results, app.ToolResult{Content: "same content"})
@@ -438,7 +444,7 @@ func TestScenario_DoomLoopDetected(t *testing.T) {
 		DoomLoopThreshold: threshold,
 		MaxTurns:          16,
 
-		WantReason:       domain.Success,
+		WantReason:       domain.ErrorDoomLoop,
 		WantDoomLoopTool: "read",
 	}.Exec(t)
 }
