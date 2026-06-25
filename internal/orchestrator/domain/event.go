@@ -81,6 +81,13 @@ const (
 	// plan, re-surfaced into the model context. It carries only non-secret plan text,
 	// so the read-plane exposes it as a normal (non-redacted) descriptor.
 	EventPlanUpdated EventType = "PlanUpdated"
+	// EventApprovalRequested records that a per-dispatch tool call entered the ask
+	// gate and is BLOCKING on a human approval, appended BEFORE the gate blocks so a
+	// pending ask is durable across a crash/restart (ADR-0032). It is the pre-block
+	// half of the ask; the AFTER-resolution outcome is recorded by the existing
+	// [PermissionDecided] (the pair ApprovalRequested -> PermissionDecided{ask,Resolved}
+	// brackets one ask). See [ApprovalRequested].
+	EventApprovalRequested EventType = "ApprovalRequested"
 )
 
 // EventEnvelope is the persisted wrapper around a typed [Event] payload. It mirrors
@@ -395,9 +402,18 @@ func (CompactionPerformed) isEvent()             {}
 // PermissionDecided records the outcome of the permission pipeline for a tool
 // dispatch (deny→mode→allow→ask; ADR-0013 §"Constrained bypass"; architecture
 // §8.13), persisted as an event so approvals/denials are auditable. For an ask
-// outcome resolved by a human, the resolved grant/deny is captured here too (the
-// architecture's ApprovalRequested/ApprovalGranted/ApprovalDenied family is modeled
-// as this single decision event with a [PermissionDecision]).
+// outcome resolved by a human, the resolved grant/deny is captured here too.
+//
+// NOTE (ADR-0032, un-collapsing): the architecture's
+// ApprovalRequested/ApprovalGranted/ApprovalDenied family was ORIGINALLY modeled as
+// this single decision event with a [PermissionDecision]. To make a blocking ask
+// DURABLE across a crash/restart (the gate previously held the pending ask only in
+// an in-memory map), the pre-block half is now split out into a distinct sealed
+// [ApprovalRequested] event appended BEFORE the gate blocks; PermissionDecided
+// remains the AFTER-resolution record. The pair
+// (ApprovalRequested -> PermissionDecided{Decision:Ask, Resolved:...}) brackets one
+// ask, and a lone ApprovalRequested with no matching PermissionDecided is a
+// suspended-awaiting-approval turn on recovery.
 type PermissionDecided struct {
 	// CallID is the [llm.ToolCall.ID] the decision applies to.
 	CallID string
@@ -607,3 +623,36 @@ func (p PlanUpdated) Validate() error {
 	}
 	return nil
 }
+
+// ApprovalRequested records that a per-dispatch tool call entered the ask gate and
+// is BLOCKING on a human approval. It is appended BEFORE the gate blocks (ADR-0032),
+// so a pending ask survives a crash/restart and a recovered orchestrator can detect
+// it (an ApprovalRequested with no matching [PermissionDecided] for the same CallID
+// is a suspended-awaiting-approval turn). It is the pre-block half of the ask; the
+// AFTER-resolution outcome (allow/deny) is recorded by [PermissionDecided].
+//
+// This is the per-dispatch sibling of the registration-time
+// [MCPToolApprovalRequested] gate: distinct event, same durable-ask shape. Args is
+// the tool-call arguments captured for operator audit and for re-raising the gate on
+// resume; it is carried in full in the persisted payload (audit fidelity) and bounded
+// only at the read-plane (the read-plane never dumps Args raw).
+type ApprovalRequested struct {
+	// TurnID is the turn the ask was raised in (matches [TurnStarted.TurnID]).
+	TurnID string
+	// CallID is the [llm.ToolCall.ID] of the tool call awaiting approval; it pairs
+	// this ApprovalRequested with the AFTER-resolution [PermissionDecided.CallID].
+	CallID string
+	// ToolName is the tool whose dispatch is gated by the ask.
+	ToolName string
+	// Reason is a short, human-readable explanation for why the call is being gated
+	// (the permission pipeline's ask reason), shown to the approver.
+	Reason string
+	// Args is the tool-call arguments captured for the approval decision and for
+	// re-raising the gate on resume. It is operator-facing audit data (not
+	// provider_raw/secret); the read-plane bounds rather than dumps it.
+	Args map[string]any
+}
+
+// EventType identifies this payload as [EventApprovalRequested].
+func (ApprovalRequested) EventType() EventType { return EventApprovalRequested }
+func (ApprovalRequested) isEvent()             {}

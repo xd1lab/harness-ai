@@ -281,6 +281,14 @@ func renderMessage(env domain.EventEnvelope, clearedSeqs map[int64]struct{}, stu
 			}}},
 		}, true
 
+	case domain.ApprovalRequested:
+		// ApprovalRequested (ADR-0032) is a durable control record for the ask gate,
+		// not a conversation message: it is DELIBERATELY skipped from context
+		// rendering (mirroring how PlanUpdated is skipped here and re-surfaced
+		// separately by the caller). The explicit case documents the intent; the
+		// default below would already skip it safely.
+		return llm.Message{}, false
+
 	default:
 		return llm.Message{}, false
 	}

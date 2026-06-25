@@ -163,6 +163,17 @@ func summarizeEvent(ev domain.Event, includePayload bool) (summary string, redac
 		// blob. The summary is the item count plus the in-progress count (a stable,
 		// bounded shape); includePayload additionally previews item content.
 		return summarizePlan(e, includePayload), false, false
+	case domain.ApprovalRequested:
+		// Operator-facing audit descriptor (ADR-0032): the pending per-dispatch ask.
+		// It carries no provider_raw/secret, so it is NON-redacted and references no
+		// blob. The Args map is NEVER dumped raw; only the bounded ask reason is
+		// previewed when includePayload is set.
+		summary := fmt.Sprintf("approval requested: tool %s (call %s)", e.ToolName, e.CallID)
+		if includePayload && e.Reason != "" {
+			reason, _ := truncateText(e.Reason)
+			summary += " reason: " + reason
+		}
+		return summary, false, false
 	default:
 		return "", false, false
 	}
