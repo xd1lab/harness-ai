@@ -234,3 +234,8 @@ func TestVerifyChainIntegrity_CrossTenantInvisible(t *testing.T) {
 // trims the only app.AppendInput use; harmless and removed when the suite lands
 // (kept so the RED file's imports are not flagged unused at compile time).
 var _ = app.AppendInput{}
+
+// _ keeps the domain import referenced (ChainVerification is the type returned by
+// Store.VerifyChainIntegrity asserted above; the explicit reference guards the
+// import against an unused-import error in the integration build).
+var _ = domain.ChainVerification{}
