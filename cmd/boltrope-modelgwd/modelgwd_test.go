@@ -85,6 +85,46 @@ func TestBuildProvider_AnthropicResolvesKey(t *testing.T) {
 	})
 }
 
+// TestApplyCapsOverride_NativeSchemaEnv asserts the AC-17 production capability
+// override: a truthy BOLTROPE_MODELGW_NATIVE_SCHEMA env makes the SAME caps
+// registry that backs the providers and the Service resolve
+// SupportsJSONSchemaStrict=true for the configured endpoint (so a self-hosted
+// endpoint opts into native structured output with no code change), while an
+// unset/falsey env leaves the conservative default untouched.
+//
+// applyCapsOverride does not exist yet (RED): it is the env -> SetEndpointOverride
+// seam the wiring must call before buildProvider/NewService consume the registry.
+func TestApplyCapsOverride_NativeSchemaEnv(t *testing.T) {
+	const endpoint = "openaicompat"
+
+	t.Run("truthy native-schema env -> SupportsJSONSchemaStrict true", func(t *testing.T) {
+		for _, truthy := range []string{"1", "true", "yes", "on"} {
+			caps := capabilities.NewRegistry(nil)
+			env := func(k string) string {
+				if k == "BOLTROPE_MODELGW_NATIVE_SCHEMA" {
+					return truthy
+				}
+				return ""
+			}
+			applyCapsOverride(caps, endpoint, env) // RED until applyCapsOverride exists
+			got := caps.Resolve(endpoint, "any-self-hosted-model")
+			assert.Truef(t, got.SupportsJSONSchemaStrict,
+				"BOLTROPE_MODELGW_NATIVE_SCHEMA=%q must enable native json_schema for %q", truthy, endpoint)
+		}
+	})
+
+	t.Run("unset/falsey env -> conservative default unchanged", func(t *testing.T) {
+		for _, falsey := range []string{"", "0", "false", "no", "off"} {
+			caps := capabilities.NewRegistry(nil)
+			env := func(string) string { return falsey }
+			applyCapsOverride(caps, endpoint, env)
+			got := caps.Resolve(endpoint, "any-self-hosted-model")
+			assert.Falsef(t, got.SupportsJSONSchemaStrict,
+				"a falsey/unset native-schema env (%q) must NOT enable native json_schema", falsey)
+		}
+	})
+}
+
 // TestRun_BadConfig_FailsFast asserts Run returns an error (does not panic or
 // hang) when given a config missing a required field.
 func TestRun_BadConfig_FailsFast(t *testing.T) {
