@@ -43,6 +43,8 @@
 package agentctx
 
 import (
+	"strings"
+
 	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
 	"github.com/xd1lab/harness-ai/internal/platform/llm"
 )
@@ -120,8 +122,15 @@ const (
 //     rendered live, so the next window is reduced ("reinitiating from a
 //     summary"; architecture §6.6).
 //   - All other event kinds (TurnStarted, deltas, ToolExecutionStarted,
-//     permission/approval/MCP/bypass events) are not part of the model-visible
-//     conversation and are skipped.
+//     permission/approval/MCP/bypass events, and per-event [domain.PlanUpdated])
+//     are not part of the per-event model-visible conversation and are skipped by
+//     [renderMessage].
+//   - The LATEST [domain.PlanUpdated] for the session is re-surfaced as a SINGLE
+//     synthetic context-note [llm.RoleUser] message appended AFTER the live
+//     window, so the model always sees its current plan and stale plan updates do
+//     not duplicate (AC-18; ADR-0031). This mirrors how a todo/memory list is
+//     re-surfaced. Only the most recent PlanUpdated contributes a note; if none
+//     exists, no plan note is added (default behavior is byte-identical).
 //
 // It returns an error only for a malformed log (currently none is defined; the
 // signature returns error so future validation is non-breaking). events are not
@@ -156,11 +165,25 @@ func BuildWindow(events []domain.EventEnvelope, opts WindowOptions) (Window, err
 	var pre []llm.Message  // conversation messages before the last compaction boundary
 	var post []llm.Message // conversation messages at/after the last compaction boundary
 
-	for _, env := range events {
+	// Track the latest PlanUpdated for the session so the current plan is
+	// re-surfaced once after the live window (AC-18; ADR-0031). Only the most
+	// recent one wins, so stale plan updates never duplicate.
+	var latestPlan *domain.PlanUpdated
+
+	for i := range events {
+		env := events[i]
 		// The system prompt is stable session metadata, not part of the
 		// summarized/post split; always take the latest one.
 		if ss, ok := env.Event.(domain.SessionStarted); ok {
 			system = ss.SystemPrompt
+			continue
+		}
+
+		// PlanUpdated is not a per-event conversation message (renderMessage skips
+		// it); the LATEST one is re-surfaced below as a single context note.
+		if pu, ok := env.Event.(domain.PlanUpdated); ok {
+			p := pu
+			latestPlan = &p
 			continue
 		}
 
@@ -187,14 +210,51 @@ func BuildWindow(events []domain.EventEnvelope, opts WindowOptions) (Window, err
 	}
 	out = append(out, post...)
 
+	// Re-surface the current plan: a single context-note message carrying the
+	// latest PlanUpdated, appended after the live window so the model sees its
+	// working plan each turn (AC-18; ADR-0031). Stale plan updates contribute
+	// nothing — only the latest one reaches here.
+	if latestPlan != nil {
+		out = append(out, llm.Message{
+			Role:    llm.RoleUser,
+			Content: []llm.ContentPart{{Text: &llm.TextPart{Text: renderPlanNote(*latestPlan)}}},
+		})
+	}
+
 	return Window{System: system, Messages: out}, nil
+}
+
+// PlanNotePrefix is the leading marker of the synthetic context-note message that
+// re-surfaces the session's current plan in [BuildWindow] (AC-18; ADR-0031). It is
+// stable so tests and the model can recognize the plan note among conversation
+// messages.
+const PlanNotePrefix = "[current plan]"
+
+// renderPlanNote formats the latest [domain.PlanUpdated] into the bounded, plain-
+// text context note re-surfaced by [BuildWindow]. An empty plan renders a short
+// "no items" note so the marker is still recognizable; otherwise each item is one
+// "- [status] content" line. It performs no I/O and is deterministic.
+func renderPlanNote(p domain.PlanUpdated) string {
+	if len(p.Items) == 0 {
+		return PlanNotePrefix + " (no items)"
+	}
+	var b strings.Builder
+	b.WriteString(PlanNotePrefix)
+	for _, it := range p.Items {
+		b.WriteString("\n- [")
+		b.WriteString(it.Status)
+		b.WriteString("] ")
+		b.WriteString(it.Content)
+	}
+	return b.String()
 }
 
 // renderMessage converts a single conversation-bearing envelope into the
 // model-visible [llm.Message] it contributes, applying tool-result clearing. The
 // second return is false for envelopes that contribute no model-visible message
-// (SessionStarted is handled by the caller; control/checkpoint events are
-// skipped).
+// (SessionStarted is handled by the caller; control/checkpoint events, and
+// [domain.PlanUpdated] — which is re-surfaced as a single latest-plan note by the
+// caller, not per-event — are skipped via the default case).
 func renderMessage(env domain.EventEnvelope, clearedSeqs map[int64]struct{}, stub string) (llm.Message, bool) {
 	switch p := env.Event.(type) {
 	case domain.MessageAppended:

@@ -146,6 +146,108 @@ func TestBuildWindow_RendersToolResultMessage(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// AC-18 (ADR-0031) — PlanUpdated is skipped on the per-event path, and the
+// LATEST PlanUpdated is re-surfaced as a single context note after the live
+// window; stale plans do not duplicate.
+// ---------------------------------------------------------------------------
+
+// planNotes collects all model-visible message texts that carry the plan-note
+// marker, so a test can assert how many (and which) plan notes were re-surfaced.
+func planNotes(win agentctx.Window) []string {
+	var notes []string
+	for _, m := range win.Messages {
+		for _, p := range m.Content {
+			if p.Text != nil && strings.Contains(p.Text.Text, agentctx.PlanNotePrefix) {
+				notes = append(notes, p.Text.Text)
+			}
+		}
+	}
+	return notes
+}
+
+func TestBuildWindow_NoPlanNoteWhenNoPlanUpdated(t *testing.T) {
+	// Default behavior must be unchanged when the log has no PlanUpdated: no plan
+	// note leaks into the window (AC-17 regression guard for AC-18).
+	events := []domain.EventEnvelope{
+		env(1, domain.SessionStarted{SystemPrompt: "sys"}),
+		env(2, domain.MessageAppended{Message: userMsg("hello")}),
+		env(3, domain.AssistantMessage{TurnID: "t1", Message: assistantText("hi"), StopReason: llm.StopEnd}),
+	}
+
+	win, err := agentctx.BuildWindow(events, agentctx.WindowOptions{})
+	require.NoError(t, err)
+
+	assert.Empty(t, planNotes(win), "no PlanUpdated => no plan note re-surfaced")
+	assert.Len(t, win.Messages, 2, "tool/plan notes must not change the unrelated window")
+}
+
+func TestBuildWindow_PlanUpdatedNotRenderedPerEvent(t *testing.T) {
+	// A PlanUpdated is NOT rendered as a per-event conversation message (it has no
+	// llm.Message form); it only contributes the single latest-plan note.
+	events := []domain.EventEnvelope{
+		env(1, domain.SessionStarted{SystemPrompt: "sys"}),
+		env(2, domain.MessageAppended{Message: userMsg("plan it")}),
+		env(3, domain.PlanUpdated{TurnID: "t1", Items: []domain.PlanItem{
+			{Content: "first step", Status: domain.PlanStatusInProgress},
+		}}),
+	}
+
+	win, err := agentctx.BuildWindow(events, agentctx.WindowOptions{})
+	require.NoError(t, err)
+
+	// Exactly the user message plus the one re-surfaced plan note.
+	require.Len(t, win.Messages, 2)
+	assert.Equal(t, "plan it", win.Messages[0].Content[0].Text.Text)
+}
+
+func TestBuildWindow_ReSurfacesLatestPlanOnce(t *testing.T) {
+	// Two PlanUpdated events: only the latest is re-surfaced, and exactly once.
+	events := []domain.EventEnvelope{
+		env(1, domain.SessionStarted{SystemPrompt: "sys"}),
+		env(2, domain.MessageAppended{Message: userMsg("go")}),
+		env(3, domain.PlanUpdated{TurnID: "t1", Items: []domain.PlanItem{
+			{Content: "stale step", Status: domain.PlanStatusPending},
+		}}),
+		env(4, domain.AssistantMessage{TurnID: "t1", Message: assistantText("working"), StopReason: llm.StopEnd}),
+		env(5, domain.PlanUpdated{TurnID: "t2", Items: []domain.PlanItem{
+			{Content: "current step", Status: domain.PlanStatusInProgress},
+			{Content: "next step", Status: domain.PlanStatusPending},
+		}}),
+	}
+
+	win, err := agentctx.BuildWindow(events, agentctx.WindowOptions{})
+	require.NoError(t, err)
+
+	notes := planNotes(win)
+	require.Len(t, notes, 1, "exactly one plan note (the latest) is re-surfaced")
+	assert.Contains(t, notes[0], "current step", "the latest plan is shown")
+	assert.Contains(t, notes[0], "next step")
+	assert.NotContains(t, notes[0], "stale step", "the stale plan must not appear")
+
+	// The plan note is appended AFTER the live conversation window.
+	last := win.Messages[len(win.Messages)-1]
+	require.NotEmpty(t, last.Content)
+	require.NotNil(t, last.Content[0].Text)
+	assert.Contains(t, last.Content[0].Text.Text, agentctx.PlanNotePrefix)
+}
+
+func TestBuildWindow_EmptyPlanRendersBoundedNote(t *testing.T) {
+	// An empty plan (a valid "cleared" plan) still re-surfaces a recognizable,
+	// bounded note rather than vanishing silently.
+	events := []domain.EventEnvelope{
+		env(1, domain.SessionStarted{SystemPrompt: "sys"}),
+		env(2, domain.PlanUpdated{TurnID: "t1", Items: nil}),
+	}
+
+	win, err := agentctx.BuildWindow(events, agentctx.WindowOptions{})
+	require.NoError(t, err)
+
+	notes := planNotes(win)
+	require.Len(t, notes, 1)
+	assert.Contains(t, notes[0], agentctx.PlanNotePrefix)
+}
+
+// ---------------------------------------------------------------------------
 // FR-CTX-02 AC-1 — after a ToolResultCleared the window renders a STUB while
 // the log is unchanged.
 // ---------------------------------------------------------------------------
