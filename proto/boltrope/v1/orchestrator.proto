@@ -97,6 +97,15 @@ service OrchestratorService {
   // the principal when non-empty), never a filter key — the result is RLS-scoped to
   // the principal's tenant.
   rpc GetTenantCost(GetTenantCostRequest) returns (GetTenantCostResponse);
+
+  // VerifySessionIntegrity recomputes an owned session's per-event content hash and
+  // per-session SHA-256 hash-CHAIN over the [from_seq, to_seq] window and compares
+  // them against the stored hashes, reporting the first tampered seq (Feature
+  // tamper-evident / ADR-0033). It is read-only and side-effect-free. A contiguous
+  // leading pre-0009 NULL-hash prefix is skipped (those rows are unchained, not
+  // tampered); verification begins at the first chained event. Cross-tenant ->
+  // PERMISSION_DENIED, missing/RLS-invisible -> NOT_FOUND.
+  rpc VerifySessionIntegrity(VerifySessionIntegrityRequest) returns (VerifySessionIntegrityResponse);
 }
 
 // SessionSortField names the sort key for ListSessions. v1 sorts by created_at
@@ -268,6 +277,14 @@ message EventDescriptor {
   // summary is a bounded, safe summary (e.g. a truncated text prefix); never raw
   // provider bytes or the system prompt.
   string summary = 11;
+  // content_hash is the SHA-256 over the event's stored payload bytes (a
+  // non-sensitive integrity digest, never the payload itself); empty for
+  // unchained/pre-0009 rows (ADR-0033). Exposed regardless of include_payload.
+  bytes content_hash = 12;
+  // chain_hash is the SHA-256 of (prev_chain_hash || content_hash) linking this
+  // event to the prior one in the per-session hash-chain (a non-sensitive
+  // integrity digest); empty for unchained/pre-0009 rows (ADR-0033).
+  bytes chain_hash = 13;
 }
 
 // ListSessionEventsResponse is one keyset page of event descriptors.
@@ -360,6 +377,38 @@ message GetTenantCostResponse {
   repeated ModelCost by_model = 3;
   // session_count is the number of distinct sessions of the tenant that carry cost.
   int64 session_count = 4;
+}
+
+// VerifySessionIntegrityRequest identifies the owned session and seq window to
+// verify (Feature tamper-evident / ADR-0033).
+message VerifySessionIntegrityRequest {
+  // tenant_id is a GUARD: when non-empty it MUST match the authenticated principal
+  // (mirrors ListSessionEventsRequest); it is never a filter key.
+  string tenant_id = 1;
+  // session_id is the owned session to verify.
+  string session_id = 2;
+  // from_seq is the (inclusive) lower seq bound to verify; <= 0 starts at seq 1.
+  int64 from_seq = 3;
+  // to_seq is the (inclusive) upper seq bound to verify; <= 0 or beyond head folds
+  // up to the session head.
+  int64 to_seq = 4;
+}
+
+// VerifySessionIntegrityResponse is the recompute-and-compare verdict over the
+// requested window (Feature tamper-evident / ADR-0033).
+message VerifySessionIntegrityResponse {
+  // valid is true when every checked event's recomputed content_hash and chain_hash
+  // match the stored values (no tampering detected in the window).
+  bool valid = 1;
+  // first_bad_seq is the seq of the first event whose recomputed hash mismatched;
+  // zero when valid.
+  int64 first_bad_seq = 2;
+  // reason classifies the mismatch (content-hash mismatch vs broken chain link);
+  // empty when valid.
+  string reason = 3;
+  // checked is the number of CHAINED events verified (a leading NULL-hash pre-0009
+  // prefix is skipped, not counted).
+  int64 checked = 4;
 }
 
 // PermissionMode is the session's operating mode for the allow/deny/ask pipeline,

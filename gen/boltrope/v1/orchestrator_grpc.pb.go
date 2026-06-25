@@ -36,17 +36,18 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	OrchestratorService_CreateSession_FullMethodName     = "/boltrope.v1.OrchestratorService/CreateSession"
-	OrchestratorService_GetSession_FullMethodName        = "/boltrope.v1.OrchestratorService/GetSession"
-	OrchestratorService_Run_FullMethodName               = "/boltrope.v1.OrchestratorService/Run"
-	OrchestratorService_Control_FullMethodName           = "/boltrope.v1.OrchestratorService/Control"
-	OrchestratorService_Fork_FullMethodName              = "/boltrope.v1.OrchestratorService/Fork"
-	OrchestratorService_ListSessions_FullMethodName      = "/boltrope.v1.OrchestratorService/ListSessions"
-	OrchestratorService_GetSessionUsage_FullMethodName   = "/boltrope.v1.OrchestratorService/GetSessionUsage"
-	OrchestratorService_ListSessionEvents_FullMethodName = "/boltrope.v1.OrchestratorService/ListSessionEvents"
-	OrchestratorService_GetStateAtSeq_FullMethodName     = "/boltrope.v1.OrchestratorService/GetStateAtSeq"
-	OrchestratorService_GetSessionCost_FullMethodName    = "/boltrope.v1.OrchestratorService/GetSessionCost"
-	OrchestratorService_GetTenantCost_FullMethodName     = "/boltrope.v1.OrchestratorService/GetTenantCost"
+	OrchestratorService_CreateSession_FullMethodName          = "/boltrope.v1.OrchestratorService/CreateSession"
+	OrchestratorService_GetSession_FullMethodName             = "/boltrope.v1.OrchestratorService/GetSession"
+	OrchestratorService_Run_FullMethodName                    = "/boltrope.v1.OrchestratorService/Run"
+	OrchestratorService_Control_FullMethodName                = "/boltrope.v1.OrchestratorService/Control"
+	OrchestratorService_Fork_FullMethodName                   = "/boltrope.v1.OrchestratorService/Fork"
+	OrchestratorService_ListSessions_FullMethodName           = "/boltrope.v1.OrchestratorService/ListSessions"
+	OrchestratorService_GetSessionUsage_FullMethodName        = "/boltrope.v1.OrchestratorService/GetSessionUsage"
+	OrchestratorService_ListSessionEvents_FullMethodName      = "/boltrope.v1.OrchestratorService/ListSessionEvents"
+	OrchestratorService_GetStateAtSeq_FullMethodName          = "/boltrope.v1.OrchestratorService/GetStateAtSeq"
+	OrchestratorService_GetSessionCost_FullMethodName         = "/boltrope.v1.OrchestratorService/GetSessionCost"
+	OrchestratorService_GetTenantCost_FullMethodName          = "/boltrope.v1.OrchestratorService/GetTenantCost"
+	OrchestratorService_VerifySessionIntegrity_FullMethodName = "/boltrope.v1.OrchestratorService/VerifySessionIntegrity"
 )
 
 // OrchestratorServiceClient is the client API for OrchestratorService service.
@@ -120,6 +121,14 @@ type OrchestratorServiceClient interface {
 	// the principal when non-empty), never a filter key — the result is RLS-scoped to
 	// the principal's tenant.
 	GetTenantCost(ctx context.Context, in *GetTenantCostRequest, opts ...grpc.CallOption) (*GetTenantCostResponse, error)
+	// VerifySessionIntegrity recomputes an owned session's per-event content hash and
+	// per-session SHA-256 hash-CHAIN over the [from_seq, to_seq] window and compares
+	// them against the stored hashes, reporting the first tampered seq (Feature
+	// tamper-evident / ADR-0033). It is read-only and side-effect-free. A contiguous
+	// leading pre-0009 NULL-hash prefix is skipped (those rows are unchained, not
+	// tampered); verification begins at the first chained event. Cross-tenant ->
+	// PERMISSION_DENIED, missing/RLS-invisible -> NOT_FOUND.
+	VerifySessionIntegrity(ctx context.Context, in *VerifySessionIntegrityRequest, opts ...grpc.CallOption) (*VerifySessionIntegrityResponse, error)
 }
 
 type orchestratorServiceClient struct {
@@ -249,6 +258,16 @@ func (c *orchestratorServiceClient) GetTenantCost(ctx context.Context, in *GetTe
 	return out, nil
 }
 
+func (c *orchestratorServiceClient) VerifySessionIntegrity(ctx context.Context, in *VerifySessionIntegrityRequest, opts ...grpc.CallOption) (*VerifySessionIntegrityResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(VerifySessionIntegrityResponse)
+	err := c.cc.Invoke(ctx, OrchestratorService_VerifySessionIntegrity_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // OrchestratorServiceServer is the server API for OrchestratorService service.
 // All implementations must embed UnimplementedOrchestratorServiceServer
 // for forward compatibility.
@@ -320,6 +339,14 @@ type OrchestratorServiceServer interface {
 	// the principal when non-empty), never a filter key — the result is RLS-scoped to
 	// the principal's tenant.
 	GetTenantCost(context.Context, *GetTenantCostRequest) (*GetTenantCostResponse, error)
+	// VerifySessionIntegrity recomputes an owned session's per-event content hash and
+	// per-session SHA-256 hash-CHAIN over the [from_seq, to_seq] window and compares
+	// them against the stored hashes, reporting the first tampered seq (Feature
+	// tamper-evident / ADR-0033). It is read-only and side-effect-free. A contiguous
+	// leading pre-0009 NULL-hash prefix is skipped (those rows are unchained, not
+	// tampered); verification begins at the first chained event. Cross-tenant ->
+	// PERMISSION_DENIED, missing/RLS-invisible -> NOT_FOUND.
+	VerifySessionIntegrity(context.Context, *VerifySessionIntegrityRequest) (*VerifySessionIntegrityResponse, error)
 	mustEmbedUnimplementedOrchestratorServiceServer()
 }
 
@@ -362,6 +389,9 @@ func (UnimplementedOrchestratorServiceServer) GetSessionCost(context.Context, *G
 }
 func (UnimplementedOrchestratorServiceServer) GetTenantCost(context.Context, *GetTenantCostRequest) (*GetTenantCostResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetTenantCost not implemented")
+}
+func (UnimplementedOrchestratorServiceServer) VerifySessionIntegrity(context.Context, *VerifySessionIntegrityRequest) (*VerifySessionIntegrityResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method VerifySessionIntegrity not implemented")
 }
 func (UnimplementedOrchestratorServiceServer) mustEmbedUnimplementedOrchestratorServiceServer() {}
 func (UnimplementedOrchestratorServiceServer) testEmbeddedByValue()                             {}
@@ -575,6 +605,24 @@ func _OrchestratorService_GetTenantCost_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _OrchestratorService_VerifySessionIntegrity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(VerifySessionIntegrityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OrchestratorServiceServer).VerifySessionIntegrity(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OrchestratorService_VerifySessionIntegrity_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OrchestratorServiceServer).VerifySessionIntegrity(ctx, req.(*VerifySessionIntegrityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // OrchestratorService_ServiceDesc is the grpc.ServiceDesc for OrchestratorService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -621,6 +669,10 @@ var OrchestratorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetTenantCost",
 			Handler:    _OrchestratorService_GetTenantCost_Handler,
+		},
+		{
+			MethodName: "VerifySessionIntegrity",
+			Handler:    _OrchestratorService_VerifySessionIntegrity_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
