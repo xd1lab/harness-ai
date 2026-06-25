@@ -195,6 +195,103 @@ func TestAppend_Contiguity(t *testing.T) {
 	}
 }
 
+// TestAppend_PlanUpdated_RoundTrip covers AC-12 (Gap #3): a domain.PlanUpdated
+// event Appends and Loads back through the REAL pgx insert/scan + decodePayload
+// path with its Items intact. It proves event_type "PlanUpdated" persists to the
+// events column (the closed-set tag survives the DB) and that decodePayload
+// reconstructs the typed payload — the durable, time-travelable planning
+// primitive is genuinely round-trippable against Postgres, not just in the unit
+// codec test. It also asserts the empty-plan (nil Items) edge case round-trips.
+func TestAppend_PlanUpdated_RoundTrip(t *testing.T) {
+	h := newHarness(t)
+	tenantID, sessionID := h.seedTenantAndSession(t)
+	ctx := tenantCtx(tenantID)
+
+	want := domain.PlanUpdated{
+		TurnID: "turn-plan",
+		Items: []domain.PlanItem{
+			{Content: "investigate the failing test", Status: domain.PlanStatusCompleted},
+			{Content: "wire the virtual tool", Status: domain.PlanStatusInProgress},
+			{Content: "write the ADR", Status: domain.PlanStatusPending},
+		},
+	}
+
+	envs, err := h.store.Append(ctx, sessionID, 0, 0, newUUID(t),
+		app.AppendInput{Event: want, Actor: domain.ActorAssistant})
+	if err != nil {
+		t.Fatalf("Append(PlanUpdated): %v", err)
+	}
+	if len(envs) != 1 || envs[0].Seq != 1 {
+		t.Fatalf("Append returned %d envelopes (seq %d), want 1 at seq 1", len(envs), seqOf(envs))
+	}
+	if envs[0].Type != domain.EventPlanUpdated {
+		t.Fatalf("appended envelope Type = %q, want %q", envs[0].Type, domain.EventPlanUpdated)
+	}
+
+	// The event_type column persists the closed-set tag verbatim.
+	owner := h.ownerConn(t)
+	var gotType string
+	if err := owner.QueryRow(context.Background(),
+		"SELECT event_type FROM events WHERE session_id = $1 AND seq = 1", sessionID).Scan(&gotType); err != nil {
+		t.Fatalf("read event_type: %v", err)
+	}
+	if gotType != string(domain.EventPlanUpdated) {
+		t.Fatalf("persisted event_type = %q, want %q", gotType, domain.EventPlanUpdated)
+	}
+
+	// Load back through scanEnvelopes -> decodePayload and assert Items survive.
+	loaded, err := h.store.Load(ctx, sessionID, 1)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("loaded %d events, want 1", len(loaded))
+	}
+	if loaded[0].Type != domain.EventPlanUpdated {
+		t.Fatalf("loaded envelope Type = %q, want %q", loaded[0].Type, domain.EventPlanUpdated)
+	}
+	got, ok := loaded[0].Event.(domain.PlanUpdated)
+	if !ok {
+		t.Fatalf("loaded payload type = %T, want domain.PlanUpdated", loaded[0].Event)
+	}
+	if got.TurnID != want.TurnID {
+		t.Fatalf("loaded TurnID = %q, want %q", got.TurnID, want.TurnID)
+	}
+	if len(got.Items) != len(want.Items) {
+		t.Fatalf("loaded %d items, want %d", len(got.Items), len(want.Items))
+	}
+	for i := range want.Items {
+		if got.Items[i] != want.Items[i] {
+			t.Fatalf("item %d = %+v, want %+v", i, got.Items[i], want.Items[i])
+		}
+	}
+
+	// Empty-plan edge case: an empty Items slice is a valid plan and must
+	// round-trip without becoming a non-PlanUpdated event or panicking.
+	emptyEnvs, err := h.store.Append(ctx, sessionID, 1, 0, newUUID(t),
+		app.AppendInput{Event: domain.PlanUpdated{TurnID: "turn-empty"}, Actor: domain.ActorAssistant})
+	if err != nil {
+		t.Fatalf("Append(empty PlanUpdated): %v", err)
+	}
+	if emptyEnvs[0].Seq != 2 {
+		t.Fatalf("empty-plan append seq = %d, want 2", emptyEnvs[0].Seq)
+	}
+	loadedEmpty, err := h.store.Load(ctx, sessionID, 2)
+	if err != nil {
+		t.Fatalf("Load empty: %v", err)
+	}
+	if len(loadedEmpty) != 1 {
+		t.Fatalf("loaded %d events from seq 2, want 1", len(loadedEmpty))
+	}
+	gotEmpty, ok := loadedEmpty[0].Event.(domain.PlanUpdated)
+	if !ok {
+		t.Fatalf("loaded empty payload type = %T, want domain.PlanUpdated", loadedEmpty[0].Event)
+	}
+	if len(gotEmpty.Items) != 0 {
+		t.Fatalf("empty-plan loaded %d items, want 0", len(gotEmpty.Items))
+	}
+}
+
 // TestRLS_PredicateRemoved covers FR-STATE-04 AC-1 / NFR-TEST-05(a): with
 // app.current_tenant = A on the non-owner role, SELECT * FROM events WITHOUT a
 // tenant_id predicate returns only A's rows.
