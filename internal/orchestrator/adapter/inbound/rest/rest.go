@@ -73,6 +73,9 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	// Feature M (event-read): redacted event listing + at-seq time-travel.
 	mux.HandleFunc("GET /v1/sessions/{id}/events", h.withAuth(h.listSessionEvents))
 	mux.HandleFunc("GET /v1/sessions/{id}/state", h.withAuth(h.getStateAtSeq))
+	// Batch-5A (tamper-evident audit): recompute the per-event content hash and
+	// per-session hash-chain and report the first tampered seq.
+	mux.HandleFunc("GET /v1/sessions/{id}/integrity", h.withAuth(h.verifySessionIntegrity))
 	// Feature O (cost-read): per-session + per-tenant cost rollups.
 	mux.HandleFunc("GET /v1/sessions/{id}/cost", h.withAuth(h.getSessionCost))
 	mux.HandleFunc("GET /v1/cost", h.withAuth(h.getTenantCost))
@@ -312,6 +315,41 @@ func (h *Handler) getStateAtSeq(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeProto(w, resp)
+}
+
+// verifySessionIntegrity maps GET /v1/sessions/{id}/integrity onto the shared
+// VerifySessionIntegrity (Batch-5A / tamper-evident audit): it recomputes the
+// per-event content hash and the per-session SHA-256 hash-chain over the stored
+// events and reports the first tampered seq. Query params: from_seq / to_seq
+// (decimal, inclusive bounds; <= 0 folds the whole chain). An unparseable bound
+// is a typed 400 BEFORE any store call. The response is protojson of
+// VerifySessionIntegrityResponse. It mirrors the listSessionEvents handler shape.
+func (h *Handler) verifySessionIntegrity(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	fromSeq, err := parseOptionalInt64(q.Get("from_seq"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, codes.InvalidArgument, "from_seq must be a decimal integer")
+		return
+	}
+	toSeq, err := parseOptionalInt64(q.Get("to_seq"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, codes.InvalidArgument, "to_seq must be a decimal integer")
+		return
+	}
+	resp, err := h.grpc.VerifySessionIntegrity(r.Context(), &genproto.VerifySessionIntegrityRequest{
+		SessionId: r.PathValue("id"),
+		FromSeq:   fromSeq,
+		ToSeq:     toSeq,
+	})
+	if err != nil {
+		writeStatusError(w, err)
+		return
+	}
+	// The verdict is meaningful even at proto3 defaults (valid=false, first_bad_seq=0,
+	// checked=0): a tampered first-seq session legitimately serializes every field to
+	// its zero value, so emit unpopulated fields to make valid/first_bad_seq/checked
+	// always present rather than silently elided.
+	writeProtoFull(w, resp)
 }
 
 // getSessionCost maps GET /v1/sessions/{id}/cost onto the shared GetSessionCost
@@ -577,6 +615,21 @@ func errEmptyBody(err error) error {
 // the boltrope.v1 message).
 func writeProto(w http.ResponseWriter, m proto.Message) {
 	b, err := protojson.Marshal(m)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, codes.Internal, "encode response: "+err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(b)
+}
+
+// writeProtoFull is writeProto with EmitUnpopulated set: zero-valued scalar
+// fields (a false bool, a 0 int64) are emitted rather than elided. Used where a
+// response's proto3-default values are themselves load-bearing (e.g. the verify
+// verdict valid=false / first_bad_seq=0), so a client never has to disambiguate
+// "field absent" from "field is its zero".
+func writeProtoFull(w http.ResponseWriter, m proto.Message) {
+	b, err := protojson.MarshalOptions{EmitUnpopulated: true}.Marshal(m)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, codes.Internal, "encode response: "+err.Error())
 		return
