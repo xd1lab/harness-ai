@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/xd1lab/harness-ai/internal/platform/llm"
@@ -74,6 +75,12 @@ const (
 	// EventMCPToolApprovalResolved records the human resolution of an MCP first-use
 	// approval gate (FR-EXT-02). See [MCPToolApprovalResolved].
 	EventMCPToolApprovalResolved EventType = "MCPToolApprovalResolved"
+	// EventPlanUpdated records the model's current task plan (todo list) emitted via
+	// the in-loop virtual tool todo_write (ADR-0031). It is a durable, time-travelable
+	// planning primitive: the latest PlanUpdated for a session is the agent's working
+	// plan, re-surfaced into the model context. It carries only non-secret plan text,
+	// so the read-plane exposes it as a normal (non-redacted) descriptor.
+	EventPlanUpdated EventType = "PlanUpdated"
 )
 
 // EventEnvelope is the persisted wrapper around a typed [Event] payload. It mirrors
@@ -538,3 +545,65 @@ type MCPToolApprovalResolved struct {
 // EventType identifies this payload as [EventMCPToolApprovalResolved].
 func (MCPToolApprovalResolved) EventType() EventType { return EventMCPToolApprovalResolved }
 func (MCPToolApprovalResolved) isEvent()             {}
+
+// PlanStatus is the closed status vocabulary for a [PlanItem]. The set is closed in
+// the domain so the todo_write virtual-tool intercept and its arg parser can reject
+// an out-of-range status before any [PlanUpdated] is appended (ADR-0031).
+type PlanStatus = string
+
+const (
+	// PlanStatusPending marks a plan item not yet started.
+	PlanStatusPending PlanStatus = "pending"
+	// PlanStatusInProgress marks the single plan item currently being worked.
+	PlanStatusInProgress PlanStatus = "in_progress"
+	// PlanStatusCompleted marks a finished plan item.
+	PlanStatusCompleted PlanStatus = "completed"
+)
+
+// PlanItem is one entry of a model-authored task plan: a short content line and its
+// lifecycle status. It carries only non-secret plan text (ADR-0031).
+type PlanItem struct {
+	// Content is the human-readable plan step. It must be non-empty (validated by
+	// [PlanUpdated.Validate]).
+	Content string
+	// Status is the lifecycle status; it must be one of [PlanStatusPending],
+	// [PlanStatusInProgress], or [PlanStatusCompleted] (validated by
+	// [PlanUpdated.Validate]).
+	Status string
+}
+
+// PlanUpdated records the model's current task plan, emitted via the in-loop
+// virtual tool todo_write (ADR-0031). It is a durable, time-travelable planning
+// primitive: appending it overwrites the agent's working plan (the latest
+// PlanUpdated for a session wins), and an empty Items slice is a valid empty plan.
+// Payload is non-secret plan text, surfaced by the read-plane as a normal descriptor.
+type PlanUpdated struct {
+	// TurnID is the turn this plan update was emitted in (matches
+	// [TurnStarted.TurnID]).
+	TurnID string
+	// Items is the ordered plan; an empty slice is a valid empty plan.
+	Items []PlanItem
+}
+
+// EventType identifies this payload as [EventPlanUpdated].
+func (PlanUpdated) EventType() EventType { return EventPlanUpdated }
+func (PlanUpdated) isEvent()             {}
+
+// Validate is the SINGLE source of truth for plan well-formedness, reused by the
+// todo_write virtual-tool arg parser and the loop intercept so an invalid plan is
+// never persisted (ADR-0031). It rejects any item with empty content or an
+// out-of-range status; an empty Items slice is valid (an empty plan).
+func (p PlanUpdated) Validate() error {
+	for i, it := range p.Items {
+		if it.Content == "" {
+			return fmt.Errorf("plan item %d: content must not be empty", i)
+		}
+		switch it.Status {
+		case PlanStatusPending, PlanStatusInProgress, PlanStatusCompleted:
+		default:
+			return fmt.Errorf("plan item %d: status %q must be one of %q, %q, %q",
+				i, it.Status, PlanStatusPending, PlanStatusInProgress, PlanStatusCompleted)
+		}
+	}
+	return nil
+}
