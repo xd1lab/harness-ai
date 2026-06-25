@@ -28,6 +28,7 @@ go.work.sum
 *.key
 
 # Editor / OS noise
+.claude/
 .idea/
 .vscode/
 *.swp

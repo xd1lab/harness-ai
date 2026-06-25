@@ -451,6 +451,7 @@ v1 是一個刻意聚焦、不可再簡化的 harness。`Provider`、`Workspace`
 
 - **MCP 伺服器模式**([ADR-0022](docs/decisions/0022-mcp-server-mode.md))已於 v1 以 Streamable HTTP 交付([見上文](#mcp-伺服器模式被呼叫端--callee))。延後項目:stdio 傳輸、MCP `elicitation`、完整 OAuth Protected-Resource-Metadata discovery、`prompts`/`resources`/`sampling` capabilities,以及 **A2A 互通**。
 - **microVM / gVisor / OS 原生沙箱後端**——v1 在 `Workspace`/`Runtime` 埠之後僅支援容器;因此互不信任程式碼的多租戶執行不在 v1 範圍內。
+- **`boltrope-dev` 真實模型 + 本地執行**([ADR-0029](docs/decisions/0029-boltrope-dev-real-model-and-local-exec-opt-in.md),修訂 [ADR-0024](docs/decisions/0024-boltrope-dev-local-mode.md))——[本機開發模式](#本機開發模式-boltrope-dev)現已交付**選用的真實模型接線**(`--model-url`/`--model`,任何 OpenAI 相容端點)與一個**選用的 Docker local-exec 沙箱**(`--enable-local-exec`,重用生產 runtime 的每會話容器,具 `--network none` + cgroup/PID 限制),兩者皆預設關閉、置於醒目橫幅與生產訊號閘門之後。仍延後:SQLite/檔案持久化(`--store`),其旗標今日仍被拒絕以使延後明確,並可嵌入既有 `EventLogPort` 接縫。
 - **沙箱內網路出口 proxy**——`webfetch`/`websearch` 今日已能透過[網路出口資料通道](#web-access-egress)連到白名單主機(一個由 broker 中介、強化過的行程內抓取器;[ADR-0021](docs/decisions/0021-egress-data-path.md))。沙箱本身維持 `--network none`,所以沙箱內的 `bash` 與 MCP-HTTP 仍無網路;那個能讓沙箱命名空間取得逐連線閘控路徑的 forward proxy 被延後(`EgressBroker` 埠與 `--network` 接縫的形狀已備好,可無需重新架構地嵌入)。
 - **模型路由**與進階多 agent 拓撲。
 - **每個 RPC 的完整 REST 對映**——v1 交付極簡外觀([REST API](#rest-api):CreateSession / GetSession / `Run` over SSE / Control / Fork);把完整 proto 表面做成由註解生成的對映被延後。
