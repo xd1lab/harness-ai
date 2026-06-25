@@ -251,6 +251,8 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, r *http.Request, req *r
 		h.toolGetSessionCost(w, r, req, params)
 	case "get_tenant_cost":
 		h.toolGetTenantCost(w, r, req, params)
+	case "verify_session_integrity":
+		h.toolVerifySessionIntegrity(w, r, req, params)
 	default:
 		writeJSON(w, http.StatusOK, errorResponse(req.ID, codeInvalidParams, "unknown tool: "+params.Name, nil))
 	}
@@ -514,6 +516,40 @@ func (h *Handler) toolGetTenantCost(w http.ResponseWriter, r *http.Request, req 
 		return
 	}
 	writeJSON(w, http.StatusOK, resultResponse(req.ID, textResult("tenant cost", out)))
+}
+
+// toolVerifySessionIntegrity maps the verify_session_integrity tool onto the
+// shared VerifySessionIntegrity (Batch-5A tamper-evident hash-chain): it recomputes
+// the per-event content hash and the per-session hash-chain over the owned session
+// and reports the first tampered seq. Mirrors toolListSessionEvents — session_id is
+// required (else InvalidParams); the tenant is the authenticated principal (no
+// tenant_id arg), so ownership is enforced by the shared method.
+func (h *Handler) toolVerifySessionIntegrity(w http.ResponseWriter, r *http.Request, req *rpcRequest, p toolCallParams) {
+	var args verifySessionIntegrityArgs
+	if !decodeArgs(w, req, p.Arguments, &args) {
+		return
+	}
+	if args.SessionID == "" {
+		writeJSON(w, http.StatusOK, errorResponse(req.ID, codeInvalidParams, "session_id is required", nil))
+		return
+	}
+	resp, err := h.grpc.VerifySessionIntegrity(r.Context(), &genproto.VerifySessionIntegrityRequest{
+		SessionId: args.SessionID,
+		FromSeq:   args.FromSeq,
+		ToSeq:     args.ToSeq,
+	})
+	if err != nil {
+		h.writeToolStatusError(w, req, err)
+		return
+	}
+	// EmitUnpopulated: the verify verdict valid=false / first_bad_seq=0 are
+	// load-bearing defaults the client must see (mirrors rest.writeProtoFull).
+	out, err := protoToMapFull(resp)
+	if err != nil {
+		writeJSON(w, http.StatusOK, errorResponse(req.ID, codeInternalError, "encode integrity: "+err.Error(), nil))
+		return
+	}
+	writeJSON(w, http.StatusOK, resultResponse(req.ID, textResult("session "+args.SessionID+" integrity", out)))
 }
 
 // parseStatuses maps the list_sessions status string OR-filter (active|finished|

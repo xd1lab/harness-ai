@@ -57,15 +57,17 @@ func objectSchemaBytes(raw json.RawMessage) (schema []byte, ok bool) {
 	return []byte(raw), true
 }
 
-// toolCatalog returns the 11 v1 tools (create_session, run, get_session, control,
+// toolCatalog returns the 12 v1 tools (create_session, run, get_session, control,
 // fork, list_sessions, get_session_usage, list_session_events, get_state_at_seq,
-// get_session_cost, get_tenant_cost), each with a non-empty description and
-// inputSchema; run additionally declares an outputSchema (the synthesized
-// completed result). The set and shape are pinned by TestToolsList_ReturnsElevenTools
-// (list_sessions + get_session_usage are the Feature I / ADR-0027 admin reads;
-// list_session_events + get_state_at_seq are Feature M / event-read;
-// get_session_cost + get_tenant_cost are Feature O / cost-read; the control tool's
-// description documents that interrupt is the admin STOP).
+// get_session_cost, get_tenant_cost, verify_session_integrity), each with a
+// non-empty description and inputSchema; run additionally declares an outputSchema
+// (the synthesized completed result). The set and shape are pinned by
+// TestToolsList_ReturnsTwelveTools (list_sessions + get_session_usage are the
+// Feature I / ADR-0027 admin reads; list_session_events + get_state_at_seq are
+// Feature M / event-read; get_session_cost + get_tenant_cost are Feature O /
+// cost-read; verify_session_integrity is the Batch-5A tamper-evident hash-chain
+// verify; the control tool's description documents that interrupt is the admin
+// STOP).
 func toolCatalog() []toolDescriptor {
 	return []toolDescriptor{
 		{
@@ -183,6 +185,15 @@ func toolCatalog() []toolDescriptor {
 			Description: "Read the authenticated tenant's cost: a per-model breakdown, the tenant total, and the count of distinct sessions carrying cost. The tenant is the authenticated principal (no tenant_id arg).",
 			InputSchema: objectSchema(map[string]any{}),
 		},
+		{
+			Name:        "verify_session_integrity",
+			Description: "Verify the tamper-evident audit chain of an owned session: recompute each event's content hash from its stored payload and the per-session SHA-256 hash-chain, comparing against the stored digests. Returns valid plus, on the first mismatch, first_bad_seq and a reason distinguishing a tampered payload (content-hash mismatch) from a broken link (chain-hash mismatch); checked is the number of chained events verified (a pre-chain NULL-hash prefix is skipped).",
+			InputSchema: objectSchema(map[string]any{
+				"session_id": map[string]any{"type": "string", "description": "Target session id."},
+				"from_seq":   map[string]any{"type": "integer", "description": "Inclusive lower seq bound; <=0 starts at the first chained event."},
+				"to_seq":     map[string]any{"type": "integer", "description": "Inclusive upper seq bound; <=0 or beyond head verifies to head."},
+			}, "session_id"),
+		},
 	}
 }
 
@@ -266,6 +277,15 @@ type getSessionCostArgs struct {
 // getTenantCostArgs is the get_tenant_cost tool arguments (Feature O). No fields:
 // the tenant is the authenticated principal.
 type getTenantCostArgs struct{}
+
+// verifySessionIntegrityArgs is the verify_session_integrity tool arguments
+// (Batch-5A tamper-evident hash-chain). session_id is required; from_seq/to_seq
+// bound the verified window (<=0 = first chained event / head).
+type verifySessionIntegrityArgs struct {
+	SessionID string `json:"session_id"`
+	FromSeq   int64  `json:"from_seq"`
+	ToSeq     int64  `json:"to_seq"`
+}
 
 // ---- CallToolResult ---------------------------------------------------------
 
@@ -389,7 +409,20 @@ func completedCallResult(sessionID string, seq int64, res *genproto.RunResult) c
 // (the wire vocabulary stays the proto contract; tests assert decoded fields, not
 // exact bytes, since protojson whitespace is randomized).
 func protoToMap(m proto.Message) (map[string]any, error) {
-	b, err := protojson.Marshal(m)
+	return protoToMapOpts(m, protojson.MarshalOptions{})
+}
+
+// protoToMapFull is protoToMap with EmitUnpopulated set: proto3-default scalars (a
+// false bool, a 0 int64) are emitted rather than elided. Used where a response's
+// default values are themselves load-bearing — e.g. the verify verdict valid=false
+// / first_bad_seq=0 — so an MCP client never has to disambiguate "absent" from
+// "false/zero" (mirrors rest.writeProtoFull).
+func protoToMapFull(m proto.Message) (map[string]any, error) {
+	return protoToMapOpts(m, protojson.MarshalOptions{EmitUnpopulated: true})
+}
+
+func protoToMapOpts(m proto.Message, opts protojson.MarshalOptions) (map[string]any, error) {
+	b, err := opts.Marshal(m)
 	if err != nil {
 		return nil, err
 	}
