@@ -169,3 +169,158 @@ func TestChainHash_TamperedContentBreaksHead(t *testing.T) {
 		t.Fatal("a different content hash produced the same chain head (no tamper evidence)")
 	}
 }
+
+// foldStream replays the append-path fold OVER the wire: it reuses the SAME
+// running `prev` slice that ChainHash returns as the next iteration's input,
+// exactly as the single-writer append loop carries its head forward. It returns
+// the per-seq chain heads. This mirrors how the prod/dev stores fold a batch.
+func foldStream(sessionID string, contents [][]byte) [][]byte {
+	prev := GenesisChainHash(sessionID)
+	heads := make([][]byte, len(contents))
+	for i, c := range contents {
+		prev = ChainHash(prev, c) // carry the returned head forward (reuse)
+		heads[i] = prev
+	}
+	return heads
+}
+
+// TestFoldStream_ReuseDoesNotAliasEarlierHeads is the fold-reuse / aliasing
+// REGRESSION the whole chain rests on. The append path carries one running head
+// slice forward across the batch (prev = ChainHash(prev, content) each step). If
+// ChainHash grew the caller's prev via a bare append it would retroactively
+// clobber an EARLIER head's backing array, corrupting the chain after the fact.
+// We snapshot the first head, fold several more events reusing the returned
+// slice, then assert the snapshot is byte-unchanged — proving prev is never
+// aliased/mutated by a later ChainHash call.
+func TestFoldStream_ReuseDoesNotAliasEarlierHeads(t *testing.T) {
+	const sid = "sess-fold-reuse"
+	contents := [][]byte{
+		ContentHash([]byte(`{"seq":1}`)),
+		ContentHash([]byte(`{"seq":2}`)),
+		ContentHash([]byte(`{"seq":3}`)),
+		ContentHash([]byte(`{"seq":4}`)),
+	}
+
+	// Fold step-by-step, snapshotting the first head before later folds run.
+	prev := GenesisChainHash(sid)
+	head1 := ChainHash(prev, contents[0])
+	head1Snapshot := append([]byte{}, head1...)
+
+	// Continue the fold reusing the RETURNED slices as the running prev.
+	running := head1
+	for _, c := range contents[1:] {
+		running = ChainHash(running, c)
+	}
+
+	if !bytes.Equal(head1, head1Snapshot) {
+		t.Fatalf("earlier chain head was mutated by a later ChainHash fold: %x -> %x (slice aliasing corrupts the chain)", head1Snapshot, head1)
+	}
+
+	// And the genesis seed itself must be untouched by the whole fold.
+	if !bytes.Equal(prev, GenesisChainHash(sid)) {
+		t.Fatalf("genesis seed mutated by the fold: %x", prev)
+	}
+}
+
+// TestFoldStream_DeterministicAndReproducible pins AC-11 at the algorithm level:
+// folding the SAME stream twice yields byte-identical per-seq chain heads. Both
+// the prod (pgx) store and the dev (in-mem) store fold through these shared
+// helpers, so equal inputs => equal hashes => dev/prod parity by construction.
+func TestFoldStream_DeterministicAndReproducible(t *testing.T) {
+	const sid = "sess-parity"
+	stream := func() [][]byte {
+		return [][]byte{
+			mustMarshalContent(t, SessionStarted{SystemPrompt: "you are boltrope"}),
+			mustMarshalContent(t, TurnStarted{TurnID: "t-1", Model: "claude"}),
+			mustMarshalContent(t, ApprovalRequested{
+				TurnID: "t-1", CallID: "c-1", ToolName: "bash", Reason: "mutating",
+				Args: map[string]any{"cmd": "rm -rf /", "force": true, "n": 3},
+			}),
+			mustMarshalContent(t, TurnFinished{TurnID: "t-1", Reason: Success, NumTurns: 1}),
+		}
+	}
+	a := foldStream(sid, stream())
+	b := foldStream(sid, stream())
+	if len(a) != len(b) {
+		t.Fatalf("fold length mismatch: %d vs %d", len(a), len(b))
+	}
+	for i := range a {
+		if !bytes.Equal(a[i], b[i]) {
+			t.Fatalf("seq %d chain head not reproducible: %x vs %x", i+1, a[i], b[i])
+		}
+	}
+}
+
+// TestFoldStream_KnownGoodPerSeqBytes pins the EXACT per-seq content_hash and
+// chain_hash bytes for a fixed event stream, so a refactor that silently alters
+// the algorithm (different marshal, different fold, different genesis) breaks
+// this golden assertion. The expectations are computed from the AC-2 spec
+// (content = sha256(json.Marshal(e)); chain = sha256(prev||content); genesis =
+// sha256("boltrope-audit-genesis-v1:"+sid)) using ONLY stdlib, independent of
+// the helpers under test, so a bug in a helper cannot make its own golden pass.
+func TestFoldStream_KnownGoodPerSeqBytes(t *testing.T) {
+	const sid = "sess-golden"
+	events := []Event{
+		TurnStarted{TurnID: "t-1", Model: "claude"},
+		ApprovalRequested{
+			TurnID: "t-1", CallID: "c-1", ToolName: "bash", Reason: "mutating",
+			Args: map[string]any{"z": 1, "a": "two", "m": true},
+		},
+		TurnFinished{TurnID: "t-1", Reason: Success, NumTurns: 1},
+	}
+
+	// Independent expectation: marshal + sha256 + fold using raw stdlib.
+	wantPrev := sha256.Sum256([]byte("boltrope-audit-genesis-v1:" + sid))
+	prev := wantPrev[:]
+	for i, e := range events {
+		raw, err := json.Marshal(e)
+		if err != nil {
+			t.Fatalf("json.Marshal(%T): %v", e, err)
+		}
+		wantContentArr := sha256.Sum256(raw)
+		wantContent := wantContentArr[:]
+		wantChainArr := sha256.Sum256(append(append([]byte{}, prev...), wantContent...))
+		wantChain := wantChainArr[:]
+
+		// The helpers must reproduce both digests byte-for-byte.
+		gotPayload, err := MarshalEventPayload(e)
+		if err != nil {
+			t.Fatalf("MarshalEventPayload(%T): %v", e, err)
+		}
+		gotContent := ContentHash(gotPayload)
+		gotChain := ChainHash(prev, gotContent)
+
+		if !bytes.Equal(gotContent, wantContent) {
+			t.Fatalf("seq %d content_hash = %x, want %x", i+1, gotContent, wantContent)
+		}
+		if !bytes.Equal(gotChain, wantChain) {
+			t.Fatalf("seq %d chain_hash = %x, want %x", i+1, gotChain, wantChain)
+		}
+		prev = wantChain
+	}
+}
+
+// mustMarshalContent marshals an event via the shared helper and returns its
+// content hash, failing the test on a marshal error.
+func mustMarshalContent(t *testing.T, e Event) []byte {
+	t.Helper()
+	p, err := MarshalEventPayload(e)
+	if err != nil {
+		t.Fatalf("MarshalEventPayload(%T): %v", e, err)
+	}
+	return ContentHash(p)
+}
+
+// TestChainVerification_ZeroValue documents the pure result struct shape
+// consumed by the store, dev store, and gRPC facade (AC-7): a zero value is the
+// "nothing checked" state, and the fields carry the verify outcome.
+func TestChainVerification_ZeroValue(t *testing.T) {
+	var v ChainVerification
+	if v.Valid || v.FirstBadSeq != 0 || v.Reason != "" || v.Checked != 0 {
+		t.Fatalf("zero ChainVerification not empty: %+v", v)
+	}
+	v = ChainVerification{Valid: true, Checked: 3}
+	if !v.Valid || v.Checked != 3 {
+		t.Fatalf("ChainVerification field round-trip failed: %+v", v)
+	}
+}

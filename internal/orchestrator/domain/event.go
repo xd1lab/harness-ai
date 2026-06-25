@@ -125,6 +125,15 @@ type EventEnvelope struct {
 	// Event is the typed payload. It is one of the concrete event structs in this
 	// package; switch on Type or type-assert to consume it.
 	Event Event
+	// ContentHash is the SHA-256 over the EXACT stored events.payload bytes for
+	// this event (the per-event content digest; ADR-0033). It is nil for
+	// unchained pre-0009 rows and populated on the append return path and on
+	// every read-back. See [ContentHash].
+	ContentHash []byte
+	// ChainHash is the per-session running fold SHA-256( prev_chain_hash ||
+	// ContentHash ) linking this event to its predecessor (ADR-0033). It is nil
+	// for unchained pre-0009 rows. See [ChainHash] / [GenesisChainHash].
+	ChainHash []byte
 }
 
 // Actor identifies the producer of an event, matching the events.actor column
