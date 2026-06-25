@@ -244,6 +244,8 @@ func decodePayload(t domain.EventType, payload []byte) (domain.Event, error) {
 		evt, err = unmarshalInto[domain.MCPToolApprovalRequested](payload)
 	case domain.EventMCPToolApprovalResolved:
 		evt, err = unmarshalInto[domain.MCPToolApprovalResolved](payload)
+	case domain.EventPlanUpdated:
+		evt, err = unmarshalInto[domain.PlanUpdated](payload)
 	default:
 		return nil, fmt.Errorf("eventstore: unknown event_type %q (newer schema?)", t)
 	}
