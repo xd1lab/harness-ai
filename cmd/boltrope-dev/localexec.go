@@ -33,6 +33,7 @@ import (
 	"github.com/xd1lab/harness-ai/internal/platform/blob"
 	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/outbound/egress"
 	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/outbound/egressclient"
+	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/outbound/memory/inmem"
 	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/outbound/runtime"
 	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/registry"
 	trapp "github.com/xd1lab/harness-ai/internal/toolruntime/app"
@@ -116,6 +117,23 @@ func buildLocalExec(env map[string]string) (*execute.Service, orchapp.ToolRuntim
 	ws := newDevWorkspaces(rt)
 	reg := registry.New(nil)
 	for _, tool := range tools.Native(ws, fetcher, "") {
+		if err := reg.Register(context.Background(), tool); err != nil {
+			return nil, nil, nil, err
+		}
+	}
+
+	// (3b) Long-term memory tools (ADR-0030, AC-12). The dev binary backs them
+	// with the IN-MEMORY [inmem.Store] — a process-local, tenant-keyed map — NOT
+	// the pgx-backed parent package, so the dev binary stays fenced from pgx
+	// (AC-15). Tenant isolation still holds: each tool reads the owning tenant
+	// from the request context (set by execute.Service) and the in-mem store
+	// fails closed when it is absent, exactly as RLS does in prod.
+	memStore := inmem.New()
+	for _, tool := range []trdomain.Tool{
+		tools.NewMemoryWriteTool(memStore),
+		tools.NewMemoryReadTool(memStore),
+		tools.NewMemorySearchTool(memStore),
+	} {
 		if err := reg.Register(context.Background(), tool); err != nil {
 			return nil, nil, nil, err
 		}
