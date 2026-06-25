@@ -92,12 +92,8 @@ func (s *Spawner) Spawn(ctx context.Context, in app.SubAgentSpawn) (app.ToolResu
 		return app.ToolResult{}, fmt.Errorf("subagent: fork child session: %w", err)
 	}
 
-	// Build the child loop config. If the caller supplied a model override
-	// carry it forward; otherwise keep the parent's model.
-	childCfg := s.loopCfg
-	if in.Model != "" {
-		childCfg.Model = in.Model
-	}
+	// Build the child loop config from the per-spawn inputs (see childConfig).
+	childCfg := s.childConfig(in)
 
 	// Construct and run the child loop. The same injected fakes are forwarded
 	// so tests are fully deterministic (NFR-TEST-01/02).
@@ -112,6 +108,30 @@ func (s *Spawner) Spawn(ctx context.Context, in app.SubAgentSpawn) (app.ToolResu
 
 	// Condense the child run result into a ToolResult for the parent.
 	return s.condense(ctx, childSessionID, runRes), nil
+}
+
+// childConfig derives the per-spawn child [agent.Config] from the shared base
+// config and the spawn inputs. It works on a COPY of s.loopCfg and never mutates
+// the shared base — s.loopCfg is reused across every spawn, so mutating it would
+// race and leak depth/model between concurrent children.
+//
+// Two fields are derived per spawn:
+//
+//   - Depth is set to in.Depth — the depth the child runs at. Without this the
+//     child would inherit the base config's Depth (0 for a root spawner) and
+//     would therefore advertise spawn_subagent forever and pass Depth 1 to any
+//     grandchild, defeating the [Config.MaxDepth] cap. The child's own
+//     spawn_subagent advertising gate and its grandchild depth computation both
+//     read [agent.Config.Depth] (FR-EXT-04 AC-16).
+//   - Model is overridden only when the caller supplied a non-empty in.Model;
+//     otherwise the child keeps the parent's model.
+func (s *Spawner) childConfig(in app.SubAgentSpawn) agent.Config {
+	childCfg := s.loopCfg
+	childCfg.Depth = in.Depth
+	if in.Model != "" {
+		childCfg.Model = in.Model
+	}
+	return childCfg
 }
 
 // taskMessage builds a minimal [llm.Message] carrying the sub-agent task text
