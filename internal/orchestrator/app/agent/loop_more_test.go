@@ -782,10 +782,13 @@ func TestRun_ListToolsErrorFailsSafe(t *testing.T) {
 	assert.Equal(t, 1, len(h.tools.Calls()), "an allowed unknown tool still dispatches (serialized)")
 
 	// With ListTools failing and no configured ToolDefs, the model is offered no
-	// tools in the request.
+	// RUNTIME tools in the request. The in-loop virtual tool todo_write is ALWAYS
+	// advertised (ADR-0031, independent of the runtime registry); spawn_subagent is
+	// absent because no SubAgentPort is wired. So the only def is todo_write.
 	for _, c := range h.model.Calls() {
 		if c.Method == "Stream" {
-			assert.Empty(t, c.Req.Tools)
+			require.Len(t, c.Req.Tools, 1, "only the always-on todo_write virtual tool is offered")
+			assert.Equal(t, "todo_write", c.Req.Tools[0].Name)
 		}
 	}
 

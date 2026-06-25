@@ -125,6 +125,30 @@ func todoWriteDef() llm.ToolDef {
 	}
 }
 
+// virtualToolDefs returns the virtual-tool [llm.ToolDef]s to APPEND after the
+// runtime/config tool defs in buildRequest (ADR-0031; T10, AC-3/AC-4). The
+// advertising is GATED:
+//
+//   - todo_write is ALWAYS advertised — it is universally useful and
+//     side-effect-free w.r.t. the host (it only records a durable plan note).
+//   - spawn_subagent is advertised IFF a [app.SubAgentPort] is wired AND this
+//     loop's depth is strictly below the port's MaxDepth. The strict `<` keeps
+//     advertise/reject consistent with the spawner: the parent only advertises
+//     when depth <= MaxDepth-1, so the child it would spawn runs at
+//     depth+1 <= MaxDepth and is always accepted; at depth == MaxDepth the tool
+//     is hidden so the model is never offered a spawn the spawner would reject.
+//
+// It returns todo_write first then spawn_subagent (a stable, deterministic
+// order); callers append the result so the runtime/config defs are never
+// dropped or reordered.
+func virtualToolDefs(sub app.SubAgentPort, depth int) []llm.ToolDef {
+	defs := []llm.ToolDef{todoWriteDef()}
+	if sub != nil && depth < sub.MaxDepth() {
+		defs = append(defs, spawnSubagentDef())
+	}
+	return defs
+}
+
 // virtualClasses is the inline safety classification for the virtual tools, used
 // by the loop INSTEAD of a runtime-registry lookup. spawn_subagent is mutating (a
 // child can do anything; gate + serialize it like any mutation) with no direct

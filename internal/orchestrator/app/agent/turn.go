@@ -277,9 +277,23 @@ func (l *Loop) buildRequest(ctx context.Context, st *runState) (llm.Request, err
 		return llm.Request{}, fmt.Errorf("agent: build window: %w", err)
 	}
 
+	// Base tools come from the explicit config defs OR, when none are set, the
+	// runtime's advertised descriptors (FR-LOOP-01).
 	tools := l.cfg.ToolDefs
 	if len(tools) == 0 {
 		tools = l.toolDefsFromRuntime(ctx, st.sessionID)
+	}
+
+	// ADVERTISE the in-loop virtual tools (ADR-0031, T10): todo_write always,
+	// spawn_subagent only below the sub-agent depth cap. These are APPENDED after
+	// the base defs (so neither the config nor the runtime branch drops/reorders
+	// existing tools) and apply in BOTH branches above. A fresh slice is allocated
+	// so an explicit l.cfg.ToolDefs is never mutated by the append.
+	if vdefs := virtualToolDefs(l.deps.SubAgent, l.cfg.Depth); len(vdefs) > 0 {
+		merged := make([]llm.ToolDef, 0, len(tools)+len(vdefs))
+		merged = append(merged, tools...)
+		merged = append(merged, vdefs...)
+		tools = merged
 	}
 
 	return llm.Request{
