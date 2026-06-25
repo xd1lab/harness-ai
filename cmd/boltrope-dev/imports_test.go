@@ -59,6 +59,11 @@ var prefixForbiddenDeps = []string{
 	// tool-runtime gRPC client adapter — dev runs an in-process bridge, not a
 	// cross-process gRPC client (ADR-0029).
 	"github.com/xd1lab/harness-ai/internal/orchestrator/adapter/outbound/toolrt",
+	// tool-runtime production dedup adapter — its Pool is pgx-backed, so importing
+	// it for a type/constant would drag github.com/jackc/pgx/v5 into the dev binary.
+	// The dev local-exec path MUST hand-roll an in-memory app.DedupStore that depends
+	// only on the clean internal/toolruntime/app ports (ADR-0029, AC-8/AC-16).
+	"github.com/xd1lab/harness-ai/internal/toolruntime/adapter/outbound/dedup",
 }
 
 // devDeps shells out to `go list -deps` over cmd/boltrope-dev and returns the
