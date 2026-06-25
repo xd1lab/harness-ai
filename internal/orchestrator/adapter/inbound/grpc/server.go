@@ -57,6 +57,17 @@ type EventStore interface {
 	// It backs GetStateAtSeq via Load-then-fold (never Fork), RLS-scoped, read-only.
 	LoadUpTo(ctx context.Context, sessionID string, atSeq int64) ([]domain.EventEnvelope, error)
 
+	// VerifyChainIntegrity re-reads sessionID's events in the [fromSeq,toSeq] seq
+	// window, recomputes each event's content_hash from its stored payload and the
+	// running chain_hash, and compares them to the stored hashes (tamper-evident
+	// audit; ADR-0033). It backs VerifySessionIntegrity, RLS-scoped to the
+	// context's tenant, read-only and side-effect-free (it creates no rows) — so it
+	// is deliberately NOT on the frozen [app.EventLogPort], alongside
+	// LoadRange/LoadUpTo. fromSeq<=0 starts at the first chained event; toSeq<=0 or
+	// beyond head runs to head. A contiguous leading NULL-hash (pre-0009) prefix is
+	// skipped, not reported as tampered.
+	VerifyChainIntegrity(ctx context.Context, sessionID string, fromSeq, toSeq int64) (domain.ChainVerification, error)
+
 	// SessionCostByModel returns the per-model cost/usage/turns rollup for one
 	// session from the persisted cost projection (Feature O / cost-read), RLS-scoped
 	// to the context's tenant. Model "" is the uncorrelated bucket. Read-only.

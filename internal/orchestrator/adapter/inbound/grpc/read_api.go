@@ -120,6 +120,13 @@ func toGenEventDescriptor(env domain.EventEnvelope, includePayload bool) *genpro
 	d.Summary = summary
 	d.Redacted = redacted
 	d.HasBlob = hasBlob
+	// content_hash / chain_hash are NON-sensitive integrity digests (sha256 over the
+	// stored payload + the per-session fold; ADR-0033), NOT payload content — so they
+	// are surfaced UNCONDITIONALLY (never routed through summarizeEvent, never gated on
+	// include_payload, and never set the redacted flag on their own account). They are
+	// nil for unchained pre-0009 rows, which marshal to empty bytes on the wire (AC-13).
+	d.ContentHash = env.ContentHash
+	d.ChainHash = env.ChainHash
 	return d
 }
 
@@ -273,6 +280,36 @@ func (s *Server) GetStateAtSeq(ctx context.Context, req *genproto.GetStateAtSeqR
 	return &genproto.GetStateAtSeqResponse{
 		Session: toGenSession(sess, usage, cost, turns),
 		AtSeq:   atSeq,
+	}, nil
+}
+
+// ---- VerifySessionIntegrity -------------------------------------------------
+
+// VerifySessionIntegrity recomputes an owned session's per-event content hash and
+// per-session hash-chain over the [from_seq,to_seq] window and reports whether the
+// stored hashes still match — the tamper-evident audit verify (ADR-0033). It reuses
+// the FULL ownership path (authorizeTenant + authorizeSession): a foreign-tenant
+// session is PermissionDenied, a missing / RLS-invisible one is NotFound. The store
+// recompute is read-only and side-effect-free; a store/load error is Internal. The
+// pure [domain.ChainVerification] verdict is mapped onto the wire response.
+func (s *Server) VerifySessionIntegrity(ctx context.Context, req *genproto.VerifySessionIntegrityRequest) (*genproto.VerifySessionIntegrityResponse, error) {
+	tenant, err := s.authorizeTenant(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.authorizeSession(ctx, tenant, req.GetSessionId()); err != nil {
+		return nil, err
+	}
+
+	res, err := s.log.VerifyChainIntegrity(ctx, req.GetSessionId(), req.GetFromSeq(), req.GetToSeq())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "orchestrator: verify session integrity: %v", err)
+	}
+	return &genproto.VerifySessionIntegrityResponse{
+		Valid:       res.Valid,
+		FirstBadSeq: res.FirstBadSeq,
+		Reason:      res.Reason,
+		Checked:     int64(res.Checked),
 	}, nil
 }
 
