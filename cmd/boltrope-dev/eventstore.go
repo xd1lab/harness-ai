@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -48,6 +49,11 @@ type Store struct {
 	// subscribers maps session id -> the set of live tail channels, fed on every
 	// Append so an in-flight Subscribe (the Run stream) sees new events live.
 	subscribers map[string][]chan domain.EventEnvelope
+	// chainHead maps session id -> its current per-session running chain head
+	// (the last appended event's chain_hash), mirroring the prod sessions.chain_head
+	// column. Absent (or nil) means no chained events yet -> seed the next append
+	// from domain.GenesisChainHash(sessionID). Tamper-evident audit (ADR-0033).
+	chainHead map[string][]byte
 }
 
 // newStore returns an empty in-memory dev [Store].
@@ -56,6 +62,7 @@ func newStore() *Store {
 		sessions:    make(map[string][]domain.EventEnvelope),
 		aggregates:  make(map[string]*domain.Session),
 		subscribers: make(map[string][]chan domain.EventEnvelope),
+		chainHead:   make(map[string][]byte),
 	}
 }
 
@@ -109,21 +116,42 @@ func (s *Store) Append(
 		s.aggregates[sessionID] = agg
 	}
 
+	// Seed the running chain head from this session's stored head (or the
+	// session-derived genesis on the first chained event), then fold each event
+	// into the chain in seq order using the SHARED, pgx-free domain helpers — the
+	// SAME algorithm the prod pgx store applies, so dev/prod hashes are byte-for-byte
+	// identical for an identical event stream (ADR-0033, AC-10/AC-11).
+	prev := s.chainHead[sessionID]
+	if prev == nil {
+		prev = domain.GenesisChainHash(sessionID)
+	}
+
 	envelopes := make([]domain.EventEnvelope, 0, len(events))
 	for _, e := range events {
 		agg.HeadSeq++
+		payload, err := domain.MarshalEventPayload(e.Event)
+		if err != nil {
+			return nil, fmt.Errorf("eventstore(dev): marshal payload for chain hash: %w", err)
+		}
+		contentHash := domain.ContentHash(payload)
+		chainHash := domain.ChainHash(prev, contentHash)
 		env := domain.EventEnvelope{
-			Type:      e.Event.EventType(),
-			Seq:       agg.HeadSeq,
-			SessionID: sessionID,
-			RequestID: requestID,
-			Actor:     e.Actor,
-			Event:     e.Event,
+			Type:        e.Event.EventType(),
+			Seq:         agg.HeadSeq,
+			SessionID:   sessionID,
+			RequestID:   requestID,
+			Actor:       e.Actor,
+			Event:       e.Event,
+			ContentHash: contentHash,
+			ChainHash:   chainHash,
 		}
 		s.sessions[sessionID] = append(s.sessions[sessionID], env)
 		envelopes = append(envelopes, env)
 		s.fanout(sessionID, env)
+		prev = chainHash
 	}
+	// Persist the advanced running head so the next Append continues the chain.
+	s.chainHead[sessionID] = prev
 	return envelopes, nil
 }
 
