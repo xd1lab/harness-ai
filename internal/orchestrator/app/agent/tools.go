@@ -48,8 +48,12 @@ func (l *Loop) handleToolCalls(ctx context.Context, st *runState, msg llm.Messag
 	// is a stuck loop (FR-OBS-04). Detect on the consecutive-repeat count.
 	l.detectDoomLoop(st, calls)
 
-	// Resolve each tool's safety classification from the runtime's descriptors.
-	classes := l.toolClasses(ctx, st.sessionID)
+	// Resolve each tool's safety classification from the runtime's descriptors,
+	// then overlay the in-loop virtual-tool classifications (ADR-0031, T11). The
+	// virtual entries WIN over any same-named runtime descriptor so the scheduler
+	// and gate treat spawn_subagent as mutating (serialized, never parallelized)
+	// and todo_write as read-only deterministically, without a registry lookup.
+	classes := mergeVirtualClasses(l.toolClasses(ctx, st.sessionID))
 
 	// Gate every call serially, in emitted order, recording one
 	// PermissionDecided per call and (for allowed calls) a ToolExecutionStarted.
@@ -86,8 +90,12 @@ func (l *Loop) handleToolCalls(ctx context.Context, st *runState, msg llm.Messag
 		toDispatch = append(toDispatch, scheduledExec{call: c, idemKey: idemKey, parallel: parallel})
 	}
 
-	// Dispatch with the §9.2 scheduling rules.
-	dispatched, err := l.dispatch(ctx, st.sessionID, toDispatch)
+	// Dispatch with the §9.2 scheduling rules. A virtual todo_write returns its
+	// PlanUpdated on a side channel (keyed by call id) so the SERIAL result loop
+	// below — which holds the single-writer st — appends it in deterministic order
+	// immediately before that call's ToolResult (ADR-0031, T11): execOne, which may
+	// run concurrently for read-only tools, appends NOTHING itself.
+	dispatched, planUpdates, err := l.dispatch(ctx, st, toDispatch)
 	if err != nil {
 		return 0, "", err
 	}
@@ -97,9 +105,16 @@ func (l *Loop) handleToolCalls(ctx context.Context, st *runState, msg llm.Messag
 
 	// Append one ToolResult event per call, in emitted order (the single-writer
 	// log keeps them ordered), then feed all results back as one tool message.
+	// For a todo_write call the PlanUpdated is appended FIRST (per call), yielding
+	// the deterministic golden order ToolExecutionStarted -> PlanUpdated -> ToolResult.
 	toolMsg := llm.Message{Role: llm.RoleTool}
 	for _, c := range calls {
 		r := results[c.ID]
+		if pu := planUpdates[c.ID]; pu != nil {
+			if err := l.append(ctx, st, domain.ActorAssistant, *pu); err != nil {
+				return 0, "", err
+			}
+		}
 		if err := l.append(ctx, st, domain.ActorTool, domain.ToolResult{
 			CallID:    c.ID,
 			Result:    r.Content,
@@ -241,9 +256,10 @@ func (l *Loop) gateCall(ctx context.Context, st *runState, c llm.ToolCall, cls a
 // All dispatches share the loop's context; on cancellation the errgroup cancels
 // the derived context so in-flight read-only workers abandon their RPC (a
 // cancelled tool stream maps to a real sandbox kill in the runtime; §9.3).
-func (l *Loop) dispatch(ctx context.Context, sessionID string, execs []scheduledExec) (map[string]app.ToolResult, error) {
+func (l *Loop) dispatch(ctx context.Context, st *runState, execs []scheduledExec) (map[string]app.ToolResult, map[string]*domain.PlanUpdated, error) {
 	out := make(map[string]app.ToolResult, len(execs))
-	var mu sync.Mutex // guards out
+	plans := make(map[string]*domain.PlanUpdated, len(execs))
+	var mu sync.Mutex // guards out + plans
 
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(l.readOnlyLimit())
@@ -251,14 +267,19 @@ func (l *Loop) dispatch(ctx context.Context, sessionID string, execs []scheduled
 	for _, e := range execs {
 		e := e
 		if e.parallel {
-			// Read-only: dispatch concurrently in the bounded pool.
+			// Read-only: dispatch concurrently in the bounded pool. The execOne
+			// side channel (planUpdate) is collected here and appended later on the
+			// SERIAL result loop — execOne itself never writes the log (ADR-0031).
 			g.Go(func() error {
-				res, err := l.execOne(gctx, sessionID, e)
+				res, pu, err := l.execOne(gctx, st, e)
 				if err != nil {
 					return err
 				}
 				mu.Lock()
 				out[e.call.ID] = res
+				if pu != nil {
+					plans[e.call.ID] = pu
+				}
 				mu.Unlock()
 				return nil
 			})
@@ -267,35 +288,49 @@ func (l *Loop) dispatch(ctx context.Context, sessionID string, execs []scheduled
 		// Mutating / external: run synchronously, in emitted order, so mutations
 		// never overlap and never reorder. Running inline (rather than via the
 		// errgroup) makes the at-most-one-mutation invariant structural.
-		res, err := l.execOne(gctx, sessionID, e)
+		res, pu, err := l.execOne(gctx, st, e)
 		if err != nil {
 			// Abandon any in-flight read-only workers and surface the error.
 			_ = g.Wait()
-			return nil, err
+			return nil, nil, err
 		}
 		mu.Lock()
 		out[e.call.ID] = res
+		if pu != nil {
+			plans[e.call.ID] = pu
+		}
 		mu.Unlock()
 	}
 
 	if err := g.Wait(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return out, nil
+	return out, plans, nil
 }
 
 // execOne dispatches a single tool execution and assembles its terminal result
 // from the tool stream. A transport-level stream error is returned; a tool that
 // reports is_error in its terminal result is NOT an error here (it is surfaced
 // to the model as an error observation; FR-TOOL-01).
-func (l *Loop) execOne(ctx context.Context, sessionID string, e scheduledExec) (app.ToolResult, error) {
+//
+// Virtual tools (ADR-0031, T11) are INTERCEPTED by name BEFORE the real runtime
+// is consulted: neither spawn_subagent nor todo_write ever calls
+// deps.Tools.ExecuteTool. For todo_write the (validated) plan is returned on a
+// side channel (*domain.PlanUpdated) so the SERIAL result loop in handleToolCalls
+// — which holds the single-writer st — appends it deterministically; execOne
+// itself appends NOTHING to the log (it may run concurrently for read-only tools).
+func (l *Loop) execOne(ctx context.Context, st *runState, e scheduledExec) (app.ToolResult, *domain.PlanUpdated, error) {
+	if isVirtualTool(e.call.Name) {
+		return l.execVirtual(ctx, st, e.call)
+	}
+
 	stream, err := l.deps.Tools.ExecuteTool(ctx, app.ToolExecution{
-		SessionID:      sessionID,
+		SessionID:      st.sessionID,
 		Call:           e.call,
 		IdempotencyKey: e.idemKey,
 	})
 	if err != nil {
-		return app.ToolResult{}, fmt.Errorf("%w: execute %q: %w", errToolStream, e.call.Name, err)
+		return app.ToolResult{}, nil, fmt.Errorf("%w: execute %q: %w", errToolStream, e.call.Name, err)
 	}
 	defer func() { _ = stream.Close() }()
 
@@ -307,7 +342,7 @@ func (l *Loop) execOne(ctx context.Context, sessionID string, e scheduledExec) (
 			if rerr == io.EOF { //nolint:errorlint // io.EOF is a sentinel compared by identity
 				break
 			}
-			return app.ToolResult{}, fmt.Errorf("%w: recv %q: %w", errToolStream, e.call.Name, rerr)
+			return app.ToolResult{}, nil, fmt.Errorf("%w: recv %q: %w", errToolStream, e.call.Name, rerr)
 		}
 		switch {
 		case ev.Result != nil:
@@ -320,9 +355,65 @@ func (l *Loop) execOne(ctx context.Context, sessionID string, e scheduledExec) (
 		}
 	}
 	if !haveResult {
-		return app.ToolResult{IsError: true, Content: "tool produced no result"}, nil
+		return app.ToolResult{IsError: true, Content: "tool produced no result"}, nil, nil
 	}
-	return result, nil
+	return result, nil, nil
+}
+
+// execVirtual handles the two in-loop virtual tools (ADR-0031, T11), dispatched
+// by name. It NEVER calls deps.Tools.ExecuteTool. It returns the ToolResult to
+// feed back plus, for todo_write, the *domain.PlanUpdated to append on the serial
+// result loop (nil for spawn_subagent and for any rejected/invalid call):
+//
+//   - spawn_subagent: parse+validate `task` (empty/missing => synthetic is_error
+//     ToolResult, NO Spawn), else call deps.SubAgent.Spawn with the child depth
+//     l.cfg.Depth+1 and return its ToolResult. nil planUpdate.
+//   - todo_write: parse+Validate `items` (invalid => is_error ToolResult, NO
+//     event), else return a confirmation ToolResult AND the PlanUpdated carrying
+//     st.currentTurnID for the serial loop to append.
+func (l *Loop) execVirtual(ctx context.Context, st *runState, c llm.ToolCall) (app.ToolResult, *domain.PlanUpdated, error) {
+	switch c.Name {
+	case toolNameSpawnSubagent:
+		task, model, err := parseSpawnArgs(c.Args)
+		if err != nil {
+			// Reject locally WITHOUT calling Spawn (open-question resolution).
+			return app.ToolResult{IsError: true, Content: err.Error()}, nil, nil
+		}
+		if l.deps.SubAgent == nil {
+			// Defensive: the tool should not be advertised without a SubAgent, but
+			// never panic if the model emits it anyway.
+			return app.ToolResult{IsError: true, Content: "spawn_subagent: sub-agents are not available"}, nil, nil
+		}
+		res, err := l.deps.SubAgent.Spawn(ctx, app.SubAgentSpawn{
+			ParentSessionID: st.sessionID,
+			Depth:           l.cfg.Depth + 1,
+			Task:            task,
+			Model:           model,
+		})
+		if err != nil {
+			return app.ToolResult{}, nil, fmt.Errorf("agent: spawn_subagent: %w", err)
+		}
+		return res, nil, nil
+
+	case toolNameTodoWrite:
+		items, err := parsePlanItems(c.Args)
+		if err != nil {
+			// Invalid plan: feed an is_error ToolResult and append NO event.
+			return app.ToolResult{IsError: true, Content: err.Error()}, nil, nil
+		}
+		pu := &domain.PlanUpdated{TurnID: st.currentTurnID, Items: items}
+		return app.ToolResult{Content: planConfirmation(items)}, pu, nil
+
+	default:
+		// Unreachable: isVirtualTool gated entry. Fail safe rather than panic.
+		return app.ToolResult{IsError: true, Content: fmt.Sprintf("unknown virtual tool %q", c.Name)}, nil, nil
+	}
+}
+
+// planConfirmation builds the non-error confirmation content returned to the
+// model after a todo_write, summarizing the recorded plan size.
+func planConfirmation(items []domain.PlanItem) string {
+	return fmt.Sprintf("recorded plan: %d item(s)", len(items))
 }
 
 // scheduledExec is one allowed tool call ready to dispatch, with its scheduling

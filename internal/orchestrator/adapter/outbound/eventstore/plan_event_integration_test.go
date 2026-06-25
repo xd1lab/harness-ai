@@ -3,7 +3,6 @@
 package eventstore
 
 import (
-	"context"
 	"testing"
 
 	"github.com/xd1lab/harness-ai/internal/orchestrator/app"
