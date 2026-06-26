@@ -68,14 +68,15 @@ func (c Config) withDefaults() Config {
 // the forward sum from the resume point — the durable, monotonic record is the
 // cost counter, which a metrics backend persists; architecture §10.4).
 type Runner struct {
-	cfg     Config
-	src     *Source
-	sweeper *Sweeper // nil when SweepInterval == 0
-	metrics MetricSink
-	cost    *CostProjector // nil when no persistent cost projection is attached
-	signer  *AuditSigner   // nil when no audit-checkpoint signer is attached
-	log     *slog.Logger
-	now     func() time.Time
+	cfg      Config
+	src      *Source
+	sweeper  *Sweeper // nil when SweepInterval == 0
+	metrics  MetricSink
+	cost     *CostProjector // nil when no persistent cost projection is attached
+	signer   *AuditSigner   // nil when no audit-checkpoint signer is attached
+	exporter *SIEMExporter  // nil when no SIEM exporter is attached
+	log      *slog.Logger
+	now      func() time.Time
 
 	// totals is the in-memory cost rollup accumulator, keyed by (tenant, session).
 	totals map[SessionKey]*CostTotals
@@ -114,6 +115,18 @@ func WithCostProjector(p *CostProjector) RunnerOption { return func(r *Runner) {
 // cursor is independent of cost-rollup/siem-export. When unset the chain is simply
 // not maintained (signing disabled).
 func WithAuditSigner(s *AuditSigner) RunnerOption { return func(r *Runner) { r.signer = s } }
+
+// WithSIEMExporter attaches a [SIEMExporter] sink (Batch-5B / ADR-0034): each batch
+// is shipped as descriptors+hashes-only audit FRAMES to the configured external
+// sink (file/NDJSON and/or HTTP) BEFORE the cursor is saved, so a sink failure
+// aborts before the cursor advances and the batch is re-read next poll (the SIEM
+// dedups on global_id — at-least-once, never skip). Attach this on a Runner with
+// its OWN subscription (default "siem-export") so its cursor is independent of
+// cost-rollup/audit-checkpoint and a failing SIEM sink cannot stall the cost
+// projector. When unset (or when the exporter has no sink configured) no frames are
+// exported. The exporter uses a plain net/http client — NOT the egress broker
+// (operator-tier; AC-14).
+func WithSIEMExporter(e *SIEMExporter) RunnerOption { return func(r *Runner) { r.exporter = e } }
 
 // WithLogger sets the structured logger. When unset a discarding logger is used.
 func WithLogger(l *slog.Logger) RunnerOption {
@@ -288,6 +301,17 @@ func (r *Runner) foldAndAdvance(ctx context.Context, rows []EventRow) error {
 	// CONFLICT (covers_to_global_id) makes the re-anchor a no-op (Batch-5B / AC-7).
 	if r.signer != nil {
 		if err := r.signer.Project(ctx, rows); err != nil {
+			return err
+		}
+	}
+
+	// Ship the batch's SIEM frames (descriptors + hashes only) BEFORE saving the
+	// cursor (same ordering/idempotency contract): a sink failure aborts before the
+	// cursor advances, so the batch is re-read next poll and the SIEM dedups on
+	// global_id (at-least-once; Batch-5B / AC-13). Its own subscription keeps a
+	// failing sink from stalling cost-rollup.
+	if r.exporter != nil {
+		if err := r.exporter.Project(ctx, rows); err != nil {
 			return err
 		}
 	}

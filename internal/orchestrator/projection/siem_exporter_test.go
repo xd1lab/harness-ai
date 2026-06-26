@@ -24,6 +24,8 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"go/parser"
+	"go/token"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -73,7 +75,7 @@ func TestSIEMExporter_FileSink_NDJSON(t *testing.T) {
 		t.Fatalf("Project: %v", err)
 	}
 
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // test-only path from t.TempDir(), not attacker-controlled
 	if err != nil {
 		t.Fatalf("open ndjson: %v", err)
 	}
@@ -125,7 +127,7 @@ func TestSIEMExporter_FileSink_NoRawPayload(t *testing.T) {
 		t.Fatalf("Project: %v", err)
 	}
 
-	body, err := os.ReadFile(path)
+	body, err := os.ReadFile(path) //nolint:gosec // test-only path from t.TempDir(), not attacker-controlled
 	if err != nil {
 		t.Fatalf("read ndjson: %v", err)
 	}
@@ -203,5 +205,52 @@ func TestSIEMExporter_NoSinkConfigured_IsNoop(t *testing.T) {
 	}
 	if err := exp.Project(context.Background(), []EventRow{siemRow(1, 1, "ten", "sess", "X")}); err != nil {
 		t.Fatalf("no-sink Project should be a no-op, got %v", err)
+	}
+}
+
+// TestSIEMExporter_NoEgressBrokerImport (AC-14): the SIEM exporter is OPERATOR-TIER
+// infrastructure (like OTLP/metrics export) and MUST use a plain net/http client,
+// NEVER the toolruntime EgressBroker (which governs only MODEL-INFLUENCED channels;
+// ADR-0013/ADR-0034). A source-level assertion: siem_exporter.go must not import any
+// egress package.
+func TestSIEMExporter_NoEgressBrokerImport(t *testing.T) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "siem_exporter.go", nil, parser.ImportsOnly)
+	if err != nil {
+		t.Fatalf("parse siem_exporter.go imports: %v", err)
+	}
+	for _, imp := range f.Imports {
+		path := strings.Trim(imp.Path.Value, `"`)
+		if strings.Contains(path, "toolruntime") || strings.Contains(path, "egress") {
+			t.Fatalf("siem_exporter.go imports %q — the SIEM sink must use a plain net/http client, not the egress broker (AC-14)", path)
+		}
+	}
+}
+
+// TestSIEMExporter_BearerRedactsInLogs (AC-16/AC-13): the optional bearer is held
+// as a secret.Secret so an accidental %v / %s / slog of the exporter cannot leak
+// it. The frame/file/HTTP body never carry it either (only the Authorization
+// header does, set at the request edge).
+func TestSIEMExporter_BearerRedactsInLogs(t *testing.T) {
+	const bearer = "BEARER-SECRET-do-not-log-xyz"
+	exp, err := NewSIEMExporter(SIEMConfig{HTTPURL: "https://siem.example/ingest", HTTPBearer: bearer})
+	if err != nil {
+		t.Fatalf("NewSIEMExporter: %v", err)
+	}
+	// fmt/%v of the held secret must redact (the Secret type's Stringer/GoStringer).
+	if got := exp.httpBearer.String(); strings.Contains(got, bearer) {
+		t.Fatalf("bearer leaked via String(): %q", got)
+	}
+	if got := exp.httpBearer.GoString(); strings.Contains(got, bearer) {
+		t.Fatalf("bearer leaked via GoString(): %q", got)
+	}
+	// The emitted frames never carry the bearer (it lives only on the request header).
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	if err := enc.Encode(frameOf(siemRow(1, 1, "ten", "sess", "X"))); err != nil {
+		t.Fatalf("encode frame: %v", err)
+	}
+	if bytes.Contains(buf.Bytes(), []byte(bearer)) {
+		t.Fatal("SIEM frame leaked the bearer token (AC-16)")
 	}
 }
