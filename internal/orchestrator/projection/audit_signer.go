@@ -89,6 +89,10 @@ type AuditSigner struct {
 	// lastCovered is the largest covers_to_global_id already anchored (0 when none).
 	// Leaves at or below it are already checkpointed and are skipped.
 	lastCovered int64
+	// lastSeen is the largest global_id already ANCHORED or ACCUMULATED (>= lastCovered).
+	// Project skips leaves at or below it so a runner re-delivery of leaves the
+	// restart hydration already pulled into the accumulator is not double-counted.
+	lastSeen int64
 	// leaves is the in-memory accumulator of unanchored leaves in ascending
 	// global_id order; flushed (and cleared) at a checkpoint boundary or on Flush.
 	leaves []auditLeaf
@@ -113,6 +117,29 @@ const selectHeadSQL = `
 	  FROM audit_checkpoints
 	 ORDER BY id DESC
 	 LIMIT 1`
+
+// selectUnanchoredTailSQL re-reads the SETTLED, not-yet-anchored content_hash
+// leaves directly from the events feed (global_id strictly above the last anchored
+// covers_to, content_hash NOT NULL, bounded below the snapshot xmin so only fully-
+// settled rows are read), in ascending global_id order.
+//
+// This is the re-read-on-restart core (open-question #3 / AC-7-AC-8 crash safety):
+// the projection Runner saves its subscription cursor PER BATCH, so a crash after a
+// cursor save but before a checkpoint flush would advance the cursor PAST leaves
+// that no checkpoint ever covered — the Runner alone would never re-deliver them
+// and they would be permanently unanchored. By hydrating the accumulator from the
+// CHECKPOINT frontier (lastCovered) rather than the runner cursor, a fresh signer
+// re-anchors that stranded tail independently of where the cursor sits, closing the
+// gap. It bounds by xmin (the same settled-only predicate the feed fetch uses) so a
+// concurrently-appending transaction above xmin is anchored on a later pass, never
+// anchored half-committed.
+const selectUnanchoredTailSQL = `
+	SELECT global_id, content_hash
+	  FROM events
+	 WHERE global_id > $1
+	   AND content_hash IS NOT NULL
+	   AND transaction_id < pg_snapshot_xmin(pg_current_snapshot())
+	 ORDER BY global_id`
 
 // insertCheckpointSQL appends one signed checkpoint. covers_to_global_id is the
 // idempotency key: ON CONFLICT (covers_to_global_id) DO NOTHING makes a re-run over
@@ -141,14 +168,15 @@ func (a *AuditSigner) Project(ctx context.Context, rows []EventRow) error {
 		if len(r.ContentHash) == 0 {
 			continue // pre-0009 unchained row: not a leaf, not anchored.
 		}
-		if r.GlobalID <= a.lastCovered {
-			continue // already anchored (a re-read after a crash/replay).
+		if r.GlobalID <= a.lastSeen {
+			continue // already anchored OR already accumulated (a re-read/replay).
 		}
 		// Copy the leaf so a later mutation of the row's backing slice cannot
 		// corrupt an accumulated, not-yet-flushed leaf.
 		leaf := make([]byte, len(r.ContentHash))
 		copy(leaf, r.ContentHash)
 		a.leaves = append(a.leaves, auditLeaf{globalID: r.GlobalID, contentHash: leaf})
+		a.lastSeen = r.GlobalID
 		if len(a.leaves) >= a.every {
 			if err := a.flush(ctx); err != nil {
 				return err
@@ -207,7 +235,62 @@ func (a *AuditSigner) ensureLoaded(ctx context.Context) error {
 	}
 	a.prev = prev
 	a.lastCovered = lastCovered
+	a.lastSeen = lastCovered
 	a.loaded = true
+
+	// Re-read-on-restart: hydrate the accumulator from the unanchored tail above the
+	// checkpoint frontier so a crash that advanced the runner cursor past unflushed
+	// leaves does not strand them (open-question #3). Whole every-sized ranges are
+	// flushed eagerly so the in-memory accumulator stays bounded; a sub-every
+	// remainder is left for the runner's catch-up Flush (or the next Project) to
+	// anchor at the head. This is idempotent: re-read leaves at/below lastCovered are
+	// excluded by the SQL, and a re-anchored range hits ON CONFLICT.
+	if err := a.hydrateUnanchoredTail(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+// hydrateUnanchoredTail loads the settled, not-yet-anchored leaves above the
+// checkpoint frontier into the accumulator, flushing a checkpoint whenever the
+// every-N boundary is reached. A sub-every remainder remains accumulated for the
+// terminal Flush. It runs once, inside ensureLoaded, AFTER lastCovered is known.
+func (a *AuditSigner) hydrateUnanchoredTail(ctx context.Context) error {
+	rows, err := a.conn.Query(ctx, selectUnanchoredTailSQL, a.lastCovered)
+	if err != nil {
+		return fmt.Errorf("projection: reading unanchored audit tail: %w", err)
+	}
+	type pending struct {
+		gid  int64
+		hash []byte
+	}
+	var tail []pending
+	for rows.Next() {
+		var gid int64
+		var ch []byte
+		if err := rows.Scan(&gid, &ch); err != nil {
+			rows.Close()
+			return fmt.Errorf("projection: scanning unanchored leaf: %w", err)
+		}
+		// Copy out of the pgx row buffer before it is reused on the next Next().
+		leaf := make([]byte, len(ch))
+		copy(leaf, ch)
+		tail = append(tail, pending{gid: gid, hash: leaf})
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("projection: iterating unanchored tail: %w", err)
+	}
+
+	for _, p := range tail {
+		a.leaves = append(a.leaves, auditLeaf{globalID: p.gid, contentHash: p.hash})
+		a.lastSeen = p.gid
+		if len(a.leaves) >= a.every {
+			if err := a.flush(ctx); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 

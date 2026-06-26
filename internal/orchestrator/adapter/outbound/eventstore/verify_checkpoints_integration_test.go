@@ -283,6 +283,75 @@ func TestVerifyAuditCheckpoints_DetectsForgedSignature(t *testing.T) {
 	}
 }
 
+// TestMigration0010_AuditCheckpointsSchema (T7 #4, AC-3): the migration-applied
+// schema is correct: audit_checkpoints exists, RLS is OFF (operator-tier, like
+// event_subscriptions), the covers_to_global_id idempotency unique index exists,
+// and the boltrope_app role has SELECT+INSERT but NOT UPDATE/DELETE (append-only).
+func TestMigration0010_AuditCheckpointsSchema(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	owner := h.ownerConn(t)
+
+	// (a) Table exists.
+	var exists bool
+	if err := owner.QueryRow(ctx,
+		"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='audit_checkpoints')").Scan(&exists); err != nil {
+		t.Fatalf("table existence query: %v", err)
+	}
+	if !exists {
+		t.Fatal("audit_checkpoints table does not exist after migration 0010")
+	}
+
+	// (b) RLS is OFF (relrowsecurity false) — operator-tier, RLS-exempt like
+	// event_subscriptions. A true here would silently scope the operator-tier
+	// global read.
+	var rlsEnabled, rlsForced bool
+	if err := owner.QueryRow(ctx,
+		"SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname='audit_checkpoints'").Scan(&rlsEnabled, &rlsForced); err != nil {
+		t.Fatalf("rls query: %v", err)
+	}
+	if rlsEnabled || rlsForced {
+		t.Fatalf("audit_checkpoints has RLS enabled (relrowsecurity=%v relforcerowsecurity=%v); it must be RLS-exempt (operator-tier)", rlsEnabled, rlsForced)
+	}
+
+	// (c) The covers_to_global_id idempotency unique index exists (the ON CONFLICT
+	// target that makes a re-anchored range a no-op).
+	var uniqExists bool
+	if err := owner.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM pg_indexes
+			 WHERE tablename='audit_checkpoints'
+			   AND indexdef ILIKE '%UNIQUE%'
+			   AND indexdef ILIKE '%covers_to_global_id%')`).Scan(&uniqExists); err != nil {
+		t.Fatalf("unique index query: %v", err)
+	}
+	if !uniqExists {
+		t.Fatal("no UNIQUE index on covers_to_global_id (idempotency key missing)")
+	}
+
+	// (d) boltrope_app privileges: SELECT + INSERT granted; UPDATE + DELETE NOT
+	// granted (append-only). has_table_privilege is the authoritative check (it
+	// resolves role membership + grants).
+	for _, tc := range []struct {
+		priv string
+		want bool
+	}{
+		{"SELECT", true},
+		{"INSERT", true},
+		{"UPDATE", false},
+		{"DELETE", false},
+	} {
+		var got bool
+		if err := owner.QueryRow(ctx,
+			"SELECT has_table_privilege($1, 'audit_checkpoints', $2)", appRole, tc.priv).Scan(&got); err != nil {
+			t.Fatalf("has_table_privilege(%s): %v", tc.priv, err)
+		}
+		if got != tc.want {
+			t.Fatalf("%s privilege for %s = %v, want %v (append-only: SELECT+INSERT only)", tc.priv, appRole, got, tc.want)
+		}
+	}
+}
+
 // rewriteConsistently performs a FULL in-DB rewrite of one event keeping the
 // in-DB hash-chain internally consistent (VerifyChainIntegrity would pass): it
 // rewrites payload/payload_canonical, recomputes content_hash + chain_hash from
