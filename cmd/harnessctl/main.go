@@ -49,6 +49,9 @@
 //	deny    <call-id> [reason]     deny a pending tool call (Control RPC)
 //	interrupt                      cooperatively interrupt the in-flight turn (Control RPC)
 //	fork    [--at-seq N]           fork the current session at the given seq
+//	audit   verify-checkpoints     verify the signed audit-checkpoint chain
+//	                               (operator-tier; reads Postgres directly, NOT
+//	                               the orchestrator gRPC — see audit.go)
 package main
 
 import (
@@ -103,7 +106,7 @@ func main() {
 // dispatches to the appropriate sub-command handler.
 func run(args []string, w io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: harnessctl [flags] <subcommand> [args]\nsubcommands: session, run, approve, deny, interrupt, fork")
+		return errors.New("usage: harnessctl [flags] <subcommand> [args]\nsubcommands: session, run, approve, deny, interrupt, fork, audit")
 	}
 
 	// Separate global flags from the subcommand.  Global flags come before the
@@ -113,6 +116,17 @@ func run(args []string, w io.Writer) error {
 	cfg, err := parseCLIFlags(globalArgs)
 	if err != nil {
 		return err
+	}
+
+	// The "audit" subcommand group is OPERATOR-TIER and does NOT speak the
+	// orchestrator gRPC API: VerifyAuditCheckpoints reads the GLOBAL,
+	// cross-tenant audit_checkpoints + events.content_hash on the operator/owner
+	// Postgres connection (ADR-0034, AC-9/AC-11), a surface the tenant-scoped
+	// orchestrator gRPC cannot reach. So it is dispatched here, BEFORE the gRPC
+	// dial — it needs no orchestrator connection and an argument/parse error
+	// must surface without any RPC.
+	if subcmd == "audit" {
+		return auditCommand(context.Background(), cfg, subcmdArgs, w)
 	}
 
 	conn, err := dial(cfg)
@@ -159,7 +173,7 @@ func run(args []string, w io.Writer) error {
 		return forkCommand(ctx, client, cfg, atSeq, w)
 
 	default:
-		return fmt.Errorf("unknown subcommand %q; valid: session, run, approve, deny, interrupt, fork", subcmd)
+		return fmt.Errorf("unknown subcommand %q; valid: session, run, approve, deny, interrupt, fork, audit", subcmd)
 	}
 }
 

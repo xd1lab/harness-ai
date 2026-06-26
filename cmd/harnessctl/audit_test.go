@@ -60,6 +60,54 @@ func TestRun_AuditUnknownAction(t *testing.T) {
 	require.Error(t, err, "an unknown audit action must error")
 }
 
+// TestAuditCommand_MissingActionErrors asserts the audit group rejects a missing
+// action BEFORE any Postgres connection is attempted (the dispatch parses the
+// action first), so an argument mistake never opens a DB connection.
+func TestAuditCommand_MissingActionErrors(t *testing.T) {
+	var out testWriter
+	err := auditCommand(t.Context(), &cliConfig{}, nil, &out)
+	require.Error(t, err, "a missing audit action must error")
+}
+
+// TestAuditCommand_UnknownActionErrors asserts an unknown action errors at the
+// audit-group dispatch (not just at parseAuditAction), again before any DB work.
+func TestAuditCommand_UnknownActionErrors(t *testing.T) {
+	var out testWriter
+	err := auditCommand(t.Context(), &cliConfig{}, []string{"frobnicate"}, &out)
+	require.Error(t, err, "an unknown audit action must error")
+}
+
+// TestVerifyCheckpoints_MissingDSNErrors asserts verify-checkpoints fails with an
+// actionable error (NOT a silent skip of the tamper-PROOF check) when no operator
+// DSN env is configured. The action-parse already passed, so this exercises the
+// operator-tier resolution path without a live Postgres.
+func TestVerifyCheckpoints_MissingDSNErrors(t *testing.T) {
+	t.Setenv(auditDatabaseURLEnv, "")
+	t.Setenv(postgresDSNEnv, "")
+	var out testWriter
+	err := run([]string{"--endpoint", "127.0.0.1:1", "--insecure", "audit", "verify-checkpoints"}, &out)
+	require.Error(t, err, "verify-checkpoints with no operator DSN must error, not silently skip")
+	assert.Contains(t, err.Error(), auditDatabaseURLEnv, "the error must name the DSN env to set")
+}
+
+// TestRun_AuditDoesNotDialOrchestrator asserts the audit group is dispatched
+// BEFORE the orchestrator gRPC dial: with no transport security selected (neither
+// BOLTROPE_DEV_INSECURE nor --insecure) the normal dispatch would fail at dial(),
+// but audit must reach its own DSN-resolution error instead — proving it does not
+// route through the tenant-scoped orchestrator gRPC.
+func TestRun_AuditDoesNotDialOrchestrator(t *testing.T) {
+	t.Setenv(devInsecureEnv, "")
+	t.Setenv(auditDatabaseURLEnv, "")
+	t.Setenv(postgresDSNEnv, "")
+	var out testWriter
+	// No --insecure and no dev mTLS: dial() would error for any gRPC subcommand.
+	err := run([]string{"--endpoint", "127.0.0.1:1", "audit", "verify-checkpoints"}, &out)
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "transport security",
+		"audit must not reach dial(); it should fail at DSN resolution instead")
+	assert.Contains(t, err.Error(), auditDatabaseURLEnv)
+}
+
 // testWriter is a no-op io.Writer for tests that only assert the error.
 type testWriter struct{}
 
