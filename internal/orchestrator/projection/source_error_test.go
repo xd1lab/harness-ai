@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -92,7 +93,7 @@ func TestSource_ErrorPaths(t *testing.T) {
 
 	t.Run("FetchBatch wraps scan error", func(t *testing.T) {
 		rows := &errRows{
-			fakeRows: &fakeRows{cols: [][]any{{"1", int64(1), int64(1), "t", "s", "x", []byte("{}"), []byte(nil), []byte(nil)}}},
+			fakeRows: &fakeRows{cols: [][]any{{"1", int64(1), int64(1), "t", "s", "x", []byte("{}"), []byte(nil), []byte(nil), "system", time.Time{}}}},
 			scanErr:  boom,
 		}
 		s := NewSource(&stubConn{rows: rows})
@@ -102,7 +103,7 @@ func TestSource_ErrorPaths(t *testing.T) {
 	})
 
 	t.Run("FetchBatch rejects a non-numeric transaction id", func(t *testing.T) {
-		rows := &fakeRows{cols: [][]any{{"not-a-number", int64(1), int64(1), "t", "s", "x", []byte("{}"), []byte(nil), []byte(nil)}}}
+		rows := &fakeRows{cols: [][]any{{"not-a-number", int64(1), int64(1), "t", "s", "x", []byte("{}"), []byte(nil), []byte(nil), "system", time.Time{}}}}
 		s := NewSource(&stubConn{rows: rows})
 		if _, err := s.FetchBatch(ctx, Cursor{}, 10); err == nil || !strings.Contains(err.Error(), "parsing transaction_id") {
 			t.Fatalf("FetchBatch = %v, want transaction_id parse error", err)

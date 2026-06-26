@@ -277,14 +277,13 @@ It uses a **plain `net/http.Client`** with a sane timeout (operator-tier — **n
 the egress broker), errors **before** the cursor advances, and **must not block**
 the cost projector.
 
-> **Frame `actor` / `created_at` note.** The frame schema includes `actor` and
-> `created_at` keys. The projection `Source.fetchBatchSQL` currently selects
-> through `content_hash`/`chain_hash` only and does **not** yet project the
-> `events.actor` / `events.created_at` columns, so today those two keys serialize
-> empty/blank. The `EventRow.Actor` / `EventRow.CreatedAt` fields exist and the
-> exporter reads them, so populating them is a one-line additive `SELECT`
-> extension when an operator needs richer SIEM frames; the integrity-bearing
-> fields (the hashes + identifiers) are fully populated today.
+> **Frame `actor` / `created_at`.** The frame schema includes `actor` and
+> `created_at` keys, and the projection `Source.fetchBatchSQL` projects the
+> `events.actor` / `events.created_at` columns into `EventRow.Actor` /
+> `EventRow.CreatedAt`, which the exporter emits — so every frame carries the
+> "who" (actor) and "when" (created_at) descriptors alongside the integrity-bearing
+> hashes + identifiers. (`created_at` is RFC3339Nano UTC; a zero timestamp
+> serializes as an empty string.)
 
 ### Projectord wiring (env-gated, independent cursors, non-blocking)
 

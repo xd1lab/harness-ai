@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -66,6 +67,8 @@ func (r *fakeRows) Scan(dest ...any) error {
 			*p = row[i].(int64)
 		case *[]byte:
 			*p = row[i].([]byte)
+		case *time.Time:
+			*p = row[i].(time.Time)
 		default:
 			return fmt.Errorf("fakeRows: unsupported dest type %T at %d", d, i)
 		}
@@ -116,7 +119,7 @@ func (c *fakeConn) Query(_ context.Context, sql string, args ...any) (pgx.Rows, 
 		}
 		cols = append(cols, []any{
 			uint64ToText(e.TransactionID), e.GlobalID, e.Seq, e.TenantID, e.SessionID, string(e.Type), e.Payload,
-			e.ContentHash, e.ChainHash,
+			e.ContentHash, e.ChainHash, e.Actor, e.CreatedAt,
 		})
 		if len(cols) >= limit {
 			break

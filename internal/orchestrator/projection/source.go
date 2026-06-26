@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -81,7 +82,7 @@ const saveCursorSQL = `
 // nullable: pre-0009 (unchained) rows scan as nil []byte. The cost fold ignores
 // them; the Batch-5B audit-checkpoint signer and SIEM exporter consume them.
 const fetchBatchSQL = `
-	SELECT transaction_id::text, global_id, seq, tenant_id, session_id, event_type, payload, content_hash, chain_hash
+	SELECT transaction_id::text, global_id, seq, tenant_id, session_id, event_type, payload, content_hash, chain_hash, actor, created_at
 	  FROM events
 	 WHERE (transaction_id, global_id) > ($1::text::xid8, $2)
 	   AND transaction_id < pg_snapshot_xmin(pg_current_snapshot())
@@ -168,8 +169,10 @@ func (s *Source) FetchBatch(ctx context.Context, cur Cursor, limit int) ([]Event
 			payload     []byte
 			contentHash []byte
 			chainHash   []byte
+			actor       string
+			createdAt   time.Time
 		)
-		if err := rows.Scan(&txnText, &gid, &seq, &tenantID, &sessionID, &eventType, &payload, &contentHash, &chainHash); err != nil {
+		if err := rows.Scan(&txnText, &gid, &seq, &tenantID, &sessionID, &eventType, &payload, &contentHash, &chainHash, &actor, &createdAt); err != nil {
 			return nil, fmt.Errorf("projection: scanning event row: %w", err)
 		}
 		txn, perr := textToUint64(txnText)
@@ -186,6 +189,8 @@ func (s *Source) FetchBatch(ctx context.Context, cur Cursor, limit int) ([]Event
 			Payload:       payload,
 			ContentHash:   contentHash,
 			ChainHash:     chainHash,
+			Actor:         actor,
+			CreatedAt:     createdAt,
 		})
 	}
 	if err := rows.Err(); err != nil {

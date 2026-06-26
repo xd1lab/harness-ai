@@ -5,6 +5,7 @@ package projection
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
 )
@@ -12,21 +13,21 @@ import (
 // TestFetchBatch_ContentAndChainHash_AndNullable (AC-2, task T1): the source
 // SELECT/Scan was extended additively with content_hash + chain_hash. FetchBatch
 // populates EventRow.ContentHash/ChainHash with the stored bytes for a chained
-// (0009+) row, and leaves them nil for a pre-0009 NULL-hash row. The additive
-// Actor/CreatedAt fields exist on EventRow (consumed by the SIEM exporter) and
-// are zero-valued here (FetchBatch does not select them, by the merged
-// audit-signer SELECT contract).
+// (0009+) row, and leaves them nil for a pre-0009 NULL-hash row. FetchBatch also
+// selects the descriptor fields actor + created_at (consumed by the SIEM
+// exporter), so EventRow.Actor/CreatedAt are populated from the row.
 func TestFetchBatch_ContentAndChainHash_AndNullable(t *testing.T) {
 	content := domain.ContentHash([]byte(`{"k":"v"}`))
 	chain := domain.ChainHash(domain.GenesisChainHash("sess"), content)
+	ts := time.Unix(1700000000, 0).UTC()
 
 	// Extended column order: transaction_id::text, global_id, seq, tenant_id,
-	// session_id, event_type, payload, content_hash, chain_hash.
+	// session_id, event_type, payload, content_hash, chain_hash, actor, created_at.
 	cols := [][]any{
-		// Chained 0009+ row carries the hash bytes.
-		{uint64ToText(3), int64(1), int64(1), "ten", "sess", string(domain.EventTurnStarted), []byte(`{"k":"v"}`), content, chain},
+		// Chained 0009+ row carries the hash bytes + descriptor fields.
+		{uint64ToText(3), int64(1), int64(1), "ten", "sess", string(domain.EventTurnStarted), []byte(`{"k":"v"}`), content, chain, "assistant", ts},
 		// Pre-0009 row: NULL hashes scan as nil []byte.
-		{uint64ToText(3), int64(2), int64(2), "ten", "sess", string(domain.EventTurnFinished), []byte(`{}`), []byte(nil), []byte(nil)},
+		{uint64ToText(3), int64(2), int64(2), "ten", "sess", string(domain.EventTurnFinished), []byte(`{}`), []byte(nil), []byte(nil), "system", ts},
 	}
 	s := NewSource(&stubConn{rows: &fakeRows{cols: cols}})
 
@@ -54,12 +55,12 @@ func TestFetchBatch_ContentAndChainHash_AndNullable(t *testing.T) {
 		t.Fatalf("row1 ChainHash = %x, want nil (pre-0009)", got[1].ChainHash)
 	}
 
-	// Additive descriptor fields exist on EventRow; FetchBatch leaves them zero.
-	if got[0].Actor != "" {
-		t.Fatalf("row0 Actor = %q, want empty (not selected by FetchBatch)", got[0].Actor)
+	// Additive descriptor fields are now selected + populated by FetchBatch.
+	if got[0].Actor != "assistant" {
+		t.Fatalf("row0 Actor = %q, want %q", got[0].Actor, "assistant")
 	}
-	if !got[0].CreatedAt.IsZero() {
-		t.Fatalf("row0 CreatedAt = %v, want zero (not selected by FetchBatch)", got[0].CreatedAt)
+	if !got[0].CreatedAt.Equal(ts) {
+		t.Fatalf("row0 CreatedAt = %v, want %v", got[0].CreatedAt, ts)
 	}
 
 	// The other carried fields are intact (no positional drift from the new cols).

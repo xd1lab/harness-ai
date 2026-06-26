@@ -29,6 +29,7 @@ import (
 	"go/token"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
 )
@@ -85,9 +86,9 @@ func TestFetchBatch_PopulatesContentAndChainHash(t *testing.T) {
 	// Extended column order (AC-2): transaction_id::text, global_id, seq,
 	// tenant_id, session_id, event_type, payload, content_hash, chain_hash.
 	cols := [][]any{
-		{uint64ToText(5), int64(7), int64(1), "ten", "sess", string(domain.EventTurnStarted), []byte(`{"TurnID":"t"}`), content, chain},
+		{uint64ToText(5), int64(7), int64(1), "ten", "sess", string(domain.EventTurnStarted), []byte(`{"TurnID":"t"}`), content, chain, "system", time.Time{}},
 		// A pre-0009 row with NULL hashes.
-		{uint64ToText(5), int64(8), int64(2), "ten", "sess", string(domain.EventTurnStarted), []byte(`{}`), []byte(nil), []byte(nil)},
+		{uint64ToText(5), int64(8), int64(2), "ten", "sess", string(domain.EventTurnStarted), []byte(`{}`), []byte(nil), []byte(nil), "system", time.Time{}},
 	}
 	s := NewSource(&stubConn{rows: &fakeRows{cols: cols}})
 
