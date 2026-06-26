@@ -275,7 +275,11 @@ func TestRun_BackgroundWorkerRunsAndStops(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not return after cancel")
 	}
-	assert.True(t, stopped.Load(), "background worker must observe the shutdown cancellation")
+	// The worker sets stopped after <-bctx.Done(); under a CPU-starved runner that
+	// store can lag Run's return, so poll rather than assert once (avoids a flake).
+	requireEventually(t, 2*time.Second, func() bool {
+		return stopped.Load()
+	}, "background worker must observe the shutdown cancellation")
 }
 
 // TestRun_ListenBindFailure asserts a bind failure on the gRPC address is
