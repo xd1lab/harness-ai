@@ -233,7 +233,29 @@ curl -fsS "localhost:8080/v1/sessions/$SESSION/integrity"
 
 If anyone `UPDATE`s a stored payload, its `content_hash` no longer matches (a **content mismatch**); rewrite a `chain_hash` and the link no longer verifies (a **broken link**) — either way `valid` is `false` and `first_bad_seq` points at the offending event. The two integrity digests are also exposed (as non-sensitive `content_hash`/`chain_hash` fields) on every event descriptor from [`GET /v1/sessions/{id}/events`](#event-log-read--time-travel), regardless of `include_payload`. The same operation is available as the gRPC `VerifySessionIntegrity` RPC and the MCP `verify_session_integrity` tool, and is RLS-scoped to your tenant.
 
-**Forward-only, and tamper-*evident* not tamper-*proof*.** The `payload_canonical` and hash columns are added by [migration 0009](migrations/0009_event_hash_chain.up.sql) — additive and nullable, so events written before it stay unchained and verify gracefully skips that leading prefix. This batch delivers the detection substrate; it does **not** stop an attacker with full database write access from forging a self-consistent rewrite (recompute every downstream hash and the chain head). Anchoring the chain head **outside** the database — **signed checkpoints + a SIEM/WORM export** — is the follow-on that makes the log tamper-*proof*, and is on the [roadmap](#roadmap--deferred).
+**Forward-only, and tamper-*evident* not tamper-*proof*.** The `payload_canonical` and hash columns are added by [migration 0009](migrations/0009_event_hash_chain.up.sql) — additive and nullable, so events written before it stay unchained and verify gracefully skips that leading prefix. This batch delivers the detection substrate; it does **not** stop an attacker with full database write access from forging a self-consistent rewrite (recompute every downstream hash and the chain head). Anchoring the chain head **outside** the database — **signed checkpoints + a SIEM/WORM export** — is what makes the log tamper-*proof*, and is delivered next (see [Signed audit checkpoints + SIEM export](#signed-audit-checkpoints--siem-export)).
+
+### Signed audit checkpoints + SIEM export
+
+The hash-chain above is tamper-*evident*: an attacker with database write access can still forge a *self-consistent* rewrite — recompute every downstream `content_hash`/`chain_hash` and the chain head — and a from-scratch verify passes. Closing that gap means anchoring the integrity value with a key that **does not live in the database**. That is what this layer adds, and it turns the log tamper-***proof*** ([ADR-0034](docs/decisions/0034-signed-audit-checkpoints-and-siem-export.md)).
+
+A new operator-tier consumer tails the **global** event feed (its own projection cursor, off the hot write path) and, at each checkpoint boundary, folds the covered events' `content_hash` leaves into a `checkpoint_hash = SHA-256(prev_checkpoint_hash ‖ SHA-256(L1‖…‖Ln))`, **signs it with Ed25519**, and appends a row to an append-only, RLS-exempt `audit_checkpoints` table ([migration 0010](migrations/0010_audit_checkpoints.up.sql)). The signing key is resolved from the operator environment (`BOLTROPE_AUDIT_SIGNING_KEY`, a base64 Ed25519 seed or private key, plus a required `BOLTROPE_AUDIT_SIGNING_KEY_ID`), held only as a redacting secret, and is **never logged, exported, or persisted** — only the signature and a public-derivable `key_id` reach the database.
+
+Verify it — the **tamper-proof** check — recomputes each `checkpoint_hash` from the (possibly tampered) stored `content_hash` leaves and checks the stored signature against it:
+
+```bash
+# Operator-tier: connects directly to the owner Postgres DSN and verifies
+# Ed25519 signatures locally with BOLTROPE_AUDIT_PUBLIC_KEY (or the derived key).
+harnessctl audit verify-checkpoints
+# => audit checkpoints VALID checked=4         (exit 0)
+# => audit checkpoints INVALID checked=2 first_bad_checkpoint_id=3 reason=…   (exit 1)
+```
+
+Because the signature anchors `checkpoint_hash` to a key the database attacker does **not** hold, a full in-DB rewrite that fools the chain-only verify still fails here: the rewritten event changes its leaf → changes the recomputed `checkpoint_hash` → the signature made over the *original* hash no longer verifies. The checkpoint chain itself is linked (each row's `prev_checkpoint_hash` ties to the previous), so a rewritten or removed checkpoint is also caught. The signer is **idempotent** (`ON CONFLICT (covers_to_global_id)` + a crash-safe re-read of the unanchored tail), so a re-run never double-writes.
+
+**SIEM / WORM export.** A second operator-tier consumer (its own cursor) ships an audit **frame** per event to an independent external sink, so the evidence survives even a full-database compromise. Each frame carries **descriptors + hashes only** — `tenant_id`, `session_id`, `seq`, `global_id`, `event_type`, `actor`, `created_at`, and the `content_hash`/`chain_hash` (hex) — and **never the raw payload**, so secrets in event payloads are never shipped to the SIEM. Frames go to a file/NDJSON sink (`BOLTROPE_SIEM_FILE`, appended one JSON object per line) and/or an HTTP sink (`BOLTROPE_SIEM_HTTP_URL`, NDJSON batches with an optional `Authorization: Bearer`); each `global_id` lets the SIEM dedup under the at-least-once cursor.
+
+**Key management & the operator-tier trust boundary.** The signer and the SIEM exporter are **operator-tier infrastructure** — like OTLP/metrics export — **not** model-influenced channels. They use a plain `net/http` client for any outbound and deliberately do **not** route through the egress broker, which ([ADR-0013](docs/decisions/0013-security-model.md)) governs only the channels a model can reach. With **no** signing key configured, checkpoint signing is **disabled with a single loud warning** at startup (the in-DB chain stays tamper-evident but is not externally tamper-proof) — **no ephemeral key is ever generated**. Each consumer runs only when configured, on its **own** subscription cursor, so a failing SIEM sink can never stall the cost rollup.
 
 ---
 

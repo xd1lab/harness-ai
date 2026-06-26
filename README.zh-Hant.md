@@ -233,7 +233,29 @@ curl -fsS "localhost:8080/v1/sessions/$SESSION/integrity"
 
 若有人 `UPDATE` 了某筆已儲存酬載,其 `content_hash` 便不再相符(**content mismatch**);改寫某個 `chain_hash`,該連結便無法驗證(**broken link**)——兩種情形下 `valid` 皆為 `false`,而 `first_bad_seq` 指向出問題的事件。這兩個完整性摘要也會(作為非敏感的 `content_hash`/`chain_hash` 欄位)出現在 [`GET /v1/sessions/{id}/events`](#事件日誌讀取--時光回溯) 的每個事件描述符上,無論 `include_payload` 為何。同一操作也以 gRPC `VerifySessionIntegrity` RPC 與 MCP `verify_session_integrity` 工具提供,並以 RLS 限定於你的租戶。
 
-**forward-only,且是防竄改「可偵測」而非「不可竄改」。** `payload_canonical` 與雜湊欄位由[遷移 0009](migrations/0009_event_hash_chain.up.sql) 新增——附加且可為 NULL,因此在它之前寫入的事件保持未鏈接,而驗證會優雅地略過該前綴。本批次交付的是偵測基底;它**並不**能阻止具備完整資料庫寫入權的攻擊者偽造一份自洽的改寫(重算所有下游雜湊與鏈頭)。把鏈頭錨定在**資料庫之外**——**簽章檢查點 + SIEM/WORM 匯出**——才是讓日誌「不可竄改(tamper-proof)」的後續工作,已列入[路線圖](#路線圖與延後項目)。
+**forward-only,且是防竄改「可偵測」而非「不可竄改」。** `payload_canonical` 與雜湊欄位由[遷移 0009](migrations/0009_event_hash_chain.up.sql) 新增——附加且可為 NULL,因此在它之前寫入的事件保持未鏈接,而驗證會優雅地略過該前綴。本批次交付的是偵測基底;它**並不**能阻止具備完整資料庫寫入權的攻擊者偽造一份自洽的改寫(重算所有下游雜湊與鏈頭)。把鏈頭錨定在**資料庫之外**——**簽章檢查點 + SIEM/WORM 匯出**——才是讓日誌「不可竄改(tamper-proof)」的下一層,現已交付(見[簽章稽核檢查點 + SIEM 匯出](#簽章稽核檢查點--siem-匯出))。
+
+### 簽章稽核檢查點 + SIEM 匯出
+
+上面的雜湊鏈是「可偵測竄改」的:具備資料庫寫入權的攻擊者仍可偽造一份*自洽*的改寫——重算所有下游 `content_hash`/`chain_hash` 與鏈頭——而從頭驗證仍會通過。要封住這個缺口,必須用一把**不存於資料庫內**的金鑰來錨定完整性值。這正是本層所加入的,並使日誌成為**不可竄改(tamper-***proof***)**([ADR-0034](docs/decisions/0034-signed-audit-checkpoints-and-siem-export.md))。
+
+一個新的 operator-tier 消費者尾隨**全域**事件 feed(自有投影 cursor,位於熱寫入路徑之外),並在每個檢查點邊界把所涵蓋事件的 `content_hash` 葉子折算成 `checkpoint_hash = SHA-256(prev_checkpoint_hash ‖ SHA-256(L1‖…‖Ln))`、以 **Ed25519 簽章**,並把一列寫入 append-only、RLS-exempt 的 `audit_checkpoints` 資料表([遷移 0010](migrations/0010_audit_checkpoints.up.sql))。簽章金鑰由 operator 環境解析(`BOLTROPE_AUDIT_SIGNING_KEY`,base64 的 Ed25519 種子或私鑰,加上必填的 `BOLTROPE_AUDIT_SIGNING_KEY_ID`),僅以會自我遮蔽的 secret 持有,且**絕不記錄、匯出或持久化**——只有簽章與可由公鑰推導的 `key_id` 會進入資料庫。
+
+驗證它——也就是**不可竄改**的檢查——會從(可能已被竄改的)已儲存 `content_hash` 葉子重算每個 `checkpoint_hash`,並以已儲存簽章對其檢核:
+
+```bash
+# operator-tier:直接連到 owner Postgres DSN,並以 BOLTROPE_AUDIT_PUBLIC_KEY
+# (或推導出的金鑰)在本地驗證 Ed25519 簽章。
+harnessctl audit verify-checkpoints
+# => audit checkpoints VALID checked=4         (exit 0)
+# => audit checkpoints INVALID checked=2 first_bad_checkpoint_id=3 reason=…   (exit 1)
+```
+
+因為簽章把 `checkpoint_hash` 錨定到一把資料庫攻擊者**並不持有**的金鑰,一份能騙過僅靠鏈的驗證的完整 in-DB 改寫,在此仍會失敗:被改寫的事件改變其葉子 → 改變重算出的 `checkpoint_hash` → 對*原始*雜湊所做的簽章便不再驗證通過。檢查點鏈本身亦相互連結(每列的 `prev_checkpoint_hash` 連到前一列),因此被改寫或被移除的檢查點同樣會被抓到。簽署者是**冪等**的(`ON CONFLICT (covers_to_global_id)` 加上對未錨定尾段的崩潰安全重讀),因此重跑絕不會重複寫入。
+
+**SIEM / WORM 匯出。** 第二個 operator-tier 消費者(自有 cursor)把每個事件的稽核**框架(frame)**送往一個獨立的外部接收端,讓證據即使在資料庫被完全攻陷時仍能存活。每個框架僅攜帶**描述符 + 雜湊**——`tenant_id`、`session_id`、`seq`、`global_id`、`event_type`、`actor`、`created_at`,以及 `content_hash`/`chain_hash`(hex)——且**絕不含原始酬載**,因此事件酬載中的機密絕不會被送往 SIEM。框架會送往檔案/NDJSON 接收端(`BOLTROPE_SIEM_FILE`,每行一個 JSON 物件附加寫入)與/或 HTTP 接收端(`BOLTROPE_SIEM_HTTP_URL`,NDJSON 批次,可選 `Authorization: Bearer`);每個 `global_id` 讓 SIEM 能在 at-least-once cursor 下去重。
+
+**金鑰管理與 operator-tier 信任邊界。** 簽署者與 SIEM 匯出器是 **operator-tier 基礎設施**——如同 OTLP/metrics 匯出——**而非**受模型影響的通道。它們的對外連線使用普通的 `net/http` client,並刻意**不**走 egress broker;egress broker([ADR-0013](docs/decisions/0013-security-model.md))只治理模型能觸及的通道。在**未**設定簽章金鑰時,檢查點簽署於啟動時以**一則明顯的警告停用**(in-DB 鏈仍可偵測竄改,但不具外部不可竄改性)——且**絕不**產生臨時金鑰(ephemeral key)。每個消費者僅在設定後才執行,並各自使用**自己的**訂閱 cursor,因此失效的 SIEM 接收端絕不會卡住成本上捲。
 
 ---
 
