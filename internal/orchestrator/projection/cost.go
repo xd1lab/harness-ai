@@ -3,6 +3,7 @@ package projection
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/xd1lab/harness-ai/internal/orchestrator/domain"
 	"github.com/xd1lab/harness-ai/internal/platform/llm"
@@ -66,6 +67,25 @@ type EventRow struct {
 	// Payload is the raw JSONB payload (events.payload), decoded on demand by the
 	// cost fold for turn-terminal types only.
 	Payload []byte
+	// ContentHash is events.content_hash — SHA-256 over the canonical payload bytes
+	// (migration 0009). It is an ADDITIVE field the cost fold IGNORES: the
+	// audit-checkpoint signer (Batch-5B) accumulates these as the checkpoint leaves,
+	// and the SIEM exporter emits its hex. It is nil for pre-0009 (unchained) rows.
+	ContentHash []byte
+	// ChainHash is events.chain_hash — SHA-256(prev_chain_hash || content_hash),
+	// the in-DB tamper-evident link (migration 0009). ADDITIVE / ignored by the cost
+	// fold; carried so the SIEM exporter can emit its hex in each frame. nil for
+	// pre-0009 (unchained) rows.
+	ChainHash []byte
+	// Actor is events.actor — the descriptor of who produced the event (defaults to
+	// "system"). ADDITIVE / ignored by the cost fold; carried so the SIEM exporter
+	// can include it as a frame descriptor. Empty for rows the source does not
+	// populate it on.
+	Actor string
+	// CreatedAt is events.created_at — the event's commit timestamp. ADDITIVE /
+	// ignored by the cost fold; carried so the SIEM exporter can include it as a
+	// frame descriptor. Zero for rows the source does not populate it on.
+	CreatedAt time.Time
 }
 
 // key returns the row's (tenant, session) rollup key.

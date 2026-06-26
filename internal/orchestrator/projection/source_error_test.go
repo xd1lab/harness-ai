@@ -92,7 +92,7 @@ func TestSource_ErrorPaths(t *testing.T) {
 
 	t.Run("FetchBatch wraps scan error", func(t *testing.T) {
 		rows := &errRows{
-			fakeRows: &fakeRows{cols: [][]any{{"1", int64(1), int64(1), "t", "s", "x", []byte("{}")}}},
+			fakeRows: &fakeRows{cols: [][]any{{"1", int64(1), int64(1), "t", "s", "x", []byte("{}"), []byte(nil), []byte(nil)}}},
 			scanErr:  boom,
 		}
 		s := NewSource(&stubConn{rows: rows})
@@ -102,7 +102,7 @@ func TestSource_ErrorPaths(t *testing.T) {
 	})
 
 	t.Run("FetchBatch rejects a non-numeric transaction id", func(t *testing.T) {
-		rows := &fakeRows{cols: [][]any{{"not-a-number", int64(1), int64(1), "t", "s", "x", []byte("{}")}}}
+		rows := &fakeRows{cols: [][]any{{"not-a-number", int64(1), int64(1), "t", "s", "x", []byte("{}"), []byte(nil), []byte(nil)}}}
 		s := NewSource(&stubConn{rows: rows})
 		if _, err := s.FetchBatch(ctx, Cursor{}, 10); err == nil || !strings.Contains(err.Error(), "parsing transaction_id") {
 			t.Fatalf("FetchBatch = %v, want transaction_id parse error", err)

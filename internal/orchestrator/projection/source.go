@@ -76,8 +76,12 @@ const saveCursorSQL = `
 // transaction_id < xmin bound is the whole safety property: a late-committing
 // lower-id transaction is simply not yet below xmin and is read on a later poll —
 // delayed, never skipped (NFR-REL-04).
+// The content_hash + chain_hash columns are APPENDED AT THE END (additive; pgx
+// scans positionally so the existing columns must not be reordered). They are
+// nullable: pre-0009 (unchained) rows scan as nil []byte. The cost fold ignores
+// them; the Batch-5B audit-checkpoint signer and SIEM exporter consume them.
 const fetchBatchSQL = `
-	SELECT transaction_id::text, global_id, seq, tenant_id, session_id, event_type, payload
+	SELECT transaction_id::text, global_id, seq, tenant_id, session_id, event_type, payload, content_hash, chain_hash
 	  FROM events
 	 WHERE (transaction_id, global_id) > ($1::text::xid8, $2)
 	   AND transaction_id < pg_snapshot_xmin(pg_current_snapshot())
@@ -155,15 +159,17 @@ func (s *Source) FetchBatch(ctx context.Context, cur Cursor, limit int) ([]Event
 	var out []EventRow
 	for rows.Next() {
 		var (
-			txnText   string
-			gid       int64
-			seq       int64
-			tenantID  string
-			sessionID string
-			eventType string
-			payload   []byte
+			txnText     string
+			gid         int64
+			seq         int64
+			tenantID    string
+			sessionID   string
+			eventType   string
+			payload     []byte
+			contentHash []byte
+			chainHash   []byte
 		)
-		if err := rows.Scan(&txnText, &gid, &seq, &tenantID, &sessionID, &eventType, &payload); err != nil {
+		if err := rows.Scan(&txnText, &gid, &seq, &tenantID, &sessionID, &eventType, &payload, &contentHash, &chainHash); err != nil {
 			return nil, fmt.Errorf("projection: scanning event row: %w", err)
 		}
 		txn, perr := textToUint64(txnText)
@@ -178,6 +184,8 @@ func (s *Source) FetchBatch(ctx context.Context, cur Cursor, limit int) ([]Event
 			SessionID:     sessionID,
 			Type:          domain.EventType(eventType),
 			Payload:       payload,
+			ContentHash:   contentHash,
+			ChainHash:     chainHash,
 		})
 	}
 	if err := rows.Err(); err != nil {
