@@ -595,10 +595,11 @@ func TestAppend_IdempotentReplayShortCircuits(t *testing.T) {
 		match: "request_id = $2",
 		rows: &fakeRows{rows: [][]any{
 			// eventColumns order: session_id, seq, request_id, event_type,
-			// schema_version, payload, blob_ref, actor, created_at, content_hash,
-			// chain_hash. The two trailing nils model a NULL-hash (pre-0009) row;
-			// this replay test asserts only seq/request_id, not the hashes.
-			{"sess-1", int64(7), "req-1", string(domain.EventTurnStarted), 1, priorPayload, nil, string(domain.ActorSystem), createdAt, []byte(nil), []byte(nil)},
+			// schema_version, payload, payload_canonical, blob_ref, actor,
+			// created_at, content_hash, chain_hash. The trailing nils model a
+			// NULL-hash (pre-0009) row; this replay test asserts only seq/request_id,
+			// not the hashes. payload_canonical is nil, so decode falls back to payload.
+			{"sess-1", int64(7), "req-1", string(domain.EventTurnStarted), 1, priorPayload, []byte(nil), nil, string(domain.ActorSystem), createdAt, []byte(nil), []byte(nil)},
 		}},
 	}}}
 	store, _, _ := newFakeStore(tx)
@@ -644,7 +645,7 @@ func TestAppend_PerStatementFailures(t *testing.T) {
 			stubs: []stmtStub{{
 				match: "request_id = $2",
 				rows: &fakeRows{rows: [][]any{
-					{"sess-1", int64(1), "req-1", string(domain.EventTurnStarted), 1, []byte("{not json"), nil, "system", time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), []byte(nil), []byte(nil)},
+					{"sess-1", int64(1), "req-1", string(domain.EventTurnStarted), 1, []byte("{not json"), []byte(nil), nil, "system", time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), []byte(nil), []byte(nil)},
 				}},
 			}},
 			events:  []app.AppendInput{turnStartedInput("t1")},
@@ -834,8 +835,10 @@ func TestScanEnvelopes(t *testing.T) {
 	t.Run("decodes rows and stamps the caller tenant", func(t *testing.T) {
 		t.Parallel()
 		rows := &fakeRows{rows: [][]any{
-			{"sess-1", int64(1), "req-1", string(domain.EventTurnStarted), 1, goodPayload, nil, string(domain.ActorSystem), createdAt, []byte(nil), []byte(nil)},
-			{"sess-1", int64(2), "req-1", string(domain.EventToolResult), 2, blobPayload, "sha256:abc", string(domain.ActorTool), createdAt, []byte(nil), []byte(nil)},
+			// payload_canonical carries the same bytes as payload (the authoritative
+			// decode source); blob_ref follows it.
+			{"sess-1", int64(1), "req-1", string(domain.EventTurnStarted), 1, goodPayload, goodPayload, nil, string(domain.ActorSystem), createdAt, []byte(nil), []byte(nil)},
+			{"sess-1", int64(2), "req-1", string(domain.EventToolResult), 2, blobPayload, blobPayload, "sha256:abc", string(domain.ActorTool), createdAt, []byte(nil), []byte(nil)},
 		}}
 		envs, err := scanEnvelopes(rows, "tenant-A")
 		if err != nil {
@@ -860,7 +863,7 @@ func TestScanEnvelopes(t *testing.T) {
 	t.Run("scan failure", func(t *testing.T) {
 		t.Parallel()
 		rows := &fakeRows{
-			rows:    [][]any{{"sess-1", int64(1), "req-1", "TurnStarted", 1, goodPayload, nil, "system", createdAt, []byte(nil), []byte(nil)}},
+			rows:    [][]any{{"sess-1", int64(1), "req-1", "TurnStarted", 1, goodPayload, goodPayload, nil, "system", createdAt, []byte(nil), []byte(nil)}},
 			scanErr: errors.New("type mismatch"),
 		}
 		if _, err := scanEnvelopes(rows, "t"); err == nil || !strings.Contains(err.Error(), "scanning event row") {
@@ -871,7 +874,9 @@ func TestScanEnvelopes(t *testing.T) {
 	t.Run("malformed payload", func(t *testing.T) {
 		t.Parallel()
 		rows := &fakeRows{rows: [][]any{
-			{"sess-1", int64(1), "req-1", string(domain.EventTurnStarted), 1, []byte("{truncated"), nil, "system", createdAt, []byte(nil), []byte(nil)},
+			// payload_canonical holds the malformed bytes (the authoritative decode
+			// source), so the decode error still surfaces.
+			{"sess-1", int64(1), "req-1", string(domain.EventTurnStarted), 1, []byte("{truncated"), []byte("{truncated"), nil, "system", createdAt, []byte(nil), []byte(nil)},
 		}}
 		if _, err := scanEnvelopes(rows, "t"); err == nil || !strings.Contains(err.Error(), "decoding TurnStarted payload") {
 			t.Fatalf("err = %v, want decode error", err)
@@ -881,7 +886,7 @@ func TestScanEnvelopes(t *testing.T) {
 	t.Run("unknown event type fails loudly", func(t *testing.T) {
 		t.Parallel()
 		rows := &fakeRows{rows: [][]any{
-			{"sess-1", int64(1), "req-1", "EventFromTheFuture", 1, []byte("{}"), nil, "system", createdAt, []byte(nil), []byte(nil)},
+			{"sess-1", int64(1), "req-1", "EventFromTheFuture", 1, []byte("{}"), []byte("{}"), nil, "system", createdAt, []byte(nil), []byte(nil)},
 		}}
 		if _, err := scanEnvelopes(rows, "t"); err == nil || !strings.Contains(err.Error(), "unknown event_type") {
 			t.Fatalf("err = %v, want unknown event_type error", err)

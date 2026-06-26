@@ -55,13 +55,18 @@ All hashing lives in `internal/orchestrator/domain/hashchain.go` (stdlib
 import the **same** helpers and parity holds by construction:
 
 - **`MarshalEventPayload(e Event) ([]byte, error)`** = `json.Marshal(e)` — the
-  byte-identical encoding the `events.payload` column stores. `encoding/json`
-  encodes struct fields in declaration order and **sorts map keys**, so even a
-  map-bearing payload (`ApprovalRequested.Args`, `map[string]any`) marshals
-  deterministically. The prod store's `marshalPayload` delegates to this, so prod
-  hashes the **exact bytes it persists**.
+  byte-identical encoding persisted **verbatim** in the RAW
+  `events.payload_canonical BYTEA` column. `encoding/json` encodes struct fields
+  in declaration order and **sorts map keys**, so even a map-bearing payload
+  (`ApprovalRequested.Args`, `map[string]any`) marshals deterministically. The
+  prod store's `marshalPayload` delegates to this, so prod hashes — and stores in
+  `payload_canonical` — the **exact same bytes**, and verify-on-read hashes those
+  identical raw stored bytes.
 - **`content_hash = ContentHash(payload)`** = `sha256.Sum256(payload)` over those
-  stored bytes (a fresh 32-byte slice).
+  exact stored `payload_canonical` bytes (a fresh 32-byte slice). Verify hashes
+  the RAW stored bytes directly (no decode/re-marshal), so structural/additive
+  tampering of the stored payload (key reorder, whitespace, an injected extra key)
+  changes the hashed bytes and is detected — see the Consequences caveat.
 - **`GenesisChainHash(sessionID)`** = `sha256.Sum256("boltrope-audit-genesis-v1:"
   + sessionID)` — a **session-derived** genesis (versioned domain-separation
   prefix) so two sessions never share a chain.
@@ -79,17 +84,23 @@ tenant isolation, and the session being the natural audit unit.
 
 ### Storage (migration 0009, additive, forward-only)
 
-`migrations/0009_event_hash_chain.up.sql` adds three **nullable** columns with no
+`migrations/0009_event_hash_chain.up.sql` adds four **nullable** columns with no
 `NOT NULL`, no `DEFAULT`, and no backfill:
 
+- `events.payload_canonical BYTEA` — the EXACT, verbatim `json.Marshal` bytes
+  `content_hash` is taken over, stored RAW (a BYTEA, **not** JSONB, so Postgres
+  performs no normalization). This is the **authoritative** payload for verify
+  and read-back; the pre-existing `events.payload` JSONB is retained as a
+  queryable, NON-authoritative convenience copy.
 - `events.content_hash BYTEA`
 - `events.chain_hash BYTEA`
 - `sessions.chain_head BYTEA` — the running per-session chain head (the last
   event's `chain_hash`; `NULL` = no chained events yet → append seeds from the
   genesis hash).
 
-There is **no `.down.sql`**. Pre-0009 rows stay `content_hash = NULL` /
-`chain_hash = NULL` (**UNCHAINED**) forever — deliberate and forward-only.
+There is **no `.down.sql`**. Pre-0009 rows stay `payload_canonical = NULL` /
+`content_hash = NULL` / `chain_hash = NULL` (**UNCHAINED**) forever — deliberate
+and forward-only.
 `ADD COLUMN` without a `DEFAULT` is a metadata-only catalog change (no table
 rewrite), so it applies cleanly and instantly on top of 0008. **RLS is
 unaffected**: the existing events/sessions policies from migrations 0003 still
@@ -115,19 +126,24 @@ append transaction**, with every hot-path invariant byte-for-byte unchanged:
 3. Only AFTER the gate matches: `prev` is seeded from `sessions.chain_head` (read
    in the same tx; `NULL → GenesisChainHash(sessionID)`). For each event in seq
    order, `content_hash = ContentHash(payload)` over the SAME `payload` bytes the
-   INSERT already builds via `MarshalEventPayload`, and `chain_hash =
-   ChainHash(prev, content_hash)`; `prev` advances. The two columns are added to
-   the per-event INSERT and returned on the envelope.
+   INSERT builds via `MarshalEventPayload` — and those exact bytes are written
+   VERBATIM into the RAW `events.payload_canonical` column (so verify hashes the
+   identical raw stored bytes) — and `chain_hash = ChainHash(prev, content_hash)`;
+   `prev` advances. `payload_canonical`, `content_hash`, and `chain_hash` are
+   added to the per-event INSERT and the hashes are returned on the envelope.
 4. A single `UPDATE sessions SET chain_head = $last_chain_hash WHERE id =
    $sessionID` runs in the SAME tx (RLS-scoped, no head_seq/lease re-gate — the
    gate already matched). `pg_notify` and `Commit` are unchanged.
 
-`domain.EventEnvelope` gains two additive fields `ContentHash []byte` /
-`ChainHash []byte` (nil for unchained/pre-0009 rows), populated on the append
-return path and on every read-back (`scanEnvelopes` scans them as nullable
-`[]byte`). The `boltrope-dev` in-memory store computes the SAME hashes on Append
-via the same domain helpers (tracking a per-session running head), so its loaded
-envelopes carry identical hashes.
+`domain.EventEnvelope` gains additive fields `PayloadCanonical []byte` (the raw
+stored bytes verify hashes), `ContentHash []byte`, and `ChainHash []byte` (all
+nil for unchained/pre-0009 rows), populated on the append return path and on every
+read-back (`scanEnvelopes` scans them as nullable `[]byte` and decodes the typed
+payload from `payload_canonical` when present, falling back to the legacy `payload`
+JSONB for pre-0009 rows). The `boltrope-dev` in-memory store computes the SAME
+hashes on Append via the same domain helpers (tracking a per-session running head)
+and carries the canonical bytes on its envelopes, so its loaded envelopes and its
+verify behave identically to prod.
 
 ### Verify (read-only, recompute-and-compare)
 
@@ -136,10 +152,12 @@ error)` is a read-only, RLS-scoped, side-effect-free store method (on both the
 pgx store and the dev store; deliberately OUTSIDE the frozen `app.EventLogPort`,
 like `LoadRange`/`LoadUpTo`). It re-reads the session's events in
 `[fromSeq, toSeq]` seq order (`fromSeq<=0` → from 1; `toSeq<=0` or past head →
-head), recomputes `content_hash` from each stored payload and `chain_hash` from
-the running chain (seeded at the link entering the window — the prior event's
-stored `chain_hash`, or `GenesisChainHash` at the chain genesis), and compares
-recomputed vs stored.
+head), recomputes `content_hash` by hashing the RAW stored `payload_canonical`
+bytes DIRECTLY (no decode/re-marshal) and `chain_hash` from the running chain
+(seeded at the link entering the window — the prior event's stored `chain_hash`,
+or `GenesisChainHash` at the chain genesis), and compares recomputed vs stored. A
+chained row whose `payload_canonical` is unexpectedly NULL is itself anomalous and
+is reported as a content mismatch.
 
 `domain.ChainVerification = {Valid bool; FirstBadSeq int64; Reason string;
 Checked int}`:
@@ -193,19 +211,36 @@ Mirroring `ListSessionEvents` (ADR-0025):
   follow-on that makes the log tamper-PROOF, not merely tamper-evident. This ADR
   is honest that Batch-5A delivers the detection substrate and the verify surface,
   and that the external anchor is still pending.
-- **Verify re-marshal limitation — the second load-bearing caveat.** Verify
-  recomputes `content_hash` by re-marshalling the **decoded** payload
-  (`decodePayload → MarshalEventPayload`), not by hashing the raw stored JSONB
-  bytes. For the **closed v1 event set at the current `schema_version`**, a struct
-  round-tripped through Unmarshal → Marshal is byte-stable, so an untampered row
-  always re-hashes to its stored `content_hash`. This correctness **does not
-  hold** for a payload written by a NEWER `schema_version` that carries extra
-  JSONB keys the v1 structs drop on decode — such a row would fail to round-trip
-  identically and could be **falsely** reported as tampered. The hardening
-  follow-on is a raw-stored-bytes verify path (SELECT `payload::bytea` and hash
-  those exact bytes) that is schema-version-agnostic; it is deferred with
-  Batch-5B. Until then, verify is sound only over the closed v1 event set at one
-  schema_version (documented here and in the store method).
+- **Verify hashes the RAW stored bytes (the previously-undetected tamper class is
+  closed).** `content_hash` is taken over the EXACT `json.Marshal` bytes the
+  append path produced, and those bytes are persisted **verbatim** in a dedicated
+  RAW `events.payload_canonical BYTEA` column (a BYTEA, **not** JSONB, so Postgres
+  performs **no** normalization — no whitespace insertion, key reordering, or
+  duplicate-key dedup). `VerifyChainIntegrity` recomputes `content_hash` by
+  hashing those raw stored bytes **directly** — it does **not** decode and
+  re-marshal. This closes a concrete **false-NEGATIVE** that the earlier
+  JSONB-only / decode-then-re-marshal design had: because `events.payload` is
+  JSONB, an attacker could rewrite the stored payload by (a) reordering keys, (b)
+  adding whitespace, or (c) injecting an EXTRA key the v1 struct drops on decode
+  (e.g. `{"TurnID":"t1","Model":"gpt","EVIL":"injected"}`); the decode→re-marshal
+  would reproduce the identical Go bytes and the row would re-hash to its stored
+  `content_hash`, leaving real durable-row tampering UNDETECTED. Hashing the raw
+  `payload_canonical` bytes makes every one of those mutations change the hashed
+  bytes, so they are now **detected at the tampered seq** (integration-tested:
+  `TestVerify_DetectsStructuralJSONBTamper` covers reorder/whitespace/extra-key).
+  This also makes verify **schema-version-agnostic**: a newer `schema_version`'s
+  extra keys are simply part of the hashed canonical bytes, so they neither
+  falsely pass nor are **falsely** reported as tampered (the inverse false-positive
+  the older design risked is also gone). The legacy `events.payload` JSONB is
+  retained only as a **queryable, NON-authoritative** convenience copy; the
+  authoritative payload for both verify and read-back is `payload_canonical`
+  (read-back decodes from it, falling back to the JSONB only for pre-0009 rows
+  whose `payload_canonical` is NULL). Note this is the "raw-stored-bytes verify
+  path" originally scoped as a Batch-5B hardening; it was pulled into this batch
+  because it is required to close a demonstrated tamper hole on the CORE
+  deliverable. The remaining caveat is the **tamper-EVIDENT vs tamper-PROOF** one
+  above (a self-consistent full rewrite by a write-capable attacker is still only
+  closed by the external signed-checkpoint anchor in Batch-5B).
 - **Hot path is unchanged.** The optimistic gate, `request_id` idempotency
   (replay returns prior with no re-chain, no double-increment), lease fencing, RLS
   tenant scoping, and the late unique-violation reclassification at Commit are all
@@ -223,8 +258,10 @@ Mirroring `ListSessionEvents` (ADR-0025):
 - **Additive proto only.** Two new `EventDescriptor` fields + one new RPC; no
   rename/renumber; `gen/` in sync; `buf breaking`/`buf lint` green. The integrity
   digests are exposed on every facade alongside the existing event-read surface.
-- **Trade-off.** The verify re-marshal approach trades a small robustness margin
-  (the schema-version caveat above) for not adding a raw-bytes read path now; the
-  forward-only migration trades the inability to un-add the columns for a clean,
-  rewrite-free, instantly-applied DDL. Both trades are deliberate and the
-  hardening paths are scoped into Batch-5B.
+- **Trade-off.** Storing `payload_canonical` duplicates the payload bytes (the
+  RAW copy alongside the JSONB) in exchange for a robust, schema-version-agnostic
+  verify that hashes exactly what is stored — the right trade for an audit log
+  whose entire purpose is tamper-evidence. The forward-only migration trades the
+  inability to un-add the columns for a clean, rewrite-free, instantly-applied
+  DDL. The remaining hardening (external signed-checkpoint anchor + SIEM/WORM
+  export, which upgrades tamper-EVIDENT to tamper-PROOF) is scoped into Batch-5B.

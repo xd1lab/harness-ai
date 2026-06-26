@@ -123,10 +123,21 @@ type EventEnvelope struct {
 	// CreatedAt is the server-assigned append time (events.created_at).
 	CreatedAt time.Time
 	// Event is the typed payload. It is one of the concrete event structs in this
-	// package; switch on Type or type-assert to consume it.
+	// package; switch on Type or type-assert to consume it. It is decoded from
+	// [PayloadCanonical] when present (so the served payload is the exact,
+	// hash-protected bytes), falling back to the legacy events.payload JSONB for
+	// unchained pre-0009 rows.
 	Event Event
-	// ContentHash is the SHA-256 over the EXACT stored events.payload bytes for
-	// this event (the per-event content digest; ADR-0033). It is nil for
+	// PayloadCanonical is the EXACT, verbatim json.Marshal bytes the append path
+	// took ContentHash over and stored RAW in events.payload_canonical (ADR-0033).
+	// VerifyChainIntegrity hashes these raw stored bytes directly — no
+	// decode/re-marshal — so structural/additive tampering of the stored payload
+	// (key reorder, whitespace, an injected extra key) changes the hashed bytes
+	// and is detected. It is nil for unchained pre-0009 rows (which carry only the
+	// legacy events.payload JSONB).
+	PayloadCanonical []byte
+	// ContentHash is the SHA-256 over the EXACT stored events.payload_canonical
+	// bytes for this event (the per-event content digest; ADR-0033). It is nil for
 	// unchained pre-0009 rows and populated on the append return path and on
 	// every read-back. See [ContentHash].
 	ContentHash []byte

@@ -111,11 +111,22 @@ func (s *Store) VerifyChainIntegrity(_ context.Context, sessionID string, fromSe
 	checked := 0
 	for i := start; i < len(window); i++ {
 		e := window[i]
-		payload, err := domain.MarshalEventPayload(e.Event)
-		if err != nil {
-			return domain.ChainVerification{}, fmt.Errorf("eventstore(dev): verify re-marshaling seq=%d payload: %w", e.Seq, err)
+		// Hash the RAW stored payload_canonical bytes directly (no re-marshal),
+		// mirroring the prod pgx store so dev/prod verify behave identically
+		// (ADR-0033). The dev store keeps live domain values, so a chained event's
+		// payload_canonical is always the exact append-time bytes.
+		canonical := e.PayloadCanonical
+		if canonical == nil {
+			// Defensive parity with prod: a chained row missing its canonical bytes is
+			// anomalous; fall back to a re-marshal so an older in-memory envelope (set
+			// before this field existed) still verifies rather than spuriously failing.
+			marshaled, err := domain.MarshalEventPayload(e.Event)
+			if err != nil {
+				return domain.ChainVerification{}, fmt.Errorf("eventstore(dev): verify marshaling seq=%d payload: %w", e.Seq, err)
+			}
+			canonical = marshaled
 		}
-		recomputedContent := domain.ContentHash(payload)
+		recomputedContent := domain.ContentHash(canonical)
 		if !bytes.Equal(recomputedContent, e.ContentHash) {
 			return domain.ChainVerification{
 				Valid:       false,

@@ -141,16 +141,22 @@ func (s *Store) LoadUpTo(ctx context.Context, sessionID string, atSeq int64) ([]
 // prior seq (one extra row read) — so a window starting mid-chain does not
 // re-fold from seq 1.
 //
-// DOCUMENTED CORRECTNESS LIMITATION (T-04, ADR-0033 Consequences): verify
-// recomputes content_hash by RE-MARSHALING the decoded payload
-// (decodePayload -> domain.MarshalEventPayload), NOT by hashing the raw stored
-// JSONB/bytea bytes. This round-trips byte-identically ONLY for the closed v1
-// event set at the current schema_version; a row written by a newer
-// schema_version (extra JSONB keys) or any future json.Marshal field-ordering /
-// escaping change would re-marshal differently and FALSELY report a
-// content-hash mismatch. Hardening (a raw-payload-bytes read path that hashes
-// SELECT payload::bytea) is the follow-on. The append-vs-recompute round-trip is
-// test-pinned (T-10) so a divergence trips a regression alarm.
+// Raw-bytes content verification (ADR-0033): verify recomputes content_hash by
+// hashing the RAW stored events.payload_canonical bytes DIRECTLY — no
+// decode/re-marshal. payload_canonical holds the verbatim json.Marshal bytes the
+// append path took content_hash over, persisted as a BYTEA (Postgres does NOT
+// normalize it). Hashing the literal stored bytes makes structural/additive
+// tampering of the stored payload — key reorder, whitespace, an injected extra
+// key dropped on decode — change the hashed bytes and therefore DETECTABLE.
+// (This closes the false-negative the earlier decode-then-re-marshal design had,
+// which round-tripped byte-identically even after such mutations.) It is
+// schema-version-agnostic: a newer schema_version's extra keys are part of the
+// hashed canonical bytes, so they neither falsely pass nor falsely fail.
+//
+// A chained row (content_hash != nil) is always written WITH its
+// payload_canonical in the same INSERT, so a chained row whose payload_canonical
+// is NULL is itself anomalous (a tampered/partial row) and is reported as a
+// content mismatch.
 func (s *Store) VerifyChainIntegrity(ctx context.Context, sessionID string, fromSeq, toSeq int64) (domain.ChainVerification, error) {
 	tenantID, err := infradb.TenantFromContext(ctx)
 	if err != nil {
@@ -227,13 +233,23 @@ func (s *Store) VerifyChainIntegrity(ctx context.Context, sessionID string, from
 	checked := 0
 	for i := start; i < len(envs); i++ {
 		e := envs[i]
-		// Recompute content_hash from the decoded (re-marshaled) payload — see the
-		// documented round-trip limitation above.
-		payload, merr := domain.MarshalEventPayload(e.Event)
-		if merr != nil {
-			return domain.ChainVerification{}, fmt.Errorf("eventstore: verify re-marshaling seq=%d payload: %w", e.Seq, merr)
+		// Recompute content_hash by hashing the RAW stored payload_canonical bytes
+		// directly (no decode/re-marshal) — so reorder/whitespace/extra-key tampering
+		// of the stored payload changes the hash and is detected. A chained row with a
+		// NULL payload_canonical is anomalous (the column is written with content_hash
+		// in the same INSERT) and is treated as a content mismatch.
+		if e.PayloadCanonical == nil {
+			if cerr := tx.Commit(ctx); cerr != nil {
+				return domain.ChainVerification{}, fmt.Errorf("eventstore: commit verify (missing canonical): %w", cerr)
+			}
+			return domain.ChainVerification{
+				Valid:       false,
+				FirstBadSeq: e.Seq,
+				Reason:      fmt.Sprintf("content-hash mismatch at seq %d (missing canonical payload)", e.Seq),
+				Checked:     checked,
+			}, nil
 		}
-		recomputedContent := domain.ContentHash(payload)
+		recomputedContent := domain.ContentHash(e.PayloadCanonical)
 		if !bytes.Equal(recomputedContent, e.ContentHash) {
 			if cerr := tx.Commit(ctx); cerr != nil {
 				return domain.ChainVerification{}, fmt.Errorf("eventstore: commit verify (content mismatch): %w", cerr)

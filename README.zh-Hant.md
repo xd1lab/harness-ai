@@ -221,7 +221,7 @@ curl -fsS -X POST "localhost:8080/v1/sessions/$SESSION/control" \
 
 ### 防竄改稽核(Tamper-evident audit)
 
-事件日誌不只是依慣例 append-only——它是**密碼學鏈接**的,因此任何對已儲存事件的後續竄改都**可被偵測**。在 append 時,於同一個已負責樂觀並行控制、租約圍欄(lease fencing)與 `request_id` 冪等的單寫者交易內,每個事件都會得到一個 **`content_hash`**(對該列已儲存酬載位元組的 SHA-256)與一個 per-session 的 **`chain_hash`** = `SHA256(prev_chain_hash ‖ content_hash)`,依 `seq` 順序從一個由 session 衍生的 genesis 折算而成。運行中的鏈頭存於 `sessions.chain_head`;此鏈是 **per-session** 的(對齊 seq 連續性、RLS,以及「session 即稽核單位」)([ADR-0033](docs/decisions/0033-tamper-evident-hash-chain.md))。
+事件日誌不只是依慣例 append-only——它是**密碼學鏈接**的,因此任何對已儲存事件的後續竄改都**可被偵測**。在 append 時,於同一個已負責樂觀並行控制、租約圍欄(lease fencing)與 `request_id` 冪等的單寫者交易內,每個事件都會得到一個 **`content_hash`**(對該列已儲存酬載位元組的 SHA-256)與一個 per-session 的 **`chain_hash`** = `SHA256(prev_chain_hash ‖ content_hash)`,依 `seq` 順序從一個由 session 衍生的 genesis 折算而成。雜湊所涵蓋的確切位元組會**原樣**存於一個 raw `payload_canonical` 欄位(型別為 `BYTEA` 而非 JSONB——因此 Postgres 不會正規化空白、鍵順序或重複鍵),而驗證會*直接*對這些已儲存的原始位元組做雜湊。如此一來,對已儲存酬載的結構性竄改——重排鍵、加入空白、或注入額外鍵——都會改變被雜湊的位元組而被偵測,而不只是值的變更。運行中的鏈頭存於 `sessions.chain_head`;此鏈是 **per-session** 的(對齊 seq 連續性、RLS,以及「session 即稽核單位」)([ADR-0033](docs/decisions/0033-tamper-evident-hash-chain.md))。
 
 從任一外觀都可驗證一個會話——它會重新讀取事件、重算兩個雜湊,並與已儲存值比對:
 
@@ -233,7 +233,7 @@ curl -fsS "localhost:8080/v1/sessions/$SESSION/integrity"
 
 若有人 `UPDATE` 了某筆已儲存酬載,其 `content_hash` 便不再相符(**content mismatch**);改寫某個 `chain_hash`,該連結便無法驗證(**broken link**)——兩種情形下 `valid` 皆為 `false`,而 `first_bad_seq` 指向出問題的事件。這兩個完整性摘要也會(作為非敏感的 `content_hash`/`chain_hash` 欄位)出現在 [`GET /v1/sessions/{id}/events`](#事件日誌讀取--時光回溯) 的每個事件描述符上,無論 `include_payload` 為何。同一操作也以 gRPC `VerifySessionIntegrity` RPC 與 MCP `verify_session_integrity` 工具提供,並以 RLS 限定於你的租戶。
 
-**forward-only,且是防竄改「可偵測」而非「不可竄改」。** 這些雜湊欄位由[遷移 0009](migrations/0009_event_hash_chain.up.sql) 新增——附加且可為 NULL,因此在它之前寫入的事件保持未鏈接,而驗證會優雅地略過該前綴。本批次交付的是偵測基底;它**並不**能阻止具備完整資料庫寫入權的攻擊者偽造一份自洽的改寫。把鏈頭錨定在**資料庫之外**——**簽章檢查點 + SIEM/WORM 匯出**——才是讓日誌「不可竄改(tamper-proof)」的後續工作,已列入[路線圖](#路線圖與延後項目)。
+**forward-only,且是防竄改「可偵測」而非「不可竄改」。** `payload_canonical` 與雜湊欄位由[遷移 0009](migrations/0009_event_hash_chain.up.sql) 新增——附加且可為 NULL,因此在它之前寫入的事件保持未鏈接,而驗證會優雅地略過該前綴。本批次交付的是偵測基底;它**並不**能阻止具備完整資料庫寫入權的攻擊者偽造一份自洽的改寫(重算所有下游雜湊與鏈頭)。把鏈頭錨定在**資料庫之外**——**簽章檢查點 + SIEM/WORM 匯出**——才是讓日誌「不可竄改(tamper-proof)」的後續工作,已列入[路線圖](#路線圖與延後項目)。
 
 ---
 

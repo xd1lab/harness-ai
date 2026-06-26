@@ -20,7 +20,7 @@ const defaultSchemaVersion = 1
 // eventColumns is the column list (in order) that [scanEnvelopes] reads. It is
 // shared by every SELECT that returns whole events so the scan order cannot
 // drift from the query.
-const eventColumns = "session_id, seq, request_id, event_type, schema_version, payload, blob_ref, actor, created_at, content_hash, chain_hash"
+const eventColumns = "session_id, seq, request_id, event_type, schema_version, payload, payload_canonical, blob_ref, actor, created_at, content_hash, chain_hash"
 
 // selectEventsByRequestSQL loads the events previously committed under a
 // (session_id, request_id) pair, oldest-seq first — the idempotency
@@ -124,9 +124,13 @@ func (s *Store) insertEvent(ctx context.Context, tx pgx.Tx, args insertEventArgs
 	}
 
 	// Tamper-evident hashes (ADR-0033): content_hash over the EXACT payload bytes
-	// just marshaled (so verify-on-read recomputes the identical digest), then
-	// chain_hash = ChainHash(prevChain, content_hash). prevChain is the prior
-	// event's chain_hash (or the session genesis for the first chained event).
+	// just marshaled, which are ALSO persisted VERBATIM in the RAW
+	// events.payload_canonical BYTEA column (so verify-on-read hashes the identical
+	// raw stored bytes — no decode/re-marshal — and structural/additive tampering
+	// of the stored payload is detectable). chain_hash = ChainHash(prevChain,
+	// content_hash); prevChain is the prior event's chain_hash (or the session
+	// genesis for the first chained event). The events.payload JSONB is retained as
+	// a queryable, NON-authoritative convenience copy of the same bytes.
 	contentHash := domain.ContentHash(payload)
 	chainHash := domain.ChainHash(args.prevChain, contentHash)
 
@@ -138,11 +142,11 @@ func (s *Store) insertEvent(ctx context.Context, tx pgx.Tx, args insertEventArgs
 		blobArg = blobRef
 	}
 	err = tx.QueryRow(ctx, `
-		INSERT INTO events (tenant_id, session_id, seq, request_id, event_type, schema_version, payload, blob_ref, actor, content_hash, chain_hash)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		INSERT INTO events (tenant_id, session_id, seq, request_id, event_type, schema_version, payload, payload_canonical, blob_ref, actor, content_hash, chain_hash)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		RETURNING created_at`,
 		args.tenantID, args.sessionID, args.seq, args.requestID,
-		string(args.in.Event.EventType()), schemaVersion, payload, blobArg, string(actor),
+		string(args.in.Event.EventType()), schemaVersion, payload, payload, blobArg, string(actor),
 		contentHash, chainHash,
 	).Scan(&createdAt)
 	if err != nil {
@@ -150,17 +154,18 @@ func (s *Store) insertEvent(ctx context.Context, tx pgx.Tx, args insertEventArgs
 	}
 
 	return domain.EventEnvelope{
-		Type:          args.in.Event.EventType(),
-		Seq:           args.seq,
-		SessionID:     args.sessionID,
-		TenantID:      args.tenantID,
-		RequestID:     args.requestID,
-		SchemaVersion: schemaVersion,
-		Actor:         actor,
-		CreatedAt:     createdAt,
-		Event:         args.in.Event,
-		ContentHash:   contentHash,
-		ChainHash:     chainHash,
+		Type:             args.in.Event.EventType(),
+		Seq:              args.seq,
+		SessionID:        args.sessionID,
+		TenantID:         args.tenantID,
+		RequestID:        args.requestID,
+		SchemaVersion:    schemaVersion,
+		Actor:            actor,
+		CreatedAt:        createdAt,
+		Event:            args.in.Event,
+		PayloadCanonical: payload,
+		ContentHash:      contentHash,
+		ChainHash:        chainHash,
 	}, nil
 }
 
@@ -178,41 +183,57 @@ func eventBlobRef(e domain.Event) string {
 // [domain.EventEnvelope]s, decoding each payload back into its typed
 // [domain.Event] via [decodePayload]. tenantID is stamped on each envelope (the
 // rows are already tenant-scoped by RLS, so the value is the caller's tenant).
+//
+// The typed payload is decoded from the RAW events.payload_canonical bytes when
+// present — the exact bytes content_hash is taken over — so the served event is
+// the hash-protected payload; only an unchained pre-0009 row (NULL
+// payload_canonical) falls back to the legacy events.payload JSONB. The raw
+// canonical bytes are carried on the envelope ([domain.EventEnvelope.PayloadCanonical])
+// so VerifyChainIntegrity can re-hash them directly (ADR-0033).
 func scanEnvelopes(rows pgx.Rows, tenantID string) ([]domain.EventEnvelope, error) {
 	var out []domain.EventEnvelope
 	for rows.Next() {
 		var (
-			sessionID     string
-			seq           int64
-			requestID     string
-			eventType     string
-			schemaVersion int
-			payload       []byte
-			blobRef       *string
-			actor         string
-			createdAt     time.Time
-			contentHash   []byte // nullable: nil for unchained pre-0009 rows.
-			chainHash     []byte // nullable: nil for unchained pre-0009 rows.
+			sessionID        string
+			seq              int64
+			requestID        string
+			eventType        string
+			schemaVersion    int
+			payload          []byte
+			payloadCanonical []byte // nullable: nil for unchained pre-0009 rows.
+			blobRef          *string
+			actor            string
+			createdAt        time.Time
+			contentHash      []byte // nullable: nil for unchained pre-0009 rows.
+			chainHash        []byte // nullable: nil for unchained pre-0009 rows.
 		)
-		if err := rows.Scan(&sessionID, &seq, &requestID, &eventType, &schemaVersion, &payload, &blobRef, &actor, &createdAt, &contentHash, &chainHash); err != nil {
+		if err := rows.Scan(&sessionID, &seq, &requestID, &eventType, &schemaVersion, &payload, &payloadCanonical, &blobRef, &actor, &createdAt, &contentHash, &chainHash); err != nil {
 			return nil, fmt.Errorf("eventstore: scanning event row: %w", err)
 		}
-		evt, err := decodePayload(domain.EventType(eventType), payload)
+		// Decode the typed payload from the authoritative raw canonical bytes when
+		// present (so the served event is the hash-protected payload); fall back to
+		// the legacy JSONB for pre-0009 rows that have no payload_canonical.
+		decodeFrom := payloadCanonical
+		if decodeFrom == nil {
+			decodeFrom = payload
+		}
+		evt, err := decodePayload(domain.EventType(eventType), decodeFrom)
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, domain.EventEnvelope{
-			Type:          domain.EventType(eventType),
-			Seq:           seq,
-			SessionID:     sessionID,
-			TenantID:      tenantID,
-			RequestID:     requestID,
-			SchemaVersion: schemaVersion,
-			Actor:         domain.Actor(actor),
-			CreatedAt:     createdAt,
-			Event:         evt,
-			ContentHash:   contentHash,
-			ChainHash:     chainHash,
+			Type:             domain.EventType(eventType),
+			Seq:              seq,
+			SessionID:        sessionID,
+			TenantID:         tenantID,
+			RequestID:        requestID,
+			SchemaVersion:    schemaVersion,
+			Actor:            domain.Actor(actor),
+			CreatedAt:        createdAt,
+			Event:            evt,
+			PayloadCanonical: payloadCanonical,
+			ContentHash:      contentHash,
+			ChainHash:        chainHash,
 		})
 	}
 	if err := rows.Err(); err != nil {

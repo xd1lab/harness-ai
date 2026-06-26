@@ -46,24 +46,24 @@ func TestVerifyChainIntegrity_UntamperedIsValid(t *testing.T) {
 }
 
 // TestVerifyChainIntegrity_DetectsTamperedPayload covers AC-8(b): directly
-// UPDATE one event's payload JSONB (via the owner connection, payload only — the
-// stored content_hash is left stale), then verify reports Valid=false with
-// FirstBadSeq = that seq and a CONTENT-mismatch reason. The recompute uses the
-// STORED payload bytes, so the tampered row no longer re-hashes to its stored
-// content_hash.
+// UPDATE one event's payload_canonical (the AUTHORITATIVE raw bytes; via the
+// owner connection, leaving the stored content_hash stale), then verify reports
+// Valid=false with FirstBadSeq = that seq and a CONTENT-mismatch reason. Verify
+// hashes the RAW stored payload_canonical bytes, so the tampered row no longer
+// re-hashes to its stored content_hash.
 func TestVerifyChainIntegrity_DetectsTamperedPayload(t *testing.T) {
 	h := newHarness(t)
 	tenantID, sessionID := h.seedTenantAndSession(t)
 	ctx := tenantCtx(tenantID)
 	seedNEvents(ctx, t, h.store, sessionID, 6)
 
-	// Tamper seq 4's payload directly in SQL (owner bypasses RLS). The stored
-	// content_hash/chain_hash are NOT updated, so the recompute will diverge.
+	// Tamper seq 4's payload_canonical directly in SQL (owner bypasses RLS). The
+	// stored content_hash/chain_hash are NOT updated, so the recompute diverges.
 	owner := h.ownerConn(t)
 	if _, err := owner.Exec(context.Background(),
-		`UPDATE events SET payload = '{"TurnID":"TAMPERED","Model":"evil"}'::jsonb WHERE session_id = $1 AND seq = 4`,
+		`UPDATE events SET payload_canonical = convert_to('{"TurnID":"TAMPERED","Model":"evil"}','UTF8') WHERE session_id = $1 AND seq = 4`,
 		sessionID); err != nil {
-		t.Fatalf("tamper payload: %v", err)
+		t.Fatalf("tamper payload_canonical: %v", err)
 	}
 
 	res, err := h.store.VerifyChainIntegrity(ctx, sessionID, 0, 0)
@@ -260,7 +260,7 @@ func TestVerifyChainIntegrity_WindowedSeedsFromPriorStoredChain(t *testing.T) {
 	// linked through seq 4 correctly.
 	owner := h.ownerConn(t)
 	if _, err := owner.Exec(context.Background(),
-		`UPDATE events SET payload = '{"TurnID":"TAMPER","Model":"x"}'::jsonb WHERE session_id = $1 AND seq = 5`,
+		`UPDATE events SET payload_canonical = convert_to('{"TurnID":"TAMPER","Model":"x"}','UTF8') WHERE session_id = $1 AND seq = 5`,
 		sessionID); err != nil {
 		t.Fatalf("tamper seq 5: %v", err)
 	}

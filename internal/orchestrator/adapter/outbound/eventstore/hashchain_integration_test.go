@@ -19,6 +19,7 @@ package eventstore
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/xd1lab/harness-ai/internal/orchestrator/app"
@@ -361,36 +362,33 @@ func TestAppend_HashParityWithDomainHelpers(t *testing.T) {
 	}
 }
 
-// TestVerify_ReMarshalRoundTripIsByteIdentical covers the T-04 round-trip pin
-// (AC-7 documented limitation guard) for EVERY concrete v1 event kind.
+// TestVerify_CanonicalBytesAreVerbatimAppendBytes is the raw-bytes content pin
+// (ADR-0033) for EVERY concrete v1 event kind. It replaces the obsolete
+// decode-then-re-marshal round-trip pin: VerifyChainIntegrity no longer hashes a
+// re-marshaled decode of the JSONB — it hashes the RAW stored
+// events.payload_canonical bytes DIRECTLY. So the load-bearing invariant is now:
 //
-// IMPORTANT — what "round-trip" means here. The events.payload column is JSONB, so
-// Postgres re-serializes the bytes Go wrote into its OWN canonical jsonb form
-// (spaces after ':'/',', its own key order). So the column text is NOT byte-equal
-// to Go's compact json.Marshal output — and that is FINE, because production
-// VerifyChainIntegrity never hashes the raw JSONB text: it decodes the payload to
-// the typed struct and re-hashes domain.MarshalEventPayload(decoded) (Go's compact
-// bytes). The append side ALSO hashed domain.MarshalEventPayload(event) (the
-// marshalPayload helper). So the load-bearing invariant verify depends on is:
+//	stored events.payload_canonical  ==  MarshalEventPayload( original_event )   (verbatim)
+//	ContentHash( stored payload_canonical )  ==  stored content_hash
 //
-//	MarshalEventPayload( decode( stored_jsonb ) )  ==  MarshalEventPayload( original_event )
+// i.e. the column holds the EXACT append-side bytes content_hash was taken over,
+// verbatim (a BYTEA Postgres does NOT normalize), so a re-hash of the stored
+// bytes equals the stored content_hash for every kind — including the map-bearing
+// ApprovalRequested and slice-bearing PlanUpdated. This is schema-version-agnostic:
+// it hashes whatever bytes are stored, so it neither relies on nor is broken by a
+// future field-ordering/escaping change or extra JSONB keys.
 //
-// i.e. decoding the JSONB back through the typed struct and re-marshaling
-// reproduces the ORIGINAL append-side bytes — byte-for-byte — so the recomputed
-// content_hash equals the stored content_hash. If a future schema_version writes
-// extra JSONB keys, or a json.Marshal field-ordering/escaping change lands, this
-// round-trip diverges and verify would falsely flag an untampered row; this test is
-// the regression alarm that trips first. It asserts the re-marshal equals the
-// original append bytes AND equals the stored content_hash, for every kind.
-func TestVerify_ReMarshalRoundTripIsByteIdentical(t *testing.T) {
+// It also asserts the legacy events.payload JSONB still round-trips through decode
+// (it remains a queryable, non-authoritative copy) so the pre-0009 fallback path
+// stays exercised.
+func TestVerify_CanonicalBytesAreVerbatimAppendBytes(t *testing.T) {
 	h := newHarness(t)
 	tenantID, sessionID := h.seedTenantAndSession(t)
 	ctx := tenantCtx(tenantID)
 
 	events := fullV1EventSet()
 	// Sanity: the fixture covers the whole closed discriminator set, so a newly
-	// added event kind forces this test to be extended (it would otherwise silently
-	// under-cover the round-trip). Count the distinct EventType values.
+	// added event kind forces this test to be extended. Count distinct EventTypes.
 	seenTypes := map[domain.EventType]bool{}
 	for _, ev := range events {
 		seenTypes[ev.EventType()] = true
@@ -419,44 +417,34 @@ func TestVerify_ReMarshalRoundTripIsByteIdentical(t *testing.T) {
 			t.Fatalf("marshal original seq=%d (%s): %v", seq, ev.EventType(), err)
 		}
 
-		// Read the stored content_hash and the JSONB the column actually holds (the
-		// Postgres-canonical re-serialization — deliberately decoded, not hashed).
+		// Read the stored content_hash, the RAW payload_canonical bytes (read as
+		// bytea, no normalization), and the legacy JSONB (decoded for the fallback).
 		var storedContent []byte
+		var storedCanonical []byte
 		var storedJSONB []byte
 		if err := owner.QueryRow(context.Background(),
-			"SELECT content_hash, payload::text::bytea FROM events WHERE session_id = $1 AND seq = $2",
-			sessionID, seq).Scan(&storedContent, &storedJSONB); err != nil {
+			"SELECT content_hash, payload_canonical, payload::text::bytea FROM events WHERE session_id = $1 AND seq = $2",
+			sessionID, seq).Scan(&storedContent, &storedCanonical, &storedJSONB); err != nil {
 			t.Fatalf("read row seq=%d: %v", seq, err)
 		}
 
-		// The verify-side bytes: decode the STORED JSONB back to the typed struct and
-		// re-marshal it (the exact path VerifyChainIntegrity takes via scanEnvelopes +
-		// domain.MarshalEventPayload). This is what gets re-hashed.
-		decoded, err := decodePayload(ev.EventType(), storedJSONB)
-		if err != nil {
-			t.Fatalf("decode seq=%d (%s): %v", seq, ev.EventType(), err)
+		// The load-bearing invariant: payload_canonical is the VERBATIM append bytes.
+		if !bytes.Equal(storedCanonical, appendBytes) {
+			t.Fatalf("seq %d (%s): payload_canonical is NOT the verbatim append bytes\n append=%s\n stored=%s",
+				seq, ev.EventType(), appendBytes, storedCanonical)
 		}
-		reMarshaled, err := domain.MarshalEventPayload(decoded)
-		if err != nil {
-			t.Fatalf("re-marshal seq=%d (%s): %v", seq, ev.EventType(), err)
+		// Re-hashing the RAW stored bytes (exactly what verify does) equals the
+		// stored content_hash.
+		if recomputed := domain.ContentHash(storedCanonical); !bytes.Equal(recomputed, storedContent) {
+			t.Fatalf("seq %d (%s): ContentHash(stored payload_canonical) %x != stored content_hash %x", seq, ev.EventType(), recomputed, storedContent)
 		}
-
-		// The load-bearing round-trip: re-marshal of the decoded stored payload ==
-		// the original append-side bytes. If this diverges, verify falsely flags the
-		// row (the documented T-04 limitation manifesting).
-		if !bytes.Equal(reMarshaled, appendBytes) {
-			t.Fatalf("seq %d (%s): re-marshal round-trip DIVERGED from append bytes (verify would falsely flag this row)\n append=%s\n re-mar=%s",
-				seq, ev.EventType(), appendBytes, reMarshaled)
-		}
-		// And the content_hash verify recomputes from the re-marshaled bytes equals
-		// the stored content_hash (the exact property verify relies on).
-		if recomputed := domain.ContentHash(reMarshaled); !bytes.Equal(recomputed, storedContent) {
-			t.Fatalf("seq %d (%s): recomputed content_hash %x != stored %x", seq, ev.EventType(), recomputed, storedContent)
+		// The legacy JSONB still decodes (non-authoritative queryable copy).
+		if _, err := decodePayload(ev.EventType(), storedJSONB); err != nil {
+			t.Fatalf("legacy JSONB decode seq=%d (%s): %v", seq, ev.EventType(), err)
 		}
 	}
 
-	// The whole stream verifies clean (the round-trip holding for every kind is
-	// exactly what makes VerifyChainIntegrity report Valid over the full set).
+	// The whole stream verifies clean over the raw stored bytes for every kind.
 	res, err := h.store.VerifyChainIntegrity(ctx, sessionID, 0, 0)
 	if err != nil {
 		t.Fatalf("VerifyChainIntegrity over full v1 set: %v", err)
@@ -464,6 +452,99 @@ func TestVerify_ReMarshalRoundTripIsByteIdentical(t *testing.T) {
 	if !res.Valid || res.Checked != len(events) {
 		t.Fatalf("full v1 set verify = {Valid:%v Checked:%d FirstBadSeq:%d Reason:%q}, want Valid=true Checked=%d",
 			res.Valid, res.Checked, res.FirstBadSeq, res.Reason, len(events))
+	}
+}
+
+// TestVerify_DetectsStructuralJSONBTamper is the explicit guard for the
+// previously-undetected tamper class (ADR-0033 hardening): mutating the stored
+// payload bytes by (a) reordering keys, (b) adding whitespace, or (c) injecting
+// an EXTRA key that the v1 struct DROPS on decode. Under the old
+// decode-then-re-marshal verify these all re-marshaled to the identical Go bytes
+// and went UNDETECTED. Hashing the RAW payload_canonical bytes catches every one:
+// the stored bytes differ, so the recomputed content_hash diverges.
+func TestVerify_DetectsStructuralJSONBTamper(t *testing.T) {
+	cases := []struct {
+		name      string
+		tamperSQL string // the new payload_canonical value (UTF8 text the tamperer writes)
+	}{
+		{
+			name:      "reordered keys",
+			tamperSQL: `{"Model":"claude","TurnID":"t1"}`, // struct order is TurnID,Model
+		},
+		{
+			name:      "injected whitespace",
+			tamperSQL: `{"TurnID": "t1", "Model": "claude"}`,
+		},
+		{
+			name:      "extra key dropped on decode",
+			tamperSQL: `{"TurnID":"t1","Model":"claude","EVIL":"injected"}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			tenantID, sessionID := h.seedTenantAndSession(t)
+			ctx := tenantCtx(tenantID)
+
+			// seq 1: the exact event whose canonical bytes are {"TurnID":"t1","Model":"claude"}.
+			ev := domain.TurnStarted{TurnID: "t1", Model: "claude"}
+			if _, err := h.store.Append(ctx, sessionID, 0, 0, newUUID(t),
+				app.AppendInput{Event: ev, Actor: domain.ActorSystem}); err != nil {
+				t.Fatalf("append: %v", err)
+			}
+			// A couple more chained events (seq 2,3) so the chain extends past the
+			// tampered row — the tamper at seq 1 is still the first bad seq.
+			if _, err := appendOne(ctx, h.store, sessionID, 1, 0, newUUID(t), "turn-2"); err != nil {
+				t.Fatalf("append seq 2: %v", err)
+			}
+			if _, err := appendOne(ctx, h.store, sessionID, 2, 0, newUUID(t), "turn-3"); err != nil {
+				t.Fatalf("append seq 3: %v", err)
+			}
+
+			// Pre-check: a json.Unmarshal of the tamper text into TurnStarted then a
+			// re-marshal reproduces the ORIGINAL canonical bytes — i.e. the OLD verify
+			// (decode->re-marshal) would NOT have caught this. This makes the test a
+			// genuine guard against the false-negative, not a tautology.
+			origBytes, err := domain.MarshalEventPayload(ev)
+			if err != nil {
+				t.Fatalf("marshal original: %v", err)
+			}
+			reDecoded, err := decodePayload(domain.EventTurnStarted, []byte(tc.tamperSQL))
+			if err != nil {
+				t.Fatalf("decode tamper text: %v", err)
+			}
+			reMarshaled, err := domain.MarshalEventPayload(reDecoded)
+			if err != nil {
+				t.Fatalf("re-marshal: %v", err)
+			}
+			if !bytes.Equal(reMarshaled, origBytes) {
+				t.Fatalf("precondition failed: tamper %q does not re-marshal to the original bytes (%s vs %s); this case would not prove the false-negative is closed",
+					tc.name, reMarshaled, origBytes)
+			}
+
+			// Tamper the AUTHORITATIVE raw bytes (content_hash left stale).
+			owner := h.ownerConn(t)
+			if _, err := owner.Exec(context.Background(),
+				`UPDATE events SET payload_canonical = convert_to($2,'UTF8') WHERE session_id = $1 AND seq = 1`,
+				sessionID, tc.tamperSQL); err != nil {
+				t.Fatalf("tamper payload_canonical: %v", err)
+			}
+
+			// The raw-bytes verify MUST detect it at seq 1.
+			res, err := h.store.VerifyChainIntegrity(ctx, sessionID, 0, 0)
+			if err != nil {
+				t.Fatalf("VerifyChainIntegrity: %v", err)
+			}
+			if res.Valid {
+				t.Fatalf("structural tamper %q went UNDETECTED (Valid=true) — the false-negative is NOT closed", tc.name)
+			}
+			if res.FirstBadSeq != 1 {
+				t.Fatalf("FirstBadSeq = %d, want 1 (the tampered seq)", res.FirstBadSeq)
+			}
+			if !strings.Contains(strings.ToLower(res.Reason), "content") {
+				t.Fatalf("Reason = %q, want a content-hash-mismatch classification", res.Reason)
+			}
+		})
 	}
 }
 
@@ -490,13 +571,14 @@ func TestVerify_DetectorIsRedProof(t *testing.T) {
 		t.Fatalf("clean verify = {Valid:%v Checked:%d}, want Valid=true Checked=5", clean.Valid, clean.Checked)
 	}
 
-	// (2) Mutate seq 2's payload (content_hash left stale). The detector MUST flip to
-	// Valid=false at exactly that seq — proving the comparison is load-bearing.
+	// (2) Mutate seq 2's payload_canonical (content_hash left stale). The detector
+	// MUST flip to Valid=false at exactly that seq — proving the comparison is
+	// load-bearing.
 	owner := h.ownerConn(t)
 	if _, err := owner.Exec(context.Background(),
-		`UPDATE events SET payload = '{"TurnID":"flipped","Model":"x"}'::jsonb WHERE session_id = $1 AND seq = 2`,
+		`UPDATE events SET payload_canonical = convert_to('{"TurnID":"flipped","Model":"x"}','UTF8') WHERE session_id = $1 AND seq = 2`,
 		sessionID); err != nil {
-		t.Fatalf("mutate payload: %v", err)
+		t.Fatalf("mutate payload_canonical: %v", err)
 	}
 	dirty, err := h.store.VerifyChainIntegrity(ctx, sessionID, 0, 0)
 	if err != nil {

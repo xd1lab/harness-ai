@@ -123,17 +123,21 @@ func TestDevStore_VerifyChainIntegrity_Untampered(t *testing.T) {
 }
 
 // TestDevStore_VerifyChainIntegrity_DetectsTamper covers AC-10's dev tamper test:
-// mutating a stored envelope's Event (so its recomputed content_hash no longer
-// matches the stored one) makes verify report Valid=false at that seq.
+// mutating a stored envelope's authoritative PayloadCanonical bytes (so its
+// recomputed content_hash no longer matches the stored one) makes verify report
+// Valid=false at that seq. Dev verify hashes the RAW PayloadCanonical bytes
+// (parity with the prod pgx store, which hashes events.payload_canonical), so the
+// tamper must mutate those bytes — not just the decoded Event.
 func TestDevStore_VerifyChainIntegrity_DetectsTamper(t *testing.T) {
 	st, sid := seedDevStream(t, 5)
 
-	// Tamper the stored envelope at seq 3 IN PLACE: change the Event payload but
-	// leave the stored content_hash untouched, simulating a mutated durable row.
+	// Tamper the stored envelope at seq 3 IN PLACE: mutate the canonical payload
+	// bytes but leave the stored content_hash untouched, simulating a mutated
+	// durable row.
 	st.mu.Lock()
 	for i := range st.sessions[sid] {
 		if st.sessions[sid][i].Seq == 3 {
-			st.sessions[sid][i].Event = domain.TurnStarted{TurnID: "TAMPERED", Model: "evil"}
+			st.sessions[sid][i].PayloadCanonical = []byte(`{"TurnID":"TAMPERED","Model":"evil"}`)
 		}
 	}
 	st.mu.Unlock()

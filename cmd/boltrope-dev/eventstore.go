@@ -136,14 +136,15 @@ func (s *Store) Append(
 		contentHash := domain.ContentHash(payload)
 		chainHash := domain.ChainHash(prev, contentHash)
 		env := domain.EventEnvelope{
-			Type:        e.Event.EventType(),
-			Seq:         agg.HeadSeq,
-			SessionID:   sessionID,
-			RequestID:   requestID,
-			Actor:       e.Actor,
-			Event:       e.Event,
-			ContentHash: contentHash,
-			ChainHash:   chainHash,
+			Type:             e.Event.EventType(),
+			Seq:              agg.HeadSeq,
+			SessionID:        sessionID,
+			RequestID:        requestID,
+			Actor:            e.Actor,
+			Event:            e.Event,
+			PayloadCanonical: payload, // the exact bytes content_hash is taken over (dev/prod parity)
+			ContentHash:      contentHash,
+			ChainHash:        chainHash,
 		}
 		s.sessions[sessionID] = append(s.sessions[sessionID], env)
 		envelopes = append(envelopes, env)
