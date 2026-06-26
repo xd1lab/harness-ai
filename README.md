@@ -205,7 +205,7 @@ Every SSE frame carries its durable event seq as the `id:` field, so reconnectin
 
 **Python, zero SDK:** [examples/python/run_task.py](examples/python/run_task.py) is a complete ~100-line client (`pip install requests`) that creates a session, streams a run, and answers approval prompts interactively.
 
-Routes: `POST /v1/sessions` · `GET /v1/sessions` · `GET /v1/sessions/{id}` · `GET /v1/sessions/{id}/usage` · `GET /v1/sessions/{id}/events` · `GET /v1/sessions/{id}/state` · `GET /v1/sessions/{id}/cost` · `GET /v1/cost` · `POST /v1/sessions/{id}/run` (SSE) · `POST /v1/sessions/{id}/control` · `POST /v1/sessions/{id}/fork`.
+Routes: `POST /v1/sessions` · `GET /v1/sessions` · `GET /v1/sessions/{id}` · `GET /v1/sessions/{id}/usage` · `GET /v1/sessions/{id}/events` · `GET /v1/sessions/{id}/state` · `GET /v1/sessions/{id}/cost` · `GET /v1/cost` · `GET /v1/sessions/{id}/integrity` · `POST /v1/sessions/{id}/run` (SSE) · `POST /v1/sessions/{id}/control` · `POST /v1/sessions/{id}/fork`.
 
 ### Admin/tenant session management
 
@@ -218,6 +218,22 @@ Routes: `POST /v1/sessions` · `GET /v1/sessions` · `GET /v1/sessions/{id}` · 
 ### Session/tenant cost
 
 `GET /v1/sessions/{id}/cost` returns a session's cost broken down **per model** (sorted by cost; an uncorrelated model is the `unknown` bucket) plus the session total; `GET /v1/cost` returns your tenant's per-model aggregate, the tenant total, and the count of distinct sessions carrying cost. The rollup is persisted by `projectord` into a rebuildable `session_cost_events` projection — idempotent over the projection cursor (keyed on each event's `global_id`), with the per-model attribution correlated at write time (`TurnStarted.Model` ⋈ the terminal turn by `TurnID`). The event log stays the billing authority; the projection is fully rebuildable. Both endpoints are RLS-scoped to your tenant ([ADR-0026](docs/decisions/0026-session-tenant-cost-read.md)).
+
+### Tamper-evident audit
+
+The event log isn't just append-only by convention — it's **cryptographically chained**, so a later mutation of any stored event is *detectable*. At append time, inside the same single-writer transaction that already enforces optimistic concurrency, lease fencing, and `request_id` idempotency, each event gets a **`content_hash`** (SHA-256 over the exact stored payload bytes) and a per-session **`chain_hash`** = `SHA256(prev_chain_hash ‖ content_hash)`, folded in `seq` order from a session-derived genesis. The running head lives on `sessions.chain_head`; the chain is **per-session** (it aligns with seq contiguity, RLS, and the session as the audit unit) ([ADR-0033](docs/decisions/0033-tamper-evident-hash-chain.md)).
+
+Verify a session from any facade — it re-reads the events, recomputes both hashes, and compares against what's stored:
+
+```bash
+# REST: returns {valid, first_bad_seq, reason, checked}. Optional ?from_seq=&to_seq=.
+curl -fsS "localhost:8080/v1/sessions/$SESSION/integrity"
+# => {"valid":true,"firstBadSeq":"0","reason":"","checked":"11"}
+```
+
+If anyone `UPDATE`s a stored payload, its `content_hash` no longer matches (a **content mismatch**); rewrite a `chain_hash` and the link no longer verifies (a **broken link**) — either way `valid` is `false` and `first_bad_seq` points at the offending event. The two integrity digests are also exposed (as non-sensitive `content_hash`/`chain_hash` fields) on every event descriptor from [`GET /v1/sessions/{id}/events`](#event-log-read--time-travel), regardless of `include_payload`. The same operation is available as the gRPC `VerifySessionIntegrity` RPC and the MCP `verify_session_integrity` tool, and is RLS-scoped to your tenant.
+
+**Forward-only, and tamper-*evident* not tamper-*proof*.** The hash columns are added by [migration 0009](migrations/0009_event_hash_chain.up.sql) — additive and nullable, so events written before it stay unchained and verify gracefully skips that leading prefix. This batch delivers the detection substrate; it does **not** stop an attacker with full database write access from forging a self-consistent rewrite. Anchoring the chain head **outside** the database — **signed checkpoints + a SIEM/WORM export** — is the follow-on that makes the log tamper-*proof*, and is on the [roadmap](#roadmap--deferred).
 
 ---
 
@@ -232,9 +248,10 @@ The endpoint is `POST /mcp` on the **same** HTTP listener as the REST facade and
 curl -fsS -X POST localhost:8080/mcp -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
 
-# 2. tools/list — the 11 tools: create_session, run, get_session, control, fork,
+# 2. tools/list — the 12 tools: create_session, run, get_session, control, fork,
 #    list_sessions, get_session_usage (admin reads), list_session_events,
-#    get_state_at_seq (event reads), get_session_cost, get_tenant_cost (cost reads).
+#    get_state_at_seq (event reads), get_session_cost, get_tenant_cost (cost reads),
+#    verify_session_integrity (tamper-evident audit verify).
 # 3. tools/call run with _meta.progressToken — the reply streams back on a
 #    text/event-stream leg as notifications/progress, then the terminal result.
 ```

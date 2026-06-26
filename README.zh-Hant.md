@@ -205,7 +205,7 @@ curl -fsS -X POST "localhost:8080/v1/sessions/$SESSION/control" \
 
 **Python,零 SDK:** [examples/python/run_task.py](examples/python/run_task.py) 是一個完整的約 100 行客戶端(`pip install requests`),會建立會話、串流一次執行,並互動式回答核可提示。
 
-路由:`POST /v1/sessions` · `GET /v1/sessions` · `GET /v1/sessions/{id}` · `GET /v1/sessions/{id}/usage` · `GET /v1/sessions/{id}/events` · `GET /v1/sessions/{id}/state` · `GET /v1/sessions/{id}/cost` · `GET /v1/cost` · `POST /v1/sessions/{id}/run`(SSE)· `POST /v1/sessions/{id}/control` · `POST /v1/sessions/{id}/fork`。
+路由:`POST /v1/sessions` · `GET /v1/sessions` · `GET /v1/sessions/{id}` · `GET /v1/sessions/{id}/usage` · `GET /v1/sessions/{id}/events` · `GET /v1/sessions/{id}/state` · `GET /v1/sessions/{id}/cost` · `GET /v1/cost` · `GET /v1/sessions/{id}/integrity` · `POST /v1/sessions/{id}/run`(SSE)· `POST /v1/sessions/{id}/control` · `POST /v1/sessions/{id}/fork`。
 
 ### 管理/租戶會話管理
 
@@ -218,6 +218,22 @@ curl -fsS -X POST "localhost:8080/v1/sessions/$SESSION/control" \
 ### 會話/租戶成本
 
 `GET /v1/sessions/{id}/cost` 回傳單一會話**依模型**拆分的成本(依成本排序;無法關聯的模型落入 `unknown` 桶)加上會話總計;`GET /v1/cost` 回傳你租戶的依模型彙總、租戶總計,以及有成本紀錄的相異會話數。此上捲由 `projectord` 持久化進可重建的 `session_cost_events` 投影——對投影 cursor 冪等(以每個事件的 `global_id` 為鍵),per-model 歸因在寫入時完成關聯(`TurnStarted.Model` ⋈ 以 `TurnID` 對應的終結回合)。事件日誌仍是計費權威;投影完全可重建。兩個端點皆以 RLS 限定於你的租戶([ADR-0026](docs/decisions/0026-session-tenant-cost-read.md))。
+
+### 防竄改稽核(Tamper-evident audit)
+
+事件日誌不只是依慣例 append-only——它是**密碼學鏈接**的,因此任何對已儲存事件的後續竄改都**可被偵測**。在 append 時,於同一個已負責樂觀並行控制、租約圍欄(lease fencing)與 `request_id` 冪等的單寫者交易內,每個事件都會得到一個 **`content_hash`**(對該列已儲存酬載位元組的 SHA-256)與一個 per-session 的 **`chain_hash`** = `SHA256(prev_chain_hash ‖ content_hash)`,依 `seq` 順序從一個由 session 衍生的 genesis 折算而成。運行中的鏈頭存於 `sessions.chain_head`;此鏈是 **per-session** 的(對齊 seq 連續性、RLS,以及「session 即稽核單位」)([ADR-0033](docs/decisions/0033-tamper-evident-hash-chain.md))。
+
+從任一外觀都可驗證一個會話——它會重新讀取事件、重算兩個雜湊,並與已儲存值比對:
+
+```bash
+# REST:回傳 {valid, first_bad_seq, reason, checked}。可選 ?from_seq=&to_seq=。
+curl -fsS "localhost:8080/v1/sessions/$SESSION/integrity"
+# => {"valid":true,"firstBadSeq":"0","reason":"","checked":"11"}
+```
+
+若有人 `UPDATE` 了某筆已儲存酬載,其 `content_hash` 便不再相符(**content mismatch**);改寫某個 `chain_hash`,該連結便無法驗證(**broken link**)——兩種情形下 `valid` 皆為 `false`,而 `first_bad_seq` 指向出問題的事件。這兩個完整性摘要也會(作為非敏感的 `content_hash`/`chain_hash` 欄位)出現在 [`GET /v1/sessions/{id}/events`](#事件日誌讀取--時光回溯) 的每個事件描述符上,無論 `include_payload` 為何。同一操作也以 gRPC `VerifySessionIntegrity` RPC 與 MCP `verify_session_integrity` 工具提供,並以 RLS 限定於你的租戶。
+
+**forward-only,且是防竄改「可偵測」而非「不可竄改」。** 這些雜湊欄位由[遷移 0009](migrations/0009_event_hash_chain.up.sql) 新增——附加且可為 NULL,因此在它之前寫入的事件保持未鏈接,而驗證會優雅地略過該前綴。本批次交付的是偵測基底;它**並不**能阻止具備完整資料庫寫入權的攻擊者偽造一份自洽的改寫。把鏈頭錨定在**資料庫之外**——**簽章檢查點 + SIEM/WORM 匯出**——才是讓日誌「不可竄改(tamper-proof)」的後續工作,已列入[路線圖](#路線圖與延後項目)。
 
 ---
 
@@ -232,9 +248,10 @@ Boltrope 也把**自己**暴露為一個 [Model Context Protocol](https://modelc
 curl -fsS -X POST localhost:8080/mcp -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
 
-# 2. tools/list — 11 個工具:create_session、run、get_session、control、fork、
+# 2. tools/list — 12 個工具:create_session、run、get_session、control、fork、
 #    list_sessions、get_session_usage(管理讀取)、list_session_events、
-#    get_state_at_seq(事件讀取)、get_session_cost、get_tenant_cost(成本讀取)。
+#    get_state_at_seq(事件讀取)、get_session_cost、get_tenant_cost(成本讀取)、
+#    verify_session_integrity(防竄改稽核驗證)。
 # 3. tools/call run 帶 _meta.progressToken — 回覆會以 text/event-stream 串流為
 #    notifications/progress,最後送終局 result。
 ```
