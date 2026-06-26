@@ -20,6 +20,8 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -27,9 +29,11 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/xd1lab/harness-ai/internal/orchestrator/projection"
+	"github.com/xd1lab/harness-ai/internal/platform/auditsign"
 	"github.com/xd1lab/harness-ai/internal/platform/blob"
 	"github.com/xd1lab/harness-ai/internal/platform/config"
 	"github.com/xd1lab/harness-ai/internal/platform/daemon"
+	"github.com/xd1lab/harness-ai/internal/platform/secret"
 )
 
 const serviceName = "projectord"
@@ -55,6 +59,67 @@ func loadProjectorSettings() projectorSettings {
 	}
 }
 
+// auditSettings are the Batch-5B (ADR-0034) operator-tier knobs gating the signed
+// audit-checkpoint signer and the SIEM exporter. Both run as SEPARATE projection
+// Runners with their OWN subscription names (independent cursors), so a failing
+// SIEM sink can never stall cost-rollup (AC-17). Each consumer is env-gated:
+//   - the signer attaches only when BOLTROPE_AUDIT_SIGNING_KEY is configured (else
+//     a single loud WARN at startup; no ephemeral key — AC-6);
+//   - the SIEM exporter attaches only when a file or HTTP sink is configured.
+//
+// Secret resolution uses the bare env var names (NO prefix), matching the names the
+// auditsign package and the SIEMExporter document — i.e. EnvSecrets is constructed
+// without a prefix so BOLTROPE_AUDIT_SIGNING_KEY resolves to $BOLTROPE_AUDIT_SIGNING_KEY.
+type auditSettings struct {
+	// signerSubscription is the event_subscriptions row the audit-checkpoint signer
+	// owns (default "audit-checkpoint"); independent of cost-rollup/siem-export.
+	signerSubscription string
+	// siemSubscription is the event_subscriptions row the SIEM exporter owns
+	// (default "siem-export"); independent of cost-rollup/audit-checkpoint.
+	siemSubscription string
+	// checkpointEvery is the leaf-count checkpoint boundary N
+	// (BOLTROPE_AUDIT_CHECKPOINT_EVERY); <=0 lets the signer use its default.
+	checkpointEvery int
+
+	// signingKey is the raw BOLTROPE_AUDIT_SIGNING_KEY value (presence gates the
+	// signer). It is read only to test presence here; the auditsign signer resolves
+	// and holds the key material as a redacting secret — this field is the bare
+	// gating flag and is NEVER logged.
+	signingKey string
+	// siemFile / siemHTTPURL are the SIEM sink targets (presence gates the exporter).
+	siemFile    string
+	siemHTTPURL string
+}
+
+// loadAuditSettings reads the Batch-5B audit-checkpoint + SIEM environment. It does
+// NOT resolve the private key here (only its presence, to gate wiring); the signer
+// itself resolves and holds the key material via [secret.SecretsPort] (AC-5/AC-16).
+func loadAuditSettings() auditSettings {
+	return auditSettings{
+		signerSubscription: envOr("BOLTROPE_AUDIT_SUBSCRIPTION", "audit-checkpoint"),
+		siemSubscription:   envOr("BOLTROPE_SIEM_SUBSCRIPTION", "siem-export"),
+		checkpointEvery:    envInt("BOLTROPE_AUDIT_CHECKPOINT_EVERY", 0),
+		signingKey:         os.Getenv(auditsign.EnvSigningKey),
+		siemFile:           os.Getenv("BOLTROPE_SIEM_FILE"),
+		siemHTTPURL:        os.Getenv("BOLTROPE_SIEM_HTTP_URL"),
+	}
+}
+
+// SignerEnabled reports whether the audit-checkpoint signer should be wired: it is
+// gated solely on BOLTROPE_AUDIT_SIGNING_KEY being present (AC-6). When false the
+// signer is NOT attached and projectord emits one loud WARN at startup.
+func (a auditSettings) SignerEnabled() bool { return a.signingKey != "" }
+
+// SIEMEnabled reports whether the SIEM exporter should be wired: it is gated on
+// EITHER the file sink OR the HTTP sink being configured (AC-13/AC-17).
+func (a auditSettings) SIEMEnabled() bool { return a.siemFile != "" || a.siemHTTPURL != "" }
+
+// SignerSubscription returns the signer's independent subscription name.
+func (a auditSettings) SignerSubscription() string { return a.signerSubscription }
+
+// SIEMSubscription returns the SIEM exporter's independent subscription name.
+func (a auditSettings) SIEMSubscription() string { return a.siemSubscription }
+
 // envOr returns the value of env var key, or def when it is unset/empty.
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {
@@ -69,6 +134,17 @@ func envDuration(key string, def time.Duration) time.Duration {
 	if v := os.Getenv(key); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			return d
+		}
+	}
+	return def
+}
+
+// envInt parses env var key as a base-10 integer, falling back to def on absence or
+// a parse error.
+func envInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
 		}
 	}
 	return def
@@ -89,6 +165,14 @@ func Run(ctx context.Context, cfg *config.Config, logw io.Writer) error {
 	}
 
 	ps := loadProjectorSettings()
+	as := loadAuditSettings()
+
+	// Emit the single loud startup WARN when audit-checkpoint signing is disabled
+	// (no BOLTROPE_AUDIT_SIGNING_KEY): the in-DB hash-chain stays tamper-EVIDENT but
+	// is not externally tamper-PROOF (AC-6). No ephemeral key is generated.
+	if !as.SignerEnabled() {
+		tel.Logger.Warn("audit checkpoint signing DISABLED: no BOLTROPE_AUDIT_SIGNING_KEY configured; the in-DB hash-chain is tamper-EVIDENT but not externally tamper-PROOF")
+	}
 
 	metrics, err := projection.NewOTelMetrics(tel.Metrics)
 	if err != nil {
@@ -113,6 +197,8 @@ func Run(ctx context.Context, cfg *config.Config, logw io.Writer) error {
 		dsn:      cfg.Postgres.DSN,
 		blobDir:  cfg.Blob.Dir,
 		settings: ps,
+		audit:    as,
+		secrets:  secret.NewEnvSecrets(),
 		metrics:  metrics,
 		log:      tel.Logger,
 	}
@@ -139,36 +225,88 @@ type worker struct {
 	dsn      string
 	blobDir  string
 	settings projectorSettings
+	audit    auditSettings
+	secrets  secret.SecretsPort
 	metrics  projection.MetricSink
 	log      *slog.Logger
 }
 
-// run is the daemon background worker: it (re)connects to PostgreSQL and runs the
-// projection loop, retrying on any connection/loop failure until ctx is
-// cancelled, at which point it returns ctx.Err() (a clean shutdown). A transient
-// DB outage therefore degrades projection without crashing the process
-// (architecture §10.4).
+// run is the daemon background worker. It fans out into INDEPENDENT projection
+// loops, one per subscription, each with its OWN pgx.Conn (a single pgx.Conn is not
+// concurrency-safe, and one Runner owns one subscription/cursor — architecture
+// §10.4):
+//
+//   - cost-rollup (always): the cost projector + lag gauge + orphan-blob sweeper;
+//   - audit-checkpoint (only when BOLTROPE_AUDIT_SIGNING_KEY is set — AC-6/AC-17):
+//     the Ed25519 signed-checkpoint signer;
+//   - siem-export (only when BOLTROPE_SIEM_FILE or BOLTROPE_SIEM_HTTP_URL is set —
+//     AC-13/AC-17): the descriptors+hashes-only SIEM exporter.
+//
+// Each loop is independently resilient (its own reconnect/backoff), so a failing
+// SIEM sink or a signer DB error degrades only its own subscription and can NEVER
+// stall cost-rollup's cursor (AC-17). run returns ctx.Err() once every loop has
+// observed cancellation (a clean shutdown).
 func (w *worker) run(ctx context.Context) error {
+	var wg sync.WaitGroup
+
+	loops := []struct {
+		name string
+		fn   func(context.Context) error
+	}{
+		{name: w.settings.Subscription, fn: w.runCostOnce},
+	}
+	if w.audit.SignerEnabled() {
+		loops = append(loops, struct {
+			name string
+			fn   func(context.Context) error
+		}{name: w.audit.SignerSubscription(), fn: w.runSignerOnce})
+	}
+	if w.audit.SIEMEnabled() {
+		loops = append(loops, struct {
+			name string
+			fn   func(context.Context) error
+		}{name: w.audit.SIEMSubscription(), fn: w.runSIEMOnce})
+	}
+
+	for _, lp := range loops {
+		wg.Add(1)
+		go func(name string, fn func(context.Context) error) {
+			defer wg.Done()
+			w.resilientLoop(ctx, name, fn)
+		}(lp.name, lp.fn)
+	}
+
+	wg.Wait()
+	return ctx.Err()
+}
+
+// resilientLoop runs fn (a single-pass projection runner over one subscription)
+// until ctx is cancelled, reconnecting with backoff on any non-cancel failure so a
+// transient DB outage degrades that subscription without crashing projectord
+// (architecture §10.4). A failure in one loop never touches another loop's cursor.
+func (w *worker) resilientLoop(ctx context.Context, subscription string, fn func(context.Context) error) {
 	for {
-		if err := ctx.Err(); err != nil {
-			return err
+		if ctx.Err() != nil {
+			return
 		}
-		if err := w.runOnce(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			w.log.Warn("projectord: projection loop ended; retrying", slog.Any("error", err))
+		if err := fn(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			w.log.Warn("projectord: projection loop ended; retrying",
+				slog.String("subscription", subscription), slog.Any("error", err))
 			if !sleepCtx(ctx, connectRetryDelay) {
-				return ctx.Err()
+				return
 			}
 			continue
 		}
-		// runOnce returned without error only because ctx was cancelled.
-		return ctx.Err()
+		// fn returned without error only because ctx was cancelled.
+		return
 	}
 }
 
-// runOnce opens a fresh connection, builds the source/runner, and runs the loop
-// until it returns (on ctx cancel or a read error the runner could not absorb).
-// The connection is closed before returning so a reconnect starts clean.
-func (w *worker) runOnce(ctx context.Context) error {
+// runCostOnce opens a fresh connection, builds the cost-rollup source/runner (cost
+// projector + lag gauge + orphan-blob sweeper), and runs the loop until it returns
+// (on ctx cancel or a read error the runner could not absorb). The connection is
+// closed before returning so a reconnect starts clean.
+func (w *worker) runCostOnce(ctx context.Context) error {
 	conn, err := pgx.Connect(ctx, w.dsn)
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
@@ -199,6 +337,76 @@ func (w *worker) runOnce(ctx context.Context) error {
 	runner := projection.NewRunner(cfg, src, opts...)
 	// No LISTEN/NOTIFY waker in v1 wiring; the safety-net poll drives catch-up
 	// (the cursor read is authoritative; architecture §10.4).
+	return runner.Run(ctx, nil)
+}
+
+// runSignerOnce opens a DEDICATED connection (a single pgx.Conn is not
+// concurrency-safe, so the signer must NOT share the cost-rollup connection) and
+// runs the audit-checkpoint signer on its OWN subscription (default
+// "audit-checkpoint"), so its cursor is independent of cost-rollup/siem-export
+// (AC-17). It resolves the Ed25519 signing key via the operator-tier secrets port;
+// on [auditsign.ErrSigningDisabled] it attaches NO signer and returns nil (the
+// loop ends cleanly — the startup WARN already announced the disabled state). A key
+// that is set-but-malformed is a hard, retried error (the operator must fix it).
+func (w *worker) runSignerOnce(ctx context.Context) error {
+	signer, err := auditsign.NewSignerWithLogger(ctx, w.secrets, w.log)
+	if err != nil {
+		if errors.Is(err, auditsign.ErrSigningDisabled) {
+			// Defensive: SignerEnabled() gates this loop, so this is only reached if
+			// the key vanished between the startup check and connect. End cleanly.
+			return nil
+		}
+		return fmt.Errorf("build audit signer: %w", err)
+	}
+
+	conn, err := pgx.Connect(ctx, w.dsn)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+	defer func() { _ = conn.Close(context.Background()) }()
+
+	src := projection.NewSource(conn)
+	cfg := projection.Config{Subscription: w.audit.SignerSubscription()}
+	runner := projection.NewRunner(cfg, src,
+		projection.WithLogger(w.log),
+		projection.WithAuditSigner(projection.NewAuditSigner(conn, signer, w.audit.checkpointEvery)),
+	)
+	return runner.Run(ctx, nil)
+}
+
+// runSIEMOnce opens a DEDICATED connection and runs the SIEM exporter on its OWN
+// subscription (default "siem-export"), so a failing SIEM sink stalls only its own
+// subscription and can never block cost-rollup (AC-13/AC-17). The optional bearer
+// token is resolved via the operator-tier secrets port (BOLTROPE_SIEM_HTTP_BEARER)
+// so it redacts in logs; the exporter uses a plain net/http client — NOT the egress
+// broker (operator-tier; AC-14).
+func (w *worker) runSIEMOnce(ctx context.Context) error {
+	bearer := ""
+	if sec, err := w.secrets.Get(ctx, "BOLTROPE_SIEM_HTTP_BEARER"); err == nil {
+		bearer = sec.Reveal()
+	}
+
+	exporter, err := projection.NewSIEMExporter(projection.SIEMConfig{
+		FilePath:   w.audit.siemFile,
+		HTTPURL:    w.audit.siemHTTPURL,
+		HTTPBearer: bearer,
+	})
+	if err != nil {
+		return fmt.Errorf("build SIEM exporter: %w", err)
+	}
+
+	conn, err := pgx.Connect(ctx, w.dsn)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+	defer func() { _ = conn.Close(context.Background()) }()
+
+	src := projection.NewSource(conn)
+	cfg := projection.Config{Subscription: w.audit.SIEMSubscription()}
+	runner := projection.NewRunner(cfg, src,
+		projection.WithLogger(w.log),
+		projection.WithSIEMExporter(exporter),
+	)
 	return runner.Run(ctx, nil)
 }
 
