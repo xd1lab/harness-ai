@@ -13,7 +13,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"runtime"
 	"sync"
 	"sync/atomic"
 
@@ -473,22 +472,35 @@ func (s *FakeToolStream) Close() error { return nil }
 // until Resolve is called or the context is cancelled. If you call Request and
 // nothing resolves it, the call blocks until ctx is cancelled.
 type FakeApprovalGate struct {
-	mu      sync.Mutex
-	pending map[string]chan domain.AskResolution // key: sessionID+":"+callID
+	mu       sync.Mutex
+	pending  map[string]chan domain.AskResolution // key: sessionID+":"+callID
+	resolved map[string]domain.AskResolution      // key -> resolution delivered before its Request registered
 }
 
 // NewFakeApprovalGate returns an empty FakeApprovalGate.
 func NewFakeApprovalGate() *FakeApprovalGate {
-	return &FakeApprovalGate{pending: make(map[string]chan domain.AskResolution)}
+	return &FakeApprovalGate{
+		pending:  make(map[string]chan domain.AskResolution),
+		resolved: make(map[string]domain.AskResolution),
+	}
 }
 
 func pendingKey(sessionID, callID string) string { return sessionID + ":" + callID }
 
-// Request blocks until Resolve delivers a resolution or ctx is cancelled.
+// Request blocks until Resolve delivers a resolution or ctx is cancelled. If a
+// Resolve for this (sessionID, callID) already arrived before Request registered
+// (a benign goroutine-ordering race common in tests that resolve-then-Run), the
+// buffered resolution is returned immediately — making the fake order-independent
+// (no spin, no timing dependence; fixes a heavily-loaded-CI deadlock).
 func (f *FakeApprovalGate) Request(ctx context.Context, req app.ApprovalRequest) (domain.AskResolution, error) {
-	ch := make(chan domain.AskResolution, 1)
 	key := pendingKey(req.SessionID, req.CallID)
 	f.mu.Lock()
+	if res, ok := f.resolved[key]; ok {
+		delete(f.resolved, key)
+		f.mu.Unlock()
+		return res, nil
+	}
+	ch := make(chan domain.AskResolution, 1)
 	f.pending[key] = ch
 	f.mu.Unlock()
 	defer func() {
@@ -515,24 +527,22 @@ func (f *FakeApprovalGate) Pending(sessionID, callID string) bool {
 	return ok
 }
 
-// Resolve delivers the resolution for the pending (sessionID, callID) request.
-// It spins briefly to let a concurrent Request goroutine register its channel
-// before giving up, which avoids a test-only race when Request and Resolve are
-// called back-to-back from different goroutines.
+// Resolve delivers the resolution for the (sessionID, callID) request. If the
+// Request goroutine has already registered, it is unblocked immediately; if not
+// (the resolve-then-Run ordering), the resolution is BUFFERED so the subsequent
+// Request returns it at once. This is deterministic and order-independent — it
+// replaces the previous Gosched spin that could give up under a CPU-starved CI
+// runner and deadlock the Request goroutine (a real 20m-timeout flake).
 func (f *FakeApprovalGate) Resolve(_ context.Context, sessionID, callID string, resolution domain.AskResolution) error {
 	key := pendingKey(sessionID, callID)
-	const maxYields = 1000
-	for i := 0; i < maxYields; i++ {
-		f.mu.Lock()
-		ch, ok := f.pending[key]
-		f.mu.Unlock()
-		if ok {
-			ch <- resolution
-			return nil
-		}
-		runtime.Gosched()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if ch, ok := f.pending[key]; ok {
+		ch <- resolution
+		return nil
 	}
-	return fmt.Errorf("apptest.FakeApprovalGate: no pending approval for %q after spinning", key)
+	f.resolved[key] = resolution
+	return nil
 }
 
 // ---------------------------------------------------------------------------
