@@ -98,10 +98,22 @@ func newHarness(t *testing.T) *harness {
 	}
 	t.Cleanup(pool.Close)
 
+	// Operator pool over the OWNER DSN: the operator-tier, RLS-exempt reads
+	// (VerifyAuditCheckpoints) need a connection that bypasses events' RLS to read
+	// the GLOBAL audit_checkpoints + events.content_hash across tenants. The owner
+	// connection (a superuser in container mode; the table owner under FORCE RLS in
+	// a managed DSN) is that connection. The application pool above stays the
+	// NOBYPASSRLS role so every tenant-scoped path is still RLS-enforced.
+	operatorPool, err := NewSimplePool(ownerDSN)
+	if err != nil {
+		t.Fatalf("NewSimplePool(operator): %v", err)
+	}
+	t.Cleanup(operatorPool.Close)
+
 	return &harness{
 		ownerDSN: ownerDSN,
 		appDSN:   appDSN,
-		store:    New(pool),
+		store:    NewWithOperator(pool, operatorPool),
 		pool:     pool,
 		mode:     mode,
 	}

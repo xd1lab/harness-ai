@@ -48,16 +48,38 @@ import (
 )
 
 // Store is the pgx-backed [app.EventLogPort] implementation. It holds a [Pool]
-// and an [infradb] tenant resolver; it is safe for concurrent use (each method
-// acquires its own connection and transaction).
+// (the tenant-RLS-bound application pool) and, optionally, an OPERATOR pool for
+// the RLS-exempt operator-tier reads (VerifyAuditCheckpoints). It is safe for
+// concurrent use (each method acquires its own connection and transaction).
 type Store struct {
 	pool Pool
+	// operator is the OPTIONAL operator/owner pool used ONLY by the operator-tier,
+	// RLS-EXEMPT reads (currently VerifyAuditCheckpoints) that must read the GLOBAL
+	// audit_checkpoints + events.content_hash across all tenants. It is nil for a
+	// Store built with [New]; the operator-tier reads error loudly when it is nil.
+	// The tenant-scoped append/read path NEVER touches it (it always uses pool via
+	// beginTenantTx), so the RLS guarantees and the hot path are unaffected (AC-1).
+	operator Pool
 }
 
-// New returns a [Store] over pool. The caller owns pool's lifecycle (Close),
-// since a single pool is typically shared across the orchestrator process.
+// New returns a [Store] over pool (the tenant-RLS-bound application pool). The
+// caller owns pool's lifecycle (Close), since a single pool is typically shared
+// across the orchestrator process. The Store has NO operator pool, so the
+// operator-tier reads (VerifyAuditCheckpoints) are unavailable until one is wired
+// via [NewWithOperator].
 func New(pool Pool) *Store {
 	return &Store{pool: pool}
+}
+
+// NewWithOperator returns a [Store] over the tenant-RLS-bound application pool plus
+// an OPERATOR pool for the RLS-exempt operator-tier reads (VerifyAuditCheckpoints,
+// which reads the GLOBAL audit_checkpoints + events.content_hash across tenants).
+// The operator pool MUST connect as an operator/owner role that bypasses events'
+// RLS (e.g. the same owner/operator connection the projection signer runs on);
+// the application pool stays the NOBYPASSRLS role so the tenant-scoped path is
+// unchanged. The caller owns both pools' lifecycles.
+func NewWithOperator(pool, operator Pool) *Store {
+	return &Store{pool: pool, operator: operator}
 }
 
 // Compile-time assertion that *Store satisfies the frozen EventLogPort.
@@ -101,6 +123,40 @@ func (s *Store) beginTenantTx(ctx context.Context) (pgx.Tx, func(), error) {
 		_ = tx.Rollback(ctx)
 		pc.Release()
 		return nil, nil, err
+	}
+	cleanup := func() {
+		_ = tx.Rollback(ctx) // no-op if already committed
+		pc.Release()
+	}
+	return tx, cleanup, nil
+}
+
+// beginOperatorTx acquires a connection from the OPERATOR pool and begins a plain
+// transaction that is DELIBERATELY NOT tenant-scoped (no SET LOCAL
+// app.current_tenant). It backs the operator-tier, RLS-exempt reads
+// (VerifyAuditCheckpoints) that must see the GLOBAL audit_checkpoints +
+// events.content_hash across all tenants on an operator/owner connection that
+// bypasses events' RLS. It returns an error when no operator pool is configured
+// (a Store built with [New] rather than [NewWithOperator]) — fail loudly rather
+// than silently skip the tamper-PROOF check. It returns the transaction and a
+// cleanup func that rolls back (a no-op after commit) and releases the connection.
+//
+// It is intentionally separate from [Store.beginTenantTx]: the tenant-RLS-scoped
+// helper is left exactly as-is so the RLS-exempt path can never accidentally run
+// on the application pool nor the tenant path on the operator pool (open question
+// #4 — never mix the two tiers in one tx helper).
+func (s *Store) beginOperatorTx(ctx context.Context) (pgx.Tx, func(), error) {
+	if s.operator == nil {
+		return nil, nil, errors.New("eventstore: operator-tier read requires an operator pool (construct the Store with NewWithOperator)")
+	}
+	pc, err := s.operator.Acquire(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	tx, err := pc.Begin(ctx)
+	if err != nil {
+		pc.Release()
+		return nil, nil, fmt.Errorf("eventstore: begin operator tx: %w", err)
 	}
 	cleanup := func() {
 		_ = tx.Rollback(ctx) // no-op if already committed
