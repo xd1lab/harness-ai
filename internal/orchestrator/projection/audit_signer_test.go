@@ -25,6 +25,8 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"go/parser"
+	"go/token"
 	"strings"
 	"testing"
 
@@ -246,5 +248,26 @@ func TestAuditSigner_PartialFlushOnShortBatch(t *testing.T) {
 	}
 	if len(signer.signed) != 1 {
 		t.Fatalf("Flush should emit the partial checkpoint; signed %d, want 1", len(signer.signed))
+	}
+}
+
+// TestAuditSigner_NoEgressBrokerImport (AC-14) parses audit_signer.go's import
+// block and asserts it imports NOTHING from the toolruntime egress broker. The
+// audit-checkpoint signer is OPERATOR-TIER infrastructure (like OTLP/metrics
+// export); the egress broker governs MODEL-INFLUENCED channels only (ADR-0013 /
+// ADR-0034), so any outbound it ever needs uses a plain net/http client, never the
+// broker. A regression that pulled the broker into this read-side projector would
+// blur that trust boundary.
+func TestAuditSigner_NoEgressBrokerImport(t *testing.T) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "audit_signer.go", nil, parser.ImportsOnly)
+	if err != nil {
+		t.Fatalf("parse audit_signer.go: %v", err)
+	}
+	for _, imp := range f.Imports {
+		path := strings.Trim(imp.Path.Value, `"`)
+		if strings.Contains(path, "toolruntime") && strings.Contains(path, "egress") {
+			t.Errorf("audit_signer.go must not import the egress broker %q (operator-tier, ADR-0034 trust boundary)", path)
+		}
 	}
 }

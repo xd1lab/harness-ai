@@ -73,6 +73,7 @@ type Runner struct {
 	sweeper *Sweeper // nil when SweepInterval == 0
 	metrics MetricSink
 	cost    *CostProjector // nil when no persistent cost projection is attached
+	signer  *AuditSigner   // nil when no audit-checkpoint signer is attached
 	log     *slog.Logger
 	now     func() time.Time
 
@@ -102,6 +103,17 @@ func WithMetrics(m MetricSink) RunnerOption { return func(r *Runner) { r.metrics
 // makes the re-read a no-op. When unset the runner keeps its in-memory rollup +
 // cost counter only (the persistent table is simply not maintained).
 func WithCostProjector(p *CostProjector) RunnerOption { return func(r *Runner) { r.cost = p } }
+
+// WithAuditSigner attaches an [AuditSigner] sink (Batch-5B / ADR-0034): each batch
+// is folded into the signed audit-checkpoint chain (over events' content_hash
+// leaves) BEFORE the cursor is saved, so a crash before the save re-reads the batch
+// and the signer's ON CONFLICT (covers_to_global_id) keeps the re-anchor
+// idempotent. At the catch-up short-read boundary the runner calls
+// [AuditSigner.Flush] so a partial range is anchored to the head promptly. Attach
+// this on a Runner with its OWN subscription (default "audit-checkpoint") so its
+// cursor is independent of cost-rollup/siem-export. When unset the chain is simply
+// not maintained (signing disabled).
+func WithAuditSigner(s *AuditSigner) RunnerOption { return func(r *Runner) { r.signer = s } }
 
 // WithLogger sets the structured logger. When unset a discarding logger is used.
 func WithLogger(l *slog.Logger) RunnerOption {
@@ -226,6 +238,15 @@ func (r *Runner) catchUp(ctx context.Context) {
 			break // short read: caught up to xmin
 		}
 	}
+	// Caught up to head: anchor any partial audit-checkpoint range so the head is
+	// signed promptly (Batch-5B / AC-7), even below the every-N boundary. A flush
+	// error is logged and retried on the next tick (it never kills the worker; the
+	// accumulator is preserved for the next flush).
+	if r.signer != nil {
+		if err := r.signer.Flush(ctx); err != nil {
+			r.log.ErrorContext(ctx, "audit-checkpoint flush failed; will retry", slog.String("err", err.Error()))
+		}
+	}
 	r.publishLag(ctx)
 }
 
@@ -257,6 +278,16 @@ func (r *Runner) foldAndAdvance(ctx context.Context, rows []EventRow) error {
 	// unwritten batch.
 	if r.cost != nil {
 		if err := r.cost.Project(ctx, rows); err != nil {
+			return err
+		}
+	}
+
+	// Fold the batch into the signed audit-checkpoint chain BEFORE saving the cursor
+	// (same ordering/idempotency contract as the cost projector): a checkpoint insert
+	// error aborts before the cursor advances, so the batch is re-read and the ON
+	// CONFLICT (covers_to_global_id) makes the re-anchor a no-op (Batch-5B / AC-7).
+	if r.signer != nil {
+		if err := r.signer.Project(ctx, rows); err != nil {
 			return err
 		}
 	}
