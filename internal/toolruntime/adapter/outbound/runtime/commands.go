@@ -61,6 +61,17 @@ func startArgs(name string) []string {
 	return []string{"start", name}
 }
 
+// inspectRunningArgs builds the `docker inspect -f {{.State.Running}} <name>` argv
+// used to confirm a just-started container has actually reached the running state
+// before the caller execs into it. `docker start` returns once the container has
+// been told to start, which under load can briefly precede the container being
+// running — so an immediate `docker exec` can race a not-yet-running container and
+// fail with "No such exec instance / container is not running". Polling this until
+// it prints "true" closes that readiness race (architecture §9.3, §10.6).
+func inspectRunningArgs(name string) []string {
+	return []string{"inspect", "-f", "{{.State.Running}}", name}
+}
+
 // execArgs builds the `docker exec` argv that runs req's command inside the named
 // container. It does NOT carry the kill behavior — cancellation is wired by the
 // caller via the process group and the `docker kill` reaper (architecture §9.3).

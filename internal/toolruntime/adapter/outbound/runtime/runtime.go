@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/xd1lab/harness-ai/internal/platform/clock"
 	"github.com/xd1lab/harness-ai/internal/toolruntime/app"
@@ -171,6 +172,15 @@ func (r *Runtime) Create(ctx context.Context, sessionID string, egress app.Egres
 		return nil, fmt.Errorf("runtime: docker start for session %q: exit %d: %s", sessionID, res.ExitCode, strings.TrimSpace(string(res.Stderr)))
 	}
 
+	// `docker start` returns once the container has been told to start; under load
+	// that can briefly precede it being RUNNING, so an immediate `docker exec` races
+	// a not-yet-running container ("No such exec instance / container is not
+	// running"). Confirm the container is running before handing back the workspace.
+	if err := r.waitRunning(ctx, name); err != nil {
+		_, _ = r.runner.Run(context.Background(), cmdSpec{Name: r.cfg.DockerBin, Args: removeArgs(name)})
+		return nil, fmt.Errorf("runtime: session %q container did not reach running: %w", sessionID, err)
+	}
+
 	now := r.clk.Now()
 	c := &container{
 		name:      name,
@@ -193,6 +203,40 @@ func (r *Runtime) Create(ctx context.Context, sessionID string, egress app.Egres
 	r.live[sessionID] = c
 	r.mu.Unlock()
 	return c, nil
+}
+
+// runningWaitTimeout bounds how long Create waits for a just-started container to
+// report State.Running before giving up; runningPollInterval is the poll backoff.
+// The common case (already running) returns on the first inspect with no sleep.
+const (
+	runningWaitTimeout  = 10 * time.Second
+	runningPollInterval = 100 * time.Millisecond
+)
+
+// waitRunning polls `docker inspect -f {{.State.Running}}` until the named container
+// reports "true", bounded by runningWaitTimeout. It returns nil as soon as the
+// container is running (closing the start->exec readiness race), or an error if the
+// container never reaches running (e.g. it exited immediately) or ctx is cancelled.
+func (r *Runtime) waitRunning(ctx context.Context, name string) error {
+	deadline := r.clk.Now().Add(runningWaitTimeout)
+	var last cmdResult
+	for {
+		res, err := r.runner.Run(ctx, cmdSpec{Name: r.cfg.DockerBin, Args: inspectRunningArgs(name)})
+		last = res
+		if err == nil && res.ExitCode == 0 && strings.TrimSpace(string(res.Stdout)) == "true" {
+			return nil
+		}
+		if !r.clk.Now().Before(deadline) {
+			return fmt.Errorf("not running after %s (last inspect exit=%d stdout=%q stderr=%q)",
+				runningWaitTimeout, last.ExitCode,
+				strings.TrimSpace(string(last.Stdout)), strings.TrimSpace(string(last.Stderr)))
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-r.clk.After(runningPollInterval):
+		}
+	}
 }
 
 // Get returns the live workspace for sessionID or [ErrWorkspaceNotFound].

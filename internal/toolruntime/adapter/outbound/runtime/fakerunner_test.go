@@ -21,7 +21,14 @@ type fakeRunner struct {
 }
 
 func newFakeRunner() *fakeRunner {
-	return &fakeRunner{handlers: make(map[string]func(ctx context.Context, spec cmdSpec) (cmdResult, error))}
+	f := &fakeRunner{handlers: make(map[string]func(ctx context.Context, spec cmdSpec) (cmdResult, error))}
+	// By default a started container is reported running, so Create's readiness
+	// wait (waitRunning) returns on its first poll with no clock advance. A test
+	// exercising the not-running/start-failure path overrides this handler.
+	f.handlers["inspect"] = func(context.Context, cmdSpec) (cmdResult, error) {
+		return cmdResult{ExitCode: 0, Stdout: []byte("true\n")}, nil
+	}
+	return f
 }
 
 // Run records spec and dispatches to the handler for its docker subcommand.

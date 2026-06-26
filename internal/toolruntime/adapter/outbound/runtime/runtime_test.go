@@ -67,6 +67,36 @@ func TestRuntime_CreateGetDestroy_Lifecycle(t *testing.T) {
 	}
 }
 
+// TestRuntime_Create_RollsBackWhenNotRunning pins the readiness gate: when the
+// just-started container never reports running, Create must NOT hand back a
+// workspace — it rolls the container back (docker rm) and returns an error. Using
+// a cancelled ctx makes waitRunning's poll return promptly via ctx.Done rather
+// than waiting the full timeout, keeping the test deterministic.
+func TestRuntime_Create_RollsBackWhenNotRunning(t *testing.T) {
+	fr := newFakeRunner()
+	fr.on("inspect", func(context.Context, cmdSpec) (cmdResult, error) {
+		return cmdResult{ExitCode: 0, Stdout: []byte("false\n")}, nil // never running
+	})
+	fc := clocktest.NewFake(time.Unix(0, 0))
+	r := newTestRuntime(t, fr, fc)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := r.Create(ctx, "s1", app.EgressPolicy{SessionID: "s1"}); err == nil {
+		t.Fatal("Create must fail when the container never reaches running")
+	}
+	if len(fr.callsFor("inspect")) == 0 {
+		t.Error("Create did not inspect for running state before exec")
+	}
+	if len(fr.callsFor("rm")) == 0 {
+		t.Error("Create did not roll back (docker rm) after the readiness wait failed")
+	}
+	if _, err := r.Get(ctx, "s1"); !errors.Is(err, ErrWorkspaceNotFound) {
+		t.Error("a workspace that never ran must not be registered live")
+	}
+}
+
 func TestRuntime_Destroy_Idempotent(t *testing.T) {
 	fr := newFakeRunner()
 	// docker rm of an absent container exits non-zero with "No such container".
